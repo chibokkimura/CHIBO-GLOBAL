@@ -1,0 +1,7 @@
+{
+  "name": "CHIBO Manager",
+  "description": "Global Franchise Management System for CHIBO. Features store-specific dashboards, daily sales reporting, recipe management, and HQ analytics including ABC analysis.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
