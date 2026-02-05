@@ -2271,18 +2271,24 @@ const OnboardingScreen: React.FC<{
 
       const storeId = `S_${crypto.randomUUID()}`;
 
-     const { error: storeErr } = await supabase.from('stores').insert({
-  id: storeId,
-  name: storeName,
-  country,
-  city,
-  owner_email: email,
-  currency,
-});
-
-      if (storeErr) throw storeErr;
-
+      // 1) Create owner profile first so RLS allows store insert (current_store_id matches)
       await upsertMyOwnerProfile({ name: name || email, email, storeId });
+
+      // 2) Create store record
+      const { error: storeErr } = await supabase.from('stores').insert({
+        id: storeId,
+        name: storeName,
+        country,
+        city,
+        owner_email: email,
+        currency,
+      });
+
+      if (storeErr) {
+        // rollback store_id on failure to avoid dangling reference
+        await supabase.from('app_users').update({ store_id: null }).eq('user_id', authData.user?.id);
+        throw storeErr;
+      }
 
       await onDone();
     } catch (e: any) {
