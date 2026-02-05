@@ -515,7 +515,7 @@ const SalesReporter: React.FC<{
   const [date, setDate] = useState(initialDate || formatDate(new Date()));
   const [items, setItems] = useState<SaleItem[]>([]); // Store category name in menuId
   const [isClosed, setIsClosed] = useState(false);
-    const [receiptImage, setReceiptImage] = useState<string | null>(null);
+  const [receiptImage, setReceiptImage] = useState<string | null>(null);
   const [manualRevenue, setManualRevenue] = useState<string>('');
   const [comment, setComment] = useState<string>('');
 
@@ -582,7 +582,7 @@ const SalesReporter: React.FC<{
   };
 
   const handleSave = () => {
-     if (!receiptImage) return;
+    if (!receiptImage) return;
     const totalAmount = isClosed ? 0 : (parseFloat(manualRevenue) || 0);
     const newSale: Sale = {
       id: `SALE_${Date.now()}`,
@@ -599,13 +599,6 @@ const SalesReporter: React.FC<{
   return (
     <div className="max-w-2xl mx-auto">
       <div className="flex items-center gap-4 mb-6">
-       <button
-  onClick={handleSave}
-  disabled={!receiptImage}
-  className={`flex-1 py-3 bg-black text-white font-bold rounded-xl shadow-lg ${receiptImage ? 'hover:bg-gray-800' : 'opacity-50 cursor-not-allowed'}`}
->
-  Submit Report
-</button>
         <h2 className="text-2xl font-bold">Daily Sales Report</h2>
       </div>
 
@@ -634,27 +627,27 @@ const SalesReporter: React.FC<{
         {!isClosed && (
             <div>
               <div className="mb-8">
-                  <label className="block text-sm font-bold text-gray-700 mb-2">Total Daily Revenue ({store.currency})</label>
+                <label className="block text-sm font-bold text-gray-700 mb-2">Total Daily Revenue ({store.currency})</label>
                 <input 
-  type="text"
-  inputMode="numeric"
-  pattern="[0-9]*"
-  value={manualRevenue} 
-  onChange={e => setManualRevenue(normalizeNumberInput(e.target.value))}
-  placeholder="Enter total sales amount"
-  className="w-full p-4 bg-gray-50 rounded-xl font-bold text-2xl border border-gray-200 focus:border-black outline-none"
-/>
-<div className="mb-8">
-  <label className="block text-sm font-bold text-gray-700 mb-2">Comments (Optional)</label>
-  <textarea
-    value={comment}
-    onChange={e => setComment(e.target.value)}
-    placeholder="Add notes for this report (optional)"
-    rows={3}
-    className="w-full p-4 bg-gray-50 rounded-xl border border-gray-200 focus:border-black outline-none resize-none"
-  />
-</div>
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  value={manualRevenue} 
+                  onChange={e => setManualRevenue(normalizeNumberInput(e.target.value))}
+                  placeholder="Enter total sales amount"
+                  className="w-full p-4 bg-gray-50 rounded-xl font-bold text-2xl border border-gray-200 focus:border-black outline-none"
+                />
+              </div>
 
+              <div className="mb-8">
+                <label className="block text-sm font-bold text-gray-700 mb-2">Comments (Optional)</label>
+                <textarea
+                  value={comment}
+                  onChange={e => setComment(e.target.value)}
+                  placeholder="Add notes for this report (optional)"
+                  rows={3}
+                  className="w-full p-4 bg-gray-50 rounded-xl border border-gray-200 focus:border-black outline-none resize-none"
+                />
               </div>
 
             <h3 className="font-bold text-lg mb-4">Sales Quantity by Category</h3>
@@ -673,14 +666,14 @@ const SalesReporter: React.FC<{
                         </div>
                         <div className="flex items-center gap-2">
                             <button onClick={() => handleQuantityChange(category, -1)} className="w-8 h-8 flex items-center justify-center bg-gray-100 rounded-full hover:bg-gray-200 font-bold">-</button>
-                           <input 
-  type="text"
-  inputMode="numeric"
-  pattern="[0-9]*"
-  className="w-16 p-2 text-center border border-gray-200 rounded-lg font-bold text-lg focus:ring-2 focus:ring-black outline-none"
-  value={String(qty)}
-  onChange={(e) => handleQuantityInput(category, e.target.value)}
-/>
+                            <input 
+                              type="text"
+                              inputMode="numeric"
+                              pattern="[0-9]*"
+                              className="w-16 p-2 text-center border border-gray-200 rounded-lg font-bold text-lg focus:ring-2 focus:ring-black outline-none"
+                              value={String(qty)}
+                              onChange={(e) => handleQuantityInput(category, e.target.value)}
+                            />
 
                             <button onClick={() => handleQuantityChange(category, 1)} className="w-8 h-8 flex items-center justify-center bg-black text-white rounded-full hover:bg-gray-800 font-bold">+</button>
                         </div>
@@ -713,7 +706,13 @@ const SalesReporter: React.FC<{
 
         <div className="flex gap-4 pt-4">
             <button onClick={onCancel} className="flex-1 py-3 font-bold text-gray-500 hover:bg-gray-50 rounded-xl">Cancel</button>
-            <button onClick={handleSave} className="flex-1 py-3 bg-black text-white font-bold rounded-xl hover:bg-gray-800 shadow-lg">Submit Report</button>
+            <button
+              onClick={handleSave}
+              disabled={!receiptImage}
+              className={`flex-1 py-3 bg-black text-white font-bold rounded-xl shadow-lg ${receiptImage ? 'hover:bg-gray-800' : 'opacity-50 cursor-not-allowed'}`}
+            >
+              Submit Report
+            </button>
         </div>
       </div>
     </div>
