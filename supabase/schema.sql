@@ -81,6 +81,8 @@ create or replace function public.is_hq()
 returns boolean
 language sql
 stable
+security definer
+set search_path = public
 as $$
   select exists (
     select 1 from public.app_users u
@@ -92,6 +94,8 @@ create or replace function public.current_store_id()
 returns text
 language sql
 stable
+security definer
+set search_path = public
 as $$
   select u.store_id from public.app_users u
   where u.user_id = auth.uid()
