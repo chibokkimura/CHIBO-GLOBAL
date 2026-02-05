@@ -2345,23 +2345,30 @@ const App = () => {
   // Mock Users State (to allow registration)
   const [users, setUsers] = useState<User[]>([]);
 
-  // Global Config State
-  const [globalConfig, setGlobalConfig] = useState({
-      storeNames: ['CHIBO', 'CHIBO Express', 'CHIBO Premium'],
-      countries: ['South Korea', 'Vietnam', 'Philippines', 'China', 'Taiwan', 'Others'],
-      cities: ['Seoul', 'Hanoi', 'Manila', 'Ningbo', 'Kaohsiung', 'Daejeon', 'Unknown', 'Osaka', 'Tokyo'],
-      currencies: ['JPY', 'USD', 'KRW', 'VND', 'THB'],
-      positions: ['Manager', 'Chef', 'Server', 'Part-time'],
-      categories: ['Okonomiyaki', 'Yakisoba', 'Teppan Dishes', 'Side Menu', 'Alcohol', 'Soft Drinks'],
-      standardIngredients: [
-          { name: 'Cabbage', unit: 'g' },
-          { name: 'Pork Belly', unit: 'g' },
-          { name: 'Okonomiyaki Flour', unit: 'g' },
-          { name: 'Egg', unit: 'pcs' },
-          { name: 'Otafuku Sauce', unit: 'ml' },
-          { name: 'Noodles', unit: 'g' }
-      ]
-  });
+ const [globalConfig, setGlobalConfig] = useState(() => {
+  const saved = localStorage.getItem('globalConfig');
+  if (saved) return JSON.parse(saved);
+  return {
+    storeNames: ['CHIBO', 'CHIBO Express', 'CHIBO Premium'],
+    countries: ['South Korea', 'Vietnam', 'Philippines', 'China', 'Taiwan', 'Others'],
+    cities: ['Seoul', 'Hanoi', 'Manila', 'Ningbo', 'Kaohsiung', 'Daejeon', 'Unknown', 'Osaka', 'Tokyo'],
+    currencies: ['JPY', 'USD', 'KRW', 'VND', 'THB'],
+    positions: ['Manager', 'Chef', 'Server', 'Part-time'],
+    categories: ['Okonomiyaki', 'Yakisoba', 'Teppan Dishes', 'Side Menu', 'Alcohol', 'Soft Drinks'],
+    standardIngredients: [
+      { name: 'Cabbage', unit: 'g' },
+      { name: 'Pork Belly', unit: 'g' },
+      { name: 'Okonomiyaki Flour', unit: 'g' },
+      { name: 'Egg', unit: 'pcs' },
+      { name: 'Otafuku Sauce', unit: 'ml' },
+      { name: 'Noodles', unit: 'g' }
+    ]
+  };
+});
+useEffect(() => {
+  localStorage.setItem('globalConfig', JSON.stringify(globalConfig));
+}, [globalConfig]);
+
   // Handlers
 
   const handleRegister = (data: { name: string; role: UserRole; storeName?: string; city?: string; country?: string }) => {
