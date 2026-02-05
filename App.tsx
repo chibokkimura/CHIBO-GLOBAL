@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { User, Store, Menu, Sale, Employee, UserRole, Ingredient, SaleItem, RecipeItem } from './types';
 import { 
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, LineChart, Line, ComposedChart, Cell, PieChart, Pie
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, LineChart, Line, ComposedChart, Cell
 } from 'recharts';
 import { 
   LayoutDashboard, ClipboardList, Users, UtensilsCrossed, LogOut, 
@@ -2389,7 +2389,9 @@ const App = () => {
   const [dataLoading, setDataLoading] = useState<boolean>(false);
   const [dataError, setDataError] = useState<string | null>(null);
 
-  const refreshAll = async () => {
+  const refreshTimerRef = useRef<number | null>(null);
+
+  const refreshAll = useCallback(async () => {
     try {
       setDataLoading(true);
       setDataError(null);
@@ -2410,13 +2412,45 @@ const App = () => {
     } finally {
       setDataLoading(false);
     }
-  };
+  }, []);
+
+  const scheduleRefreshAll = useCallback(() => {
+    if (!sessionEmail) return;
+    if (refreshTimerRef.current !== null) {
+      window.clearTimeout(refreshTimerRef.current);
+    }
+    refreshTimerRef.current = window.setTimeout(() => {
+      refreshAll();
+    }, 250);
+  }, [sessionEmail, refreshAll]);
 
   useEffect(() => {
     if (sessionEmail) {
       refreshAll();
     }
-  }, [sessionEmail]);
+  }, [sessionEmail, refreshAll]);
+
+  useEffect(() => {
+    if (!sessionEmail) return;
+    const channel = supabase
+      .channel('realtime-all')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'stores' }, () => scheduleRefreshAll())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'sales' }, () => scheduleRefreshAll())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'sale_items' }, () => scheduleRefreshAll())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'menus' }, () => scheduleRefreshAll())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'employees' }, () => scheduleRefreshAll())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'ingredients' }, () => scheduleRefreshAll())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'app_users' }, () => scheduleRefreshAll())
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+      if (refreshTimerRef.current !== null) {
+        window.clearTimeout(refreshTimerRef.current);
+        refreshTimerRef.current = null;
+      }
+    };
+  }, [sessionEmail, scheduleRefreshAll]);
   
 
  const [globalConfig, setGlobalConfig] = useState(() => {
