@@ -1930,15 +1930,43 @@ const StoreDashboard: React.FC<{
         return data;
     }, [storeSales]);
 
-    const categoryData = useMemo(() => {
-        const counts: Record<string, number> = {};
+    const categoryMonthlyData = useMemo(() => {
+        const today = new Date();
+        const currentMonth = today.getMonth();
+        const currentYear = today.getFullYear();
+        const prevMonth = currentMonth === 0 ? 11 : currentMonth - 1;
+        const prevYear = currentMonth === 0 ? currentYear - 1 : currentYear;
+
+        const currentCounts: Record<string, number> = {};
+        const prevCounts: Record<string, number> = {};
+        globalConfig.categories.forEach(c => {
+            currentCounts[c] = 0;
+            prevCounts[c] = 0;
+        });
+
         storeSales.forEach(sale => {
+            const d = new Date(sale.date);
+            const month = d.getMonth();
+            const year = d.getFullYear();
+            let target: Record<string, number> | null = null;
+            if (month === currentMonth && year === currentYear) {
+                target = currentCounts;
+            } else if (month === prevMonth && year === prevYear) {
+                target = prevCounts;
+            }
+            if (!target) return;
             sale.items.forEach(item => {
-                counts[item.menuId] = (counts[item.menuId] || 0) + item.quantity;
+                const key = item.menuId;
+                target[key] = (target[key] || 0) + item.quantity;
             });
         });
-        return Object.entries(counts).map(([name, value]) => ({ name, value }));
-    }, [storeSales]);
+
+        return globalConfig.categories.map(name => ({
+            name,
+            current: currentCounts[name] || 0,
+            previous: prevCounts[name] || 0
+        }));
+    }, [storeSales, globalConfig.categories]);
 
     // Comparison Logic (Current Month vs Previous Month)
     const metricComparison = useMemo(() => {
@@ -1968,8 +1996,6 @@ const StoreDashboard: React.FC<{
 
         return { currentMonthSales, growth };
     }, [storeSales]);
-
-    const COLORS = ['#000000', '#333333', '#666666', '#999999', '#CCCCCC'];
 
     return (
         <div className="min-h-screen bg-gray-50 flex flex-col">
@@ -2109,25 +2135,20 @@ const StoreDashboard: React.FC<{
                                      </ResponsiveContainer>
                                  </div>
                                  <div className="bg-white p-6 rounded-2xl shadow-sm border h-80">
-                                     <h3 className="font-bold text-lg mb-4">Category Sales Distribution</h3>
+                                     <h3 className="font-bold text-lg mb-4">Category Sales (This Month vs Last Month)</h3>
                                      <ResponsiveContainer width="100%" height="100%">
-                                         <PieChart>
-                                             <Pie
-                                                data={categoryData}
-                                                cx="50%"
-                                                cy="50%"
-                                                innerRadius={60}
-                                                outerRadius={80}
-                                                paddingAngle={5}
-                                                dataKey="value"
-                                             >
-                                                 {categoryData.map((entry, index) => (
-                                                     <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                                                 ))}
-                                             </Pie>
-                                             <Tooltip />
+                                         <BarChart data={categoryMonthlyData} margin={{ top: 0, right: 10, left: 0, bottom: 30 }}>
+                                             <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#eee" />
+                                             <XAxis dataKey="name" tick={{ fontSize: 12 }} axisLine={false} tickLine={false} />
+                                             <YAxis tick={{ fontSize: 12 }} axisLine={false} tickLine={false} />
+                                             <Tooltip 
+                                                cursor={{ fill: '#f9fafb' }}
+                                                contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+                                             />
                                              <Legend verticalAlign="bottom" height={36} />
-                                         </PieChart>
+                                             <Bar dataKey="current" name="This Month" fill="black" radius={[4, 4, 0, 0]} />
+                                             <Bar dataKey="previous" name="Last Month" fill="#999999" radius={[4, 4, 0, 0]} />
+                                         </BarChart>
                                      </ResponsiveContainer>
                                  </div>
                              </div>
