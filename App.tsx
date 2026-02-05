@@ -2276,29 +2276,55 @@ const OnboardingScreen: React.FC<{
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const withTimeout = async <T,>(promise: Promise<T>, ms: number, label: string): Promise<T> => {
+    let timer: number | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = window.setTimeout(() => {
+        reject(new Error(`${label} timeout`));
+      }, ms);
+    });
+    try {
+      return await Promise.race([promise, timeout]);
+    } finally {
+      if (timer) window.clearTimeout(timer);
+    }
+  };
+
   const submit = async () => {
     try {
       setLoading(true);
       setError(null);
 
-      const { data: authData } = await supabase.auth.getUser();
+      const { data: authData } = await withTimeout(
+        supabase.auth.getUser(),
+        8000,
+        'Get session'
+      );
       const email = authData.user?.email;
       if (!email) throw new Error('No email in session');
 
       const storeId = `S_${crypto.randomUUID()}`;
 
       // 1) Create owner profile first so RLS allows store insert (current_store_id matches)
-      await upsertMyOwnerProfile({ name: name || email, email, storeId });
+      await withTimeout(
+        upsertMyOwnerProfile({ name: name || email, email, storeId }),
+        10000,
+        'Create owner profile'
+      );
 
       // 2) Create store record
-      const { error: storeErr } = await supabase.from('stores').insert({
-        id: storeId,
-        name: storeName,
-        country,
-        city,
-        owner_email: email,
-        currency,
-      });
+      const { error: storeErr } = await withTimeout(
+        supabase.from('stores').insert({
+          id: storeId,
+          name: storeName,
+          country,
+          city,
+          owner_email: email,
+          currency,
+        }),
+        10000,
+        'Create store'
+      );
 
       if (storeErr) {
         // rollback store_id on failure to avoid dangling reference
@@ -2306,8 +2332,9 @@ const OnboardingScreen: React.FC<{
         throw storeErr;
       }
 
-      await onDone();
+      await withTimeout(onDone(), 12000, 'Sync data');
     } catch (e: any) {
+      console.error('Onboarding failed', e);
       setError(e?.message ?? 'Failed to onboard');
     } finally {
       setLoading(false);
@@ -2441,6 +2468,12 @@ const App = () => {
   }, [sessionEmail, refreshAll]);
 
   useEffect(() => {
+    if (sessionEmail) {
+      refreshAll();
+    }
+  }, [sessionEmail, refreshAll]);
+
+  useEffect(() => {
     if (!sessionEmail) return;
     const channel = supabase
       .channel('realtime-all')
@@ -2461,6 +2494,15 @@ const App = () => {
       }
     };
   }, [sessionEmail, scheduleRefreshAll]);
+
+  // Fallback polling to keep data fresh even if realtime is unavailable
+  useEffect(() => {
+    if (!sessionEmail) return;
+    const intervalId = window.setInterval(() => {
+      refreshAll();
+    }, 15000);
+    return () => window.clearInterval(intervalId);
+  }, [sessionEmail, refreshAll]);
   
 
  const [globalConfig, setGlobalConfig] = useState(() => {
