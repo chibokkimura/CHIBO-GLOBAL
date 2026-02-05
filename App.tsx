@@ -2375,8 +2375,24 @@ const App = () => {
   // Map Supabase session email -> app user (mock table for now)
 const resolvedUser = useMemo(() => {
   if (!sessionEmail) return null;
-  return users.find(u => u.email.toLowerCase() === sessionEmail.toLowerCase()) ?? null;
+
+  // 1) DB에 등록된 유저가 있으면 그걸 사용
+  const found = users.find(u => u.email.toLowerCase() === sessionEmail.toLowerCase());
+  if (found) return found;
+
+  // 2) 없으면 내 이메일은 OWNER로 자동 허용 (임시)
+  if (sessionEmail.toLowerCase() === 'chibo.k.kimura@gmail.com') {
+    return {
+      email: sessionEmail,
+      name: 'Owner',
+      role: UserRole.OWNER,
+      storeId: null
+    };
+  }
+
+  return null;
 }, [sessionEmail, users]);
+
 
 useEffect(() => {
   setUser(resolvedUser);
