@@ -2372,17 +2372,17 @@ const App = () => {
     setUser(null);
   };
 
-  if (!sessionEmail) return <LoginScreen />;
-
   // Map Supabase session email -> app user (mock table for now)
-  const resolvedUser = useMemo(() => {
-    if (!sessionEmail) return null;
-    return users.find(u => u.email.toLowerCase() === sessionEmail.toLowerCase()) ?? null;
-  }, [sessionEmail, users]);
+const resolvedUser = useMemo(() => {
+  if (!sessionEmail) return null;
+  return users.find(u => u.email.toLowerCase() === sessionEmail.toLowerCase()) ?? null;
+}, [sessionEmail, users]);
 
-  useEffect(() => {
-    setUser(resolvedUser);
-  }, [resolvedUser]);
+useEffect(() => {
+  setUser(resolvedUser);
+}, [resolvedUser]);
+
+if (!sessionEmail) return <LoginScreen />;
 
   if (!resolvedUser) {
     return (
