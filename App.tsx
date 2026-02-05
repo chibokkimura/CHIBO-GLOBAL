@@ -2373,25 +2373,35 @@ const App = () => {
   };
 
   // Map Supabase session email -> app user (mock table for now)
+const HQ_EMAILS = [
+  'chibo.k.kimura@gmail.com',
+  // 여기에 HQ로 지정할 이메일 추가
+  // 'aaa@example.com',
+];
+
 const resolvedUser = useMemo(() => {
   if (!sessionEmail) return null;
 
-  // 1) DB에 등록된 유저가 있으면 그걸 사용
-  const found = users.find(u => u.email.toLowerCase() === sessionEmail.toLowerCase());
-  if (found) return found;
+  const email = sessionEmail.toLowerCase();
 
-  // 2) 없으면 내 이메일은 OWNER로 자동 허용 (임시)
-  if (sessionEmail.toLowerCase() === 'chibo.k.kimura@gmail.com') {
+  // 1) HQ 이메일이면 HQ 자동 지정
+  if (HQ_EMAILS.includes(email)) {
     return {
-      email: sessionEmail,
-      name: 'Owner',
-      role: UserRole.OWNER,
-      storeId: null
+      email,
+      name: 'HQ Admin',
+      role: UserRole.HQ,
+      storeId: null,
     };
   }
 
+  // 2) DB/권한 목록에 있으면 그대로 사용
+  const found = users.find(u => u.email.toLowerCase() === email);
+  if (found) return found;
+
+  // 3) 없으면 온보딩으로 보내기 위해 null
   return null;
 }, [sessionEmail, users]);
+
 
 
 useEffect(() => {
@@ -2400,20 +2410,16 @@ useEffect(() => {
 
 if (!sessionEmail) return <LoginScreen />;
 
-  if (!resolvedUser) {
-    return (
-      <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
-        <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-xl">
-          <div className="text-xl font-extrabold mb-2">접근 권한이 없는 계정입니다</div>
-          <div className="text-gray-600 mb-6">로그인 이메일: <span className="font-semibold">{sessionEmail}</span></div>
-          <div className="text-gray-500 text-sm leading-relaxed mb-6">
-            현재 버전은 에 등록된 이메일만 접근 가능합니다. 운영 버전에서는 권한 테이블(DB)로 전환합니다.
-          </div>
-          <button onClick={() => handleLogout()} className="px-4 py-2 rounded-xl border border-gray-200 hover:bg-gray-50 transition font-semibold">로그아웃</button>
-        </div>
-      </div>
-    );
-  }
+if (!resolvedUser) {
+  return (
+    <OnboardingScreen
+      onDone={async () => {
+        await refreshAll();
+      }}
+    />
+  );
+}
+
 
   if (!user) {
     return (
