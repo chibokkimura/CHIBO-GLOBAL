@@ -2448,8 +2448,18 @@ if (!sessionEmail) return <LoginScreen />;
   }
 
   // Owner View
-  const myStore = stores.find(s => s.id === user.storeId);
-  if (!myStore) return <div className="min-h-screen flex items-center justify-center text-red-500 font-bold">Store not found for this user. <button onClick={handleLogout} className="ml-4 underline text-black">Logout</button></div>;
+ // Owner View
+const myStore = stores.find(s => s.id === user.storeId);
+
+if (!myStore) {
+  return (
+    <OnboardingScreen
+      onDone={async () => {
+        await refreshAll();
+      }}
+    />
+  );
+}
 
   return (
       <StoreDashboard 
