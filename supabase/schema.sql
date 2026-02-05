@@ -68,7 +68,7 @@ create table if not exists public.sales (
 
 create table if not exists public.sale_items (
   sale_id text not null references public.sales(id) on delete cascade,
-  menu_id text not null references public.menus(id) on delete restrict,
+  menu_id text not null,
   quantity integer not null,
   primary key (sale_id, menu_id)
 );
