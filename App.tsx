@@ -2183,7 +2183,6 @@ const OnboardingScreen: React.FC<{
   const [country, setCountry] = useState('South Korea');
   const [city, setCity] = useState('Seoul');
   const [currency, setCurrency] = useState('JPY');
-  const [royalty, setRoyalty] = useState('5.0');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -2198,15 +2197,15 @@ const OnboardingScreen: React.FC<{
 
       const storeId = `S_${crypto.randomUUID()}`;
 
-      const { error: storeErr } = await supabase.from('stores').insert({
-        id: storeId,
-        name: storeName,
-        country,
-        city,
-        owner_email: email,
-        currency,
-        royalty_percentage: Number(royalty),
-      });
+     const { error: storeErr } = await supabase.from('stores').insert({
+  id: storeId,
+  name: storeName,
+  country,
+  city,
+  owner_email: email,
+  currency,
+});
+
       if (storeErr) throw storeErr;
 
       await upsertMyOwnerProfile({ name: name || email, email, storeId });
@@ -2261,10 +2260,7 @@ const OnboardingScreen: React.FC<{
 </select>
 
           </div>
-          <div>
-            <label className="text-sm font-semibold text-gray-700">로열티(%)</label>
-            <input value={royalty} onChange={(e) => setRoyalty(e.target.value)} className="mt-1 w-full px-3 py-2 rounded-xl border border-gray-200" />
-          </div>
+          
         </div>
 
         {error && <div className="mt-4 text-sm text-red-600">{error}</div>}
