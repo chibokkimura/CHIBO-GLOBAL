@@ -2338,8 +2338,6 @@ const App = () => {
     }
   }, [sessionEmail]);
   
-  // Mock Users State (to allow registration)
-  const [users, setUsers] = useState<User[]>([]);
 
  const [globalConfig, setGlobalConfig] = useState(() => {
   const saved = localStorage.getItem('globalConfig');
@@ -2367,67 +2365,71 @@ useEffect(() => {
 
   // Handlers
 
-  const handleRegister = (data: { name: string; role: UserRole; storeName?: string; city?: string; country?: string }) => {
-      let newStoreId = '';
-      
-      if (data.role === UserRole.OWNER && data.storeName && data.city && data.country) {
-          const newStore: Store = {
-              id: `S_NEW_${Date.now()}`,
-              name: data.storeName,
-              city: data.city,
-              country: data.country,
-              ownerEmail: `${data.name.toLowerCase().replace(/\s/g, '')}@chibo.com`,
-              currency: 'USD', // Default currency
-              royaltyPercentage: 5.0
-          };
-          setStores([...stores, newStore]);
-          newStoreId = newStore.id;
-      }
-
-      const newUser: User = {
-          email: `${data.name.toLowerCase().replace(/\s/g, '')}@chibo.com`,
-          name: data.name,
-          role: data.role,
-          storeId: newStoreId || undefined
-      };
-      setUsers([...users, newUser]);
-      setUser(newUser);
-  };
+  
   
   const handleLogout = async () => {
     await signOut();
     setUser(null);
   };
 
-  // Map Supabase session email -> app user (mock table for now)
+ // Map Supabase session email -> app user (DB + HQ override)
 const HQ_EMAILS = [
   'chibo.k.kimura@gmail.com',
   // 여기에 HQ로 지정할 이메일 추가
-  // 'aaa@example.com',
 ];
 
-const resolvedUser = useMemo(() => {
-  if (!sessionEmail) return null;
+const [resolvedUser, setResolvedUser] = useState<User | null>(null);
+const [authLoading, setAuthLoading] = useState<boolean>(true);
+
+const loadResolvedUser = async () => {
+  if (!sessionEmail) {
+    setResolvedUser(null);
+    setAuthLoading(false);
+    return;
+  }
 
   const email = sessionEmail.toLowerCase();
 
   // 1) HQ 이메일이면 HQ 자동 지정
   if (HQ_EMAILS.includes(email)) {
-    return {
+    setResolvedUser({
       email,
       name: 'HQ Admin',
       role: UserRole.HQ,
-      storeId: null,
-    };
+      storeId: undefined,
+    });
+    setAuthLoading(false);
+    return;
   }
 
-  // 2) DB/권한 목록에 있으면 그대로 사용
-  const found = users.find(u => u.email.toLowerCase() === email);
-  if (found) return found;
+  try {
+    setAuthLoading(true);
+    const row = await getMyAppUser();
+    if (row) {
+      setResolvedUser({
+        email: row.email,
+        name: row.name || row.email,
+        role: row.role === 'HQ' ? UserRole.HQ : UserRole.OWNER,
+        storeId: row.store_id ?? undefined,
+      });
+    } else {
+      setResolvedUser(null);
+    }
+  } catch (e) {
+    console.error('Failed to load app user', e);
+    setResolvedUser(null);
+  } finally {
+    setAuthLoading(false);
+  }
+};
 
-  // 3) 없으면 온보딩으로 보내기 위해 null
-  return null;
-}, [sessionEmail, users]);
+useEffect(() => {
+  loadResolvedUser();
+}, [sessionEmail]);
+
+useEffect(() => {
+  setUser(resolvedUser);
+}, [resolvedUser]);
 
 
 
@@ -2437,16 +2439,26 @@ useEffect(() => {
 
 if (!sessionEmail) return <LoginScreen />;
 
-if (!resolvedUser) {
+if (authLoading) {
   return (
-<OnboardingScreen
-  globalConfig={globalConfig}
-  onDone={async () => {
-    await refreshAll();
-  }}
-/>
+    <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
+      <div className="text-gray-500 text-sm">세션을 확인하는 중입니다...</div>
+    </div>
   );
 }
+
+if (!resolvedUser) {
+  return (
+    <OnboardingScreen
+      globalConfig={globalConfig}
+      onDone={async () => {
+        await refreshAll();
+        await loadResolvedUser();
+      }}
+    />
+  );
+}
+
 
 
   if (!user) {
@@ -2488,12 +2500,15 @@ const myStore = stores.find(s => s.id === user.storeId);
 if (!myStore) {
   return (
     <OnboardingScreen
+      globalConfig={globalConfig}
       onDone={async () => {
         await refreshAll();
+        await loadResolvedUser();
       }}
     />
   );
 }
+
 
   return (
       <StoreDashboard 
