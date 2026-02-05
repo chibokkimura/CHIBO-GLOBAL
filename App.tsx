@@ -519,8 +519,16 @@ const SalesReporter: React.FC<{
   const [manualRevenue, setManualRevenue] = useState<string>('');
 
   useEffect(() => {
-      // Pre-fill if editing existing? For now just new
-  }, []);
+  if (initialDate) {
+    setDate(initialDate);
+  } else {
+    setDate(formatDate(new Date()));
+  }
+  setItems([]);
+  setIsClosed(false);
+  setReceiptImage(null);
+  setManualRevenue('');
+}, [initialDate]);
 
   const handleQuantityInput = (categoryName: string, val: string) => {
     const newQty = parseInt(val) || 0;
@@ -1866,6 +1874,7 @@ const StoreDashboard: React.FC<{
   onAddIngredient: (ing: Ingredient) => void;
 }> = ({ user, store, onLogout, sales, menus, employees, ingredients, globalConfig, onAddSale, onUpdateMenu, onCreateMenu, onDeleteMenu, onUpdateEmployees, onAddIngredient }) => {
     const [view, setView] = useState<'dashboard' | 'report' | 'menu' | 'staff'>('dashboard');
+    const [reportDate, setReportDate] = useState<string | null>(null);
     const [editingMenu, setEditingMenu] = useState<Menu | null>(null);
     const storeMenus = menus.filter(m => m.storeId === store.id);
     const storeEmployees = employees.filter(e => e.storeId === store.id);
@@ -2005,9 +2014,17 @@ const StoreDashboard: React.FC<{
                                         <h3 className="font-bold text-red-800 text-lg">Action Required: Missing Sales Reports</h3>
                                         <p className="text-sm text-red-600 mb-2">You have not submitted daily reports for the following dates. Please submit them immediately to maintain compliance.</p>
                                         <div className="flex flex-wrap gap-2">
-                                            {missingDates.map(d => (
-                                                <span key={d} className="px-2 py-1 bg-red-200 text-red-800 text-xs font-bold rounded">{d}</span>
-                                            ))}
+                                          {missingDates.map(d => (
+  <button
+    key={d}
+    type="button"
+    onClick={() => { setReportDate(d); setView('report'); }}
+    className="px-2 py-1 bg-red-200 text-red-800 text-xs font-bold rounded hover:bg-red-300 transition"
+  >
+    {d}
+  </button>
+))}
+
                                         </div>
                                     </div>
                                 </div>
@@ -2100,18 +2117,23 @@ const StoreDashboard: React.FC<{
                     )}
 
                     {view === 'report' && (
-                        <SalesReporter 
-                            store={store}
-                            sales={sales}
-                            menus={storeMenus}
-                            categories={globalConfig.categories}
-                            initialDate={null}
-                            onSave={(sale) => {
-                                onAddSale(sale);
-                                setView('dashboard');
-                            }}
-                            onCancel={() => setView('dashboard')}
-                        />
+                      <SalesReporter 
+  store={store}
+  sales={sales}
+  menus={storeMenus}
+  categories={globalConfig.categories}
+  initialDate={reportDate}
+  onSave={(sale) => {
+    onAddSale(sale);
+    setReportDate(null);
+    setView('dashboard');
+  }}
+  onCancel={() => {
+    setReportDate(null);
+    setView('dashboard');
+  }}
+/>
+
                     )}
 
                     {view === 'menu' && (
@@ -2520,7 +2542,15 @@ if (!myStore) {
           employees={employees}
           ingredients={ingredients}
           globalConfig={globalConfig}
-          onAddSale={async (s) => { await addSale(s); await refreshAll(); }}
+          onAddSale={async (s) => {
+  setSales(prev => [s, ...prev]);   // 즉시 반영
+  try {
+    await addSale(s);
+  } finally {
+    await refreshAll();
+  }
+}}
+
           onUpdateMenu={async (m) => { await saveMenu(m); await refreshAll(); }}
           onCreateMenu={async (m) => { await saveMenu(m); await refreshAll(); }}
           onDeleteMenu={async (id) => { await deleteMenu(id); await refreshAll(); }}
