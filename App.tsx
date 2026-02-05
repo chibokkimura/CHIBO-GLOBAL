@@ -51,6 +51,22 @@ async function upsertMyOwnerProfile(params: { name: string; email: string; store
   if (error) throw error;
 }
 
+async function upsertMyHqProfile(params: { name: string; email: string }) {
+  const { data: authData } = await supabase.auth.getUser();
+  const uid = authData.user?.id;
+  if (!uid) throw new Error('No auth user');
+
+  const { error } = await supabase.from('app_users').upsert({
+    user_id: uid,
+    email: params.email,
+    name: params.name,
+    role: 'HQ',
+    store_id: null,
+  });
+
+  if (error) throw error;
+}
+
 async function loadStores(): Promise<Store[]> {
   const { data, error } = await supabase.from('stores').select('*').order('id');
   if (error) throw error;
@@ -2425,12 +2441,6 @@ const App = () => {
   }, [sessionEmail, refreshAll]);
 
   useEffect(() => {
-    if (sessionEmail) {
-      refreshAll();
-    }
-  }, [sessionEmail, refreshAll]);
-
-  useEffect(() => {
     if (!sessionEmail) return;
     const channel = supabase
       .channel('realtime-all')
@@ -2506,13 +2516,21 @@ const loadResolvedUser = async () => {
 
   // 1) HQ 이메일이면 HQ 자동 지정
   if (HQ_EMAILS.includes(email)) {
-    setResolvedUser({
-      email,
-      name: 'HQ Admin',
-      role: UserRole.HQ,
-      storeId: undefined,
-    });
-    setAuthLoading(false);
+    try {
+      setAuthLoading(true);
+      await upsertMyHqProfile({ name: 'HQ Admin', email });
+    } catch (e) {
+      console.error('Failed to upsert HQ profile', e);
+    } finally {
+      setResolvedUser({
+        email,
+        name: 'HQ Admin',
+        role: UserRole.HQ,
+        storeId: undefined,
+      });
+      setAuthLoading(false);
+      await refreshAll();
+    }
     return;
   }
 
@@ -2534,6 +2552,7 @@ const loadResolvedUser = async () => {
     setResolvedUser(null);
   } finally {
     setAuthLoading(false);
+    await refreshAll();
   }
 };
 
