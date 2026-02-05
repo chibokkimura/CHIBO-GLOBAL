@@ -515,24 +515,34 @@ const SalesReporter: React.FC<{
   const [date, setDate] = useState(initialDate || formatDate(new Date()));
   const [items, setItems] = useState<SaleItem[]>([]); // Store category name in menuId
   const [isClosed, setIsClosed] = useState(false);
-  const [receiptImage, setReceiptImage] = useState<string | null>(null);
+    const [receiptImage, setReceiptImage] = useState<string | null>(null);
   const [manualRevenue, setManualRevenue] = useState<string>('');
+  const [comment, setComment] = useState<string>('');
 
   useEffect(() => {
-  if (initialDate) {
-    setDate(initialDate);
-  } else {
-    setDate(formatDate(new Date()));
-  }
-  setItems([]);
-  setIsClosed(false);
-  setReceiptImage(null);
-  setManualRevenue('');
-}, [initialDate]);
+    if (initialDate) {
+      setDate(initialDate);
+    } else {
+      setDate(formatDate(new Date()));
+    }
+    setItems([]);
+    setIsClosed(false);
+    setReceiptImage(null);
+    setManualRevenue('');
+    setComment('');
+  }, [initialDate]);
+
+  const normalizeNumberInput = (value: string) => {
+    const digits = value.replace(/[^\d]/g, '');
+    if (digits === '') return '';
+    return digits.replace(/^0+(?=\d)/, '');
+  };
 
   const handleQuantityInput = (categoryName: string, val: string) => {
-    const newQty = parseInt(val) || 0;
+    const clean = normalizeNumberInput(val);
+    const newQty = clean === '' ? 0 : parseInt(clean, 10);
     if (newQty < 0) return;
+
     
     setItems(prev => {
         const existing = prev.find(i => i.menuId === categoryName);
@@ -572,6 +582,7 @@ const SalesReporter: React.FC<{
   };
 
   const handleSave = () => {
+     if (!receiptImage) return;
     const totalAmount = isClosed ? 0 : (parseFloat(manualRevenue) || 0);
     const newSale: Sale = {
       id: `SALE_${Date.now()}`,
@@ -588,7 +599,13 @@ const SalesReporter: React.FC<{
   return (
     <div className="max-w-2xl mx-auto">
       <div className="flex items-center gap-4 mb-6">
-        <button onClick={onCancel} className="p-2 hover:bg-gray-100 rounded-full"><ArrowLeft className="w-5 h-5"/></button>
+       <button
+  onClick={handleSave}
+  disabled={!receiptImage}
+  className={`flex-1 py-3 bg-black text-white font-bold rounded-xl shadow-lg ${receiptImage ? 'hover:bg-gray-800' : 'opacity-50 cursor-not-allowed'}`}
+>
+  Submit Report
+</button>
         <h2 className="text-2xl font-bold">Daily Sales Report</h2>
       </div>
 
@@ -618,13 +635,26 @@ const SalesReporter: React.FC<{
             <div>
               <div className="mb-8">
                   <label className="block text-sm font-bold text-gray-700 mb-2">Total Daily Revenue ({store.currency})</label>
-                  <input 
-                    type="number" 
-                    value={manualRevenue} 
-                    onChange={e => setManualRevenue(e.target.value)}
-                    placeholder="Enter total sales amount"
-                    className="w-full p-4 bg-gray-50 rounded-xl font-bold text-2xl border border-gray-200 focus:border-black outline-none"
-                  />
+                <input 
+  type="text"
+  inputMode="numeric"
+  pattern="[0-9]*"
+  value={manualRevenue} 
+  onChange={e => setManualRevenue(normalizeNumberInput(e.target.value))}
+  placeholder="Enter total sales amount"
+  className="w-full p-4 bg-gray-50 rounded-xl font-bold text-2xl border border-gray-200 focus:border-black outline-none"
+/>
+<div className="mb-8">
+  <label className="block text-sm font-bold text-gray-700 mb-2">Comments (Optional)</label>
+  <textarea
+    value={comment}
+    onChange={e => setComment(e.target.value)}
+    placeholder="Add notes for this report (optional)"
+    rows={3}
+    className="w-full p-4 bg-gray-50 rounded-xl border border-gray-200 focus:border-black outline-none resize-none"
+  />
+</div>
+
               </div>
 
             <h3 className="font-bold text-lg mb-4">Sales Quantity by Category</h3>
@@ -643,13 +673,15 @@ const SalesReporter: React.FC<{
                         </div>
                         <div className="flex items-center gap-2">
                             <button onClick={() => handleQuantityChange(category, -1)} className="w-8 h-8 flex items-center justify-center bg-gray-100 rounded-full hover:bg-gray-200 font-bold">-</button>
-                            <input 
-                                type="number" 
-                                min="0"
-                                className="w-16 p-2 text-center border border-gray-200 rounded-lg font-bold text-lg focus:ring-2 focus:ring-black outline-none"
-                                value={qty}
-                                onChange={(e) => handleQuantityInput(category, e.target.value)}
-                            />
+                           <input 
+  type="text"
+  inputMode="numeric"
+  pattern="[0-9]*"
+  className="w-16 p-2 text-center border border-gray-200 rounded-lg font-bold text-lg focus:ring-2 focus:ring-black outline-none"
+  value={String(qty)}
+  onChange={(e) => handleQuantityInput(category, e.target.value)}
+/>
+
                             <button onClick={() => handleQuantityChange(category, 1)} className="w-8 h-8 flex items-center justify-center bg-black text-white rounded-full hover:bg-gray-800 font-bold">+</button>
                         </div>
                     </div>
@@ -1981,7 +2013,7 @@ const StoreDashboard: React.FC<{
                 <div className="w-64 bg-white border-r hidden md:flex flex-col p-4">
                     <div className="space-y-1">
                         <NavButton active={view === 'dashboard'} onClick={() => setView('dashboard')} icon={LayoutDashboard} label="Overview" />
-                        <NavButton active={view === 'report'} onClick={() => setView('report')} icon={FileText} label="Daily Report" />
+                        <NavButton active={view === 'report'} onClick={() => { setReportDate(null); setView('report'); }} icon={FileText} label="Daily Report" />
                         <NavButton active={view === 'menu'} onClick={() => setView('menu')} icon={UtensilsCrossed} label="Menu" />
                         <NavButton active={view === 'staff'} onClick={() => setView('staff')} icon={Users} label="Staff" />
                     </div>
@@ -1995,7 +2027,7 @@ const StoreDashboard: React.FC<{
                 {/* Mobile Nav */}
                 <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t p-2 flex justify-around z-50">
                     <button onClick={() => setView('dashboard')} className={`p-3 rounded-xl ${view === 'dashboard' ? 'text-black bg-gray-100' : 'text-gray-400'}`}><LayoutDashboard className="w-6 h-6"/></button>
-                    <button onClick={() => setView('report')} className={`p-3 rounded-xl ${view === 'report' ? 'text-black bg-gray-100' : 'text-gray-400'}`}><FileText className="w-6 h-6"/></button>
+                    <button onClick={() => { setReportDate(null); setView('report'); }} className={`p-3 rounded-xl ${view === 'report' ? 'text-black bg-gray-100' : 'text-gray-400'}`}><FileText className="w-6 h-6"/></button>
                     <button onClick={() => setView('menu')} className={`p-3 rounded-xl ${view === 'menu' ? 'text-black bg-gray-100' : 'text-gray-400'}`}><UtensilsCrossed className="w-6 h-6"/></button>
                     <button onClick={() => setView('staff')} className={`p-3 rounded-xl ${view === 'staff' ? 'text-black bg-gray-100' : 'text-gray-400'}`}><Users className="w-6 h-6"/></button>
                 </div>
