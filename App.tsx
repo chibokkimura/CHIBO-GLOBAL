@@ -2168,7 +2168,16 @@ const LoginScreen: React.FC = () => {
 
 
 
-const OnboardingScreen: React.FC<{ onDone: () => Promise<void> }> = ({ onDone }) => {
+const OnboardingScreen: React.FC<{
+  onDone: () => Promise<void>;
+  globalConfig: {
+    storeNames: string[];
+    countries: string[];
+    cities: string[];
+    currencies: string[];
+  };
+}> = ({ onDone, globalConfig }) => {
+
   const [name, setName] = useState('');
   const [storeName, setStoreName] = useState('');
   const [country, setCountry] = useState('South Korea');
@@ -2223,19 +2232,34 @@ const OnboardingScreen: React.FC<{ onDone: () => Promise<void> }> = ({ onDone })
           </div>
           <div>
             <label className="text-sm font-semibold text-gray-700">점포명</label>
-            <input value={storeName} onChange={(e) => setStoreName(e.target.value)} className="mt-1 w-full px-3 py-2 rounded-xl border border-gray-200" placeholder="예: CHIBO Apgujeong" />
-          </div>
-          <div>
-            <label className="text-sm font-semibold text-gray-700">국가</label>
-            <input value={country} onChange={(e) => setCountry(e.target.value)} className="mt-1 w-full px-3 py-2 rounded-xl border border-gray-200" />
-          </div>
-          <div>
-            <label className="text-sm font-semibold text-gray-700">도시</label>
-            <input value={city} onChange={(e) => setCity(e.target.value)} className="mt-1 w-full px-3 py-2 rounded-xl border border-gray-200" />
-          </div>
-          <div>
-            <label className="text-sm font-semibold text-gray-700">통화</label>
-            <input value={currency} onChange={(e) => setCurrency(e.target.value)} className="mt-1 w-full px-3 py-2 rounded-xl border border-gray-200" />
+          <select value={storeName} onChange={(e) => setStoreName(e.target.value)} className="mt-1 w-full px-3 py-2 rounded-xl border border-gray-200">
+  <option value="">Select approved name...</option>
+  {globalConfig.storeNames.map(name => (
+    <option key={name} value={name}>{name}</option>
+  ))}
+</select>
+
+<select value={country} onChange={(e) => setCountry(e.target.value)} className="mt-1 w-full px-3 py-2 rounded-xl border border-gray-200">
+  <option value="">Select Country</option>
+  {globalConfig.countries.map(c => (
+    <option key={c} value={c}>{c}</option>
+  ))}
+</select>
+
+<select value={city} onChange={(e) => setCity(e.target.value)} className="mt-1 w-full px-3 py-2 rounded-xl border border-gray-200">
+  <option value="">Select City</option>
+  {globalConfig.cities.map(c => (
+    <option key={c} value={c}>{c}</option>
+  ))}
+</select>
+
+<select value={currency} onChange={(e) => setCurrency(e.target.value)} className="mt-1 w-full px-3 py-2 rounded-xl border border-gray-200">
+  <option value="">Select Currency</option>
+  {globalConfig.currencies.map(c => (
+    <option key={c} value={c}>{c}</option>
+  ))}
+</select>
+
           </div>
           <div>
             <label className="text-sm font-semibold text-gray-700">로열티(%)</label>
@@ -2412,11 +2436,12 @@ if (!sessionEmail) return <LoginScreen />;
 
 if (!resolvedUser) {
   return (
-    <OnboardingScreen
-      onDone={async () => {
-        await refreshAll();
-      }}
-    />
+<OnboardingScreen
+  globalConfig={globalConfig}
+  onDone={async () => {
+    await refreshAll();
+  }}
+/>
   );
 }
 
