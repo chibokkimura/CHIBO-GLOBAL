@@ -20,6 +20,14 @@ type AppUserRow = {
   store_id: string | null;
 };
 
+type StoreIngredientStock = {
+  storeId: string;
+  ingredientName: string;
+  unit: string;
+  par: number;
+  reorder: number;
+};
+
 type GlobalConfig = {
   storeNames: string[];
   countries: string[];
@@ -152,6 +160,30 @@ async function loadIngredients(): Promise<Ingredient[]> {
   const { data, error } = await supabase.from('ingredients').select('*').order('id');
   if (error) throw error;
   return (data ?? []).map((r: any) => ({ id: r.id, name: r.name, unit: r.unit }));
+}
+
+async function loadStoreIngredientStocks(): Promise<StoreIngredientStock[]> {
+  const { data, error } = await supabase.from('store_ingredient_stock').select('*');
+  if (error) throw error;
+  return (data ?? []).map((r: any) => ({
+    storeId: r.store_id,
+    ingredientName: r.ingredient_name,
+    unit: r.unit,
+    par: Number(r.par ?? 0),
+    reorder: Number(r.reorder ?? 0),
+  }));
+}
+
+async function saveStoreIngredientStocks(storeId: string, rows: { ingredientName: string; unit: string; par: number; reorder: number }[]) {
+  const payload = rows.map(r => ({
+    store_id: storeId,
+    ingredient_name: r.ingredientName,
+    unit: r.unit,
+    par: r.par,
+    reorder: r.reorder,
+  }));
+  const { error } = await supabase.from('store_ingredient_stock').upsert(payload, { onConflict: 'store_id,ingredient_name,unit' });
+  if (error) throw error;
 }
 
 async function loadEmployees(): Promise<Employee[]> {
@@ -1360,15 +1392,17 @@ const HQStoreDetail: React.FC<{
     sales: Sale[];
     menus: Menu[];
     ingredients: Ingredient[];
+    storeStocks: StoreIngredientStock[];
     categories: string[];
     standardIngredients: { name: string; unit: string; par?: number; reorder?: number }[];
     onBack: () => void;
     onUpdateStore: (store: Store) => void;
+    onSaveStoreStocks: (storeId: string, rows: { ingredientName: string; unit: string; par: number; reorder: number }[]) => void;
     onUpdateMenu: (menu: Menu) => void;
     onCreateMenu: (menu: Menu) => void;
     onDeleteMenu: (id: string) => void;
     onAddIngredient: (ing: Ingredient) => void;
-}> = ({ store, sales, menus, ingredients, categories, standardIngredients, onBack, onUpdateStore, onUpdateMenu, onCreateMenu, onDeleteMenu, onAddIngredient }) => {
+}> = ({ store, sales, menus, ingredients, storeStocks, categories, standardIngredients, onBack, onUpdateStore, onSaveStoreStocks, onUpdateMenu, onCreateMenu, onDeleteMenu, onAddIngredient }) => {
     const storeMenus = menus.filter(m => m.storeId === store.id);
     const storeSales = useMemo(() => sales.filter(s => s.storeId === store.id), [sales, store.id]);
     const sortedStoreSales = useMemo(
@@ -1391,6 +1425,10 @@ const HQStoreDetail: React.FC<{
     const [royaltyError, setRoyaltyError] = useState<string | null>(null);
     const [emailInfo, setEmailInfo] = useState<string | null>(null);
     const [expandedSales, setExpandedSales] = useState<Set<string>>(new Set());
+    const [showStockEditor, setShowStockEditor] = useState(false);
+    const [stockDrafts, setStockDrafts] = useState<{ ingredientName: string; unit: string; par: number; reorder: number }[]>([]);
+    const [stockSaving, setStockSaving] = useState(false);
+    const [stockError, setStockError] = useState<string | null>(null);
 
     useEffect(() => {
         setRoyaltyDraft(String(store.royaltyPercentage ?? 0));
@@ -1447,6 +1485,20 @@ const HQStoreDetail: React.FC<{
             });
         });
         return totals;
+    };
+
+    const saveStockSettings = async () => {
+        try {
+            setStockSaving(true);
+            setStockError(null);
+            await onSaveStoreStocks(store.id, stockDrafts);
+            setShowStockEditor(false);
+        } catch (e) {
+            console.error('Failed to save stock settings', e);
+            setStockError('Failed to save stock settings.');
+        } finally {
+            setStockSaving(false);
+        }
     };
 
     const openEmailReminder = (date: string) => {
@@ -1521,6 +1573,33 @@ const HQStoreDetail: React.FC<{
         return map;
     }, [standardIngredients]);
 
+    const storeStockRows = useMemo(
+        () => storeStocks.filter(s => s.storeId === store.id),
+        [storeStocks, store.id]
+    );
+
+    const storeStockMap = useMemo(() => {
+        const map: Record<string, StoreIngredientStock> = {};
+        storeStockRows.forEach(row => {
+            map[`${row.ingredientName}::${row.unit}`] = row;
+        });
+        return map;
+    }, [storeStockRows]);
+
+    useEffect(() => {
+        const next = standardIngredients.map(ing => {
+            const key = `${ing.name}::${ing.unit}`;
+            const row = storeStockMap[key];
+            return {
+                ingredientName: ing.name,
+                unit: ing.unit,
+                par: row?.par ?? ing.par ?? 0,
+                reorder: row?.reorder ?? ing.reorder ?? 0,
+            };
+        });
+        setStockDrafts(next);
+    }, [standardIngredients, storeStockMap]);
+
     // Average ingredient usage per category (based on menu recipes)
     const categoryUsageMap = useMemo(() => {
         const map: Record<string, Record<string, number>> = {};
@@ -1550,7 +1629,11 @@ const HQStoreDetail: React.FC<{
     const inventoryStats = useMemo(() => {
         const stats: Record<string, { used: number; unit: string; par: number; reorder: number; remaining: number | null }> = {};
         standardIngredients.forEach(ing => {
-            stats[ing.name] = { used: 0, unit: ing.unit, par: ing.par ?? 0, reorder: ing.reorder ?? 0, remaining: null };
+            const key = `${ing.name}::${ing.unit}`;
+            const row = storeStockMap[key];
+            const par = row?.par ?? ing.par ?? 0;
+            const reorder = row?.reorder ?? ing.reorder ?? 0;
+            stats[ing.name] = { used: 0, unit: ing.unit, par, reorder, remaining: null };
         });
 
         // 2. Apply Sales Data to calculate total consumption
@@ -1579,7 +1662,7 @@ const HQStoreDetail: React.FC<{
         });
 
         return stats;
-    }, [standardIngredients, categoryUsageMap, storeSales]);
+    }, [standardIngredients, categoryUsageMap, storeSales, storeStockMap]);
 
     return (
         <div className="p-8 max-w-7xl mx-auto w-full relative">
@@ -1670,6 +1753,71 @@ const HQStoreDetail: React.FC<{
                                     Submitted
                                 </div>
                             </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+            {showStockEditor && (
+                <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+                    <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl">
+                        <div className="flex items-center justify-between px-6 pt-5">
+                            <div className="font-extrabold text-lg">Store Stock Settings</div>
+                            <button
+                                type="button"
+                                onClick={() => setShowStockEditor(false)}
+                                className="p-2 rounded-full hover:bg-gray-100 transition"
+                            >
+                                <X className="w-5 h-5 text-gray-500" />
+                            </button>
+                        </div>
+                        <div className="px-6 py-4">
+                            <div className="text-xs text-gray-500 mb-3">
+                                Set per-store stock and reorder thresholds for standard ingredients.
+                            </div>
+                            <div className="space-y-2 max-h-[50vh] overflow-y-auto">
+                                {stockDrafts.map((row, idx) => (
+                                    <div key={`${row.ingredientName}-${idx}`} className="grid grid-cols-12 gap-2 items-center">
+                                        <div className="col-span-5 text-sm font-semibold text-gray-800">{row.ingredientName}</div>
+                                        <div className="col-span-2 text-xs text-gray-500">{row.unit}</div>
+                                        <input
+                                            className="col-span-2 border border-gray-200 rounded-lg p-2 text-sm text-right"
+                                            value={String(row.par ?? 0)}
+                                            onChange={(e) => {
+                                                const val = e.target.value.replace(/[^\d.]/g, '');
+                                                setStockDrafts(prev => prev.map((r, i) => i === idx ? { ...r, par: val === '' ? 0 : Number(val) } : r));
+                                            }}
+                                            placeholder="Stock"
+                                        />
+                                        <input
+                                            className="col-span-2 border border-gray-200 rounded-lg p-2 text-sm text-right"
+                                            value={String(row.reorder ?? 0)}
+                                            onChange={(e) => {
+                                                const val = e.target.value.replace(/[^\d.]/g, '');
+                                                setStockDrafts(prev => prev.map((r, i) => i === idx ? { ...r, reorder: val === '' ? 0 : Number(val) } : r));
+                                            }}
+                                            placeholder="Reorder"
+                                        />
+                                    </div>
+                                ))}
+                            </div>
+                            {stockError && <div className="mt-3 text-sm text-red-600">{stockError}</div>}
+                        </div>
+                        <div className="px-6 pb-6 flex justify-end gap-3">
+                            <button
+                                type="button"
+                                onClick={() => setShowStockEditor(false)}
+                                className="px-4 py-2 rounded-xl border border-gray-200 text-sm font-semibold hover:bg-gray-50"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                onClick={saveStockSettings}
+                                disabled={stockSaving}
+                                className="px-4 py-2 rounded-xl bg-black text-white text-sm font-bold disabled:opacity-50"
+                            >
+                                {stockSaving ? 'Saving...' : 'Save'}
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -1816,7 +1964,16 @@ const HQStoreDetail: React.FC<{
                         <h2 className="text-xl font-bold flex items-center gap-2">
                             <Package className="w-5 h-5"/> Real-time Inventory (Est.)
                         </h2>
-                        <span className="text-xs font-bold bg-gray-100 px-2 py-1 rounded text-gray-500">Auto-Calculated</span>
+                        <div className="flex items-center gap-2">
+                            <span className="text-xs font-bold bg-gray-100 px-2 py-1 rounded text-gray-500">Auto-Calculated</span>
+                            <button
+                                type="button"
+                                onClick={() => setShowStockEditor(true)}
+                                className="text-xs font-bold bg-white border border-gray-200 px-2 py-1 rounded hover:bg-gray-50"
+                            >
+                                Edit Stock
+                            </button>
+                        </div>
                     </div>
                     <div className="space-y-4">
                         {Object.entries(inventoryStats).map(([name, data]) => {
@@ -1843,7 +2000,7 @@ const HQStoreDetail: React.FC<{
                                                 {baseStock ? (
                                                     <>Remaining: {remaining?.toLocaleString()} {data.unit}</>
                                                 ) : (
-                                                    <>Set stock in Global Settings</>
+                                                    <>Set stock in Store Settings</>
                                                 )}
                                             </div>
                                         </div>
@@ -2120,6 +2277,7 @@ const HQDashboard: React.FC<{
   sales: Sale[];
   menus: Menu[];
   ingredients: Ingredient[];
+  storeStocks: StoreIngredientStock[];
   globalConfig: {
       storeNames: string[];
       countries: string[];
@@ -2131,11 +2289,12 @@ const HQDashboard: React.FC<{
   };
   onUpdateGlobalConfig: (key: string, values: any) => void;
   onUpdateStore: (store: Store) => void;
+  onSaveStoreStocks: (storeId: string, rows: { ingredientName: string; unit: string; par: number; reorder: number }[]) => void;
   onUpdateMenu: (menu: Menu) => void;
   onCreateMenu: (menu: Menu) => void;
   onDeleteMenu: (id: string) => void;
   onAddIngredient: (ing: Ingredient) => void;
-}> = ({ user, onLogout, stores, sales, menus, ingredients, globalConfig, onUpdateGlobalConfig, onUpdateStore, onUpdateMenu, onCreateMenu, onDeleteMenu, onAddIngredient }) => {
+}> = ({ user, onLogout, stores, sales, menus, ingredients, storeStocks, globalConfig, onUpdateGlobalConfig, onUpdateStore, onSaveStoreStocks, onUpdateMenu, onCreateMenu, onDeleteMenu, onAddIngredient }) => {
   const [selectedStore, setSelectedStore] = useState<Store | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isSalesAnalyticsOpen, setIsSalesAnalyticsOpen] = useState(false);
@@ -2243,10 +2402,12 @@ const HQDashboard: React.FC<{
         sales={sales}
         menus={menus}
         ingredients={ingredients}
+        storeStocks={storeStocks}
         categories={globalConfig.categories}
         standardIngredients={globalConfig.standardIngredients}
         onBack={() => setSelectedStore(null)}
         onUpdateStore={onUpdateStore}
+        onSaveStoreStocks={onSaveStoreStocks}
         onUpdateMenu={onUpdateMenu}
         onCreateMenu={onCreateMenu}
         onDeleteMenu={onDeleteMenu}
@@ -3261,6 +3422,7 @@ const App = () => {
   const [menus, setMenus] = useState<Menu[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [ingredients, setIngredients] = useState<Ingredient[]>([]);
+  const [storeStocks, setStoreStocks] = useState<StoreIngredientStock[]>([]);
 
   const [dataLoading, setDataLoading] = useState<boolean>(false);
   const [dataError, setDataError] = useState<string | null>(null);
@@ -3279,6 +3441,7 @@ const App = () => {
       loadEmployees(),
       loadMenus(),
       loadSales(),
+      loadStoreIngredientStocks(),
       loadGlobalConfig(),
     ]);
 
@@ -3319,7 +3482,14 @@ const App = () => {
       errors.push(slRes.reason?.message ?? 'Failed to load sales');
     }
 
-    const gcRes = results[5];
+    const ssRes = results[5];
+    if (ssRes.status === 'fulfilled') {
+      setStoreStocks(ssRes.value);
+    } else {
+      errors.push(ssRes.reason?.message ?? 'Failed to load store stock');
+    }
+
+    const gcRes = results[6];
     if (gcRes.status === 'fulfilled') {
       const gc = gcRes.value;
       if (gc.exists === null) {
@@ -3368,6 +3538,7 @@ const App = () => {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'menus' }, () => scheduleRefreshAll())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'employees' }, () => scheduleRefreshAll())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'ingredients' }, () => scheduleRefreshAll())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'store_ingredient_stock' }, () => scheduleRefreshAll())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'app_users' }, () => scheduleRefreshAll())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'global_config' }, () => scheduleRefreshAll())
       .subscribe();
@@ -3548,9 +3719,11 @@ if (!resolvedUser) {
               sales={sales}
               menus={menus}
               ingredients={ingredients}
+              storeStocks={storeStocks}
               globalConfig={globalConfig}
               onUpdateGlobalConfig={handleUpdateGlobalConfig}
               onUpdateStore={async (s) => { const { error } = await supabase.from('stores').update({ name: s.name, country: s.country, city: s.city, owner_email: s.ownerEmail, currency: s.currency, royalty_percentage: s.royaltyPercentage }).eq('id', s.id); if (error) throw error; await refreshAll(); }}
+              onSaveStoreStocks={async (storeId, rows) => { await saveStoreIngredientStocks(storeId, rows); await refreshAll(); }}
               onUpdateMenu={async (m) => { await saveMenu(m); await refreshAll(); }}
               onCreateMenu={async (m) => { await saveMenu(m); await refreshAll(); }}
               onDeleteMenu={async (id) => { await deleteMenu(id); await refreshAll(); }}
