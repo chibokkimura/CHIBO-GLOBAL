@@ -16,6 +16,11 @@ create table if not exists public.app_users (
   store_id text null
 );
 
+create table if not exists public.global_config (
+  id text primary key,
+  config jsonb not null
+);
+
 create table if not exists public.stores (
   id text primary key,
   name text not null,
@@ -107,6 +112,7 @@ $$;
 -- =========================
 
 alter table public.app_users enable row level security;
+alter table public.global_config enable row level security;
 alter table public.stores enable row level security;
 alter table public.ingredients enable row level security;
 alter table public.employees enable row level security;
@@ -131,6 +137,23 @@ create policy "app_users_update_self"
 on public.app_users for update
 using (user_id = auth.uid())
 with check (user_id = auth.uid());
+
+-- global_config: everyone can read; only HQ can write
+drop policy if exists "global_config_select_all" on public.global_config;
+create policy "global_config_select_all"
+on public.global_config for select
+using (auth.role() = 'authenticated');
+
+drop policy if exists "global_config_insert_hq" on public.global_config;
+create policy "global_config_insert_hq"
+on public.global_config for insert
+with check (public.is_hq());
+
+drop policy if exists "global_config_update_hq" on public.global_config;
+create policy "global_config_update_hq"
+on public.global_config for update
+using (public.is_hq())
+with check (public.is_hq());
 
 -- stores: HQ all; OWNER only their store
 drop policy if exists "stores_select_hq_or_own" on public.stores;
