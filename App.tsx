@@ -2668,6 +2668,7 @@ const App = () => {
  // Map Supabase session email -> app user (DB + HQ override)
 const HQ_EMAILS = [
   'chibo.k.kimura@gmail.com',
+  'chibo.global.mgsystem@gmail.com',
   // Add HQ emails here
 ];
 
