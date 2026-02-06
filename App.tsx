@@ -1279,15 +1279,7 @@ const HQStoreDetail: React.FC<{
     const storeMenus = menus.filter(m => m.storeId === store.id);
     const [editingMenu, setEditingMenu] = useState<Menu | null>(null);
     const [viewingReceipt, setViewingReceipt] = useState<string | null>(null);
-    const missingDates = useMemo(() => getMissingDates(sales, store.id, 7), [sales, store.id]);
-    const missingDatesAll = useMemo(() => getMissingDates(sales, store.id, 120), [sales, store.id]);
-    const missingDateSet = useMemo(() => new Set(missingDatesAll), [missingDatesAll]);
-    const submittedDateSet = useMemo(() => new Set(storeSales.map(s => s.date)), [storeSales]);
-    const [showMissingCalendar, setShowMissingCalendar] = useState(false);
-    const [calendarMonth, setCalendarMonth] = useState(() => {
-        const d = new Date();
-        return new Date(d.getFullYear(), d.getMonth(), 1);
-    });
+    const missingDates = useMemo(() => getMissingDates(sales, store.id), [sales, store.id]);
 
     // --- Real-time Inventory Calculation Logic ---
     const inventoryStats = useMemo(() => {
@@ -2039,7 +2031,15 @@ const StoreDashboard: React.FC<{
     const storeMenus = menus.filter(m => m.storeId === store.id);
     const storeEmployees = employees.filter(e => e.storeId === store.id);
     const storeSales = sales.filter(s => s.storeId === store.id);
-    const missingDates = useMemo(() => getMissingDates(sales, store.id), [sales, store.id]);
+    const missingDates = useMemo(() => getMissingDates(sales, store.id, 7), [sales, store.id]);
+    const missingDatesAll = useMemo(() => getMissingDates(sales, store.id, 120), [sales, store.id]);
+    const missingDateSet = useMemo(() => new Set(missingDatesAll), [missingDatesAll]);
+    const submittedDateSet = useMemo(() => new Set(storeSales.map(s => s.date)), [storeSales]);
+    const [showMissingCalendar, setShowMissingCalendar] = useState(false);
+    const [calendarMonth, setCalendarMonth] = useState(() => {
+        const d = new Date();
+        return new Date(d.getFullYear(), d.getMonth(), 1);
+    });
 
     // Chart Data Preparation
     const salesData = useMemo(() => {
