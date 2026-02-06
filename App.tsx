@@ -27,7 +27,7 @@ type GlobalConfig = {
   currencies: string[];
   positions: string[];
   categories: string[];
-  standardIngredients: { name: string; unit: string }[];
+  standardIngredients: { name: string; unit: string; par?: number; reorder?: number }[];
 };
 
 type GlobalConfigLoadState = 'loading' | 'loaded' | 'error';
@@ -40,12 +40,12 @@ const DEFAULT_GLOBAL_CONFIG: GlobalConfig = {
   positions: ['Manager', 'Chef', 'Server', 'Part-time'],
   categories: ['Okonomiyaki', 'Yakisoba', 'Teppan Dishes', 'Side Menu', 'Alcohol', 'Soft Drinks'],
   standardIngredients: [
-    { name: 'Cabbage', unit: 'g' },
-    { name: 'Pork Belly', unit: 'g' },
-    { name: 'Okonomiyaki Flour', unit: 'g' },
-    { name: 'Egg', unit: 'pcs' },
-    { name: 'Otafuku Sauce', unit: 'ml' },
-    { name: 'Noodles', unit: 'g' }
+    { name: 'Cabbage', unit: 'g', par: 0, reorder: 0 },
+    { name: 'Pork Belly', unit: 'g', par: 0, reorder: 0 },
+    { name: 'Okonomiyaki Flour', unit: 'g', par: 0, reorder: 0 },
+    { name: 'Egg', unit: 'pcs', par: 0, reorder: 0 },
+    { name: 'Otafuku Sauce', unit: 'ml', par: 0, reorder: 0 },
+    { name: 'Noodles', unit: 'g', par: 0, reorder: 0 }
   ]
 };
 
@@ -112,7 +112,12 @@ async function loadGlobalConfig(): Promise<{ config: GlobalConfig; exists: boole
       config: {
         ...DEFAULT_GLOBAL_CONFIG,
         ...cfg,
-        standardIngredients: cfg.standardIngredients ?? DEFAULT_GLOBAL_CONFIG.standardIngredients,
+        standardIngredients: (cfg.standardIngredients ?? DEFAULT_GLOBAL_CONFIG.standardIngredients).map((ing: any) => ({
+          name: ing.name,
+          unit: ing.unit,
+          par: typeof ing.par === 'number' ? ing.par : 0,
+          reorder: typeof ing.reorder === 'number' ? ing.reorder : 0,
+        })),
       },
       exists: true,
     };
@@ -944,7 +949,7 @@ const RecipeEditor: React.FC<{
     menu: Menu;
     ingredients: Ingredient[];
     categories: string[];
-    standardIngredients: { name: string; unit: string }[];
+    standardIngredients: { name: string; unit: string; par?: number; reorder?: number }[];
     onAddIngredient: (ing: Ingredient) => void;
     onSave: (menu: Menu) => void;
     onBack: () => void;
@@ -1356,7 +1361,7 @@ const HQStoreDetail: React.FC<{
     menus: Menu[];
     ingredients: Ingredient[];
     categories: string[];
-    standardIngredients: { name: string; unit: string }[];
+    standardIngredients: { name: string; unit: string; par?: number; reorder?: number }[];
     onBack: () => void;
     onUpdateStore: (store: Store) => void;
     onUpdateMenu: (menu: Menu) => void;
@@ -1366,6 +1371,10 @@ const HQStoreDetail: React.FC<{
 }> = ({ store, sales, menus, ingredients, categories, standardIngredients, onBack, onUpdateStore, onUpdateMenu, onCreateMenu, onDeleteMenu, onAddIngredient }) => {
     const storeMenus = menus.filter(m => m.storeId === store.id);
     const storeSales = useMemo(() => sales.filter(s => s.storeId === store.id), [sales, store.id]);
+    const sortedStoreSales = useMemo(
+        () => [...storeSales].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()),
+        [storeSales]
+    );
     const [editingMenu, setEditingMenu] = useState<Menu | null>(null);
     const [viewingReceipt, setViewingReceipt] = useState<string | null>(null);
     const missingDates = useMemo(() => getMissingDates(sales, store.id), [sales, store.id]);
@@ -1381,6 +1390,7 @@ const HQStoreDetail: React.FC<{
     const [royaltySaving, setRoyaltySaving] = useState(false);
     const [royaltyError, setRoyaltyError] = useState<string | null>(null);
     const [emailInfo, setEmailInfo] = useState<string | null>(null);
+    const [expandedSales, setExpandedSales] = useState<Set<string>>(new Set());
 
     useEffect(() => {
         setRoyaltyDraft(String(store.royaltyPercentage ?? 0));
@@ -1413,6 +1423,30 @@ const HQStoreDetail: React.FC<{
         } finally {
             setRoyaltySaving(false);
         }
+    };
+
+    const toggleSaleDetails = (id: string) => {
+        setExpandedSales(prev => {
+            const next = new Set(prev);
+            if (next.has(id)) {
+                next.delete(id);
+            } else {
+                next.add(id);
+            }
+            return next;
+        });
+    };
+
+    const getIngredientUsageForSale = (sale: Sale) => {
+        const totals: Record<string, number> = {};
+        sale.items.forEach(item => {
+            const avgUsage = categoryUsageMap[item.menuId];
+            if (!avgUsage) return;
+            Object.keys(avgUsage).forEach(ingName => {
+                totals[ingName] = (totals[ingName] || 0) + avgUsage[ingName] * item.quantity;
+            });
+        });
+        return totals;
     };
 
     const openEmailReminder = (date: string) => {
@@ -1479,25 +1513,24 @@ const HQStoreDetail: React.FC<{
         return data;
     }, [storeSales]);
 
-    // --- Real-time Inventory Calculation Logic ---
-    const inventoryStats = useMemo(() => {
-        const stats: Record<string, { used: number; unit: string }> = {};
+    const ingredientUnitMap = useMemo(() => {
+        const map: Record<string, string> = {};
         standardIngredients.forEach(ing => {
-            stats[ing.name] = { used: 0, unit: ing.unit };
+            map[ing.name] = ing.unit;
         });
+        return map;
+    }, [standardIngredients]);
 
-        // 1. Calculate Average Ingredient Usage per Category for this Store
-        const categoryUsageMap: Record<string, Record<string, number>> = {}; // { "Okonomiyaki": { "Flour": 120, "Sauce": 30 } }
-
+    // Average ingredient usage per category (based on menu recipes)
+    const categoryUsageMap = useMemo(() => {
+        const map: Record<string, Record<string, number>> = {};
         categories.forEach(cat => {
             const catMenus = storeMenus.filter(m => m.category === cat);
             if (catMenus.length === 0) return;
 
             const ingTotals: Record<string, number> = {};
-            
             catMenus.forEach(menu => {
                 menu.recipe.forEach(r => {
-                    // Match recipe ingredient ID to global ingredient definition
                     const ingDef = ingredients.find(i => i.id === r.ingredientId);
                     if (ingDef && standardIngredients.some(si => si.name === ingDef.name)) {
                         ingTotals[ingDef.name] = (ingTotals[ingDef.name] || 0) + r.quantity;
@@ -1505,15 +1538,22 @@ const HQStoreDetail: React.FC<{
                 });
             });
 
-            // Average it out
-            categoryUsageMap[cat] = {};
+            map[cat] = {};
             Object.keys(ingTotals).forEach(ingName => {
-                categoryUsageMap[cat][ingName] = ingTotals[ingName] / catMenus.length;
+                map[cat][ingName] = ingTotals[ingName] / catMenus.length;
             });
+        });
+        return map;
+    }, [categories, storeMenus, ingredients, standardIngredients]);
+
+    // --- Real-time Inventory Calculation Logic ---
+    const inventoryStats = useMemo(() => {
+        const stats: Record<string, { used: number; unit: string; par: number; reorder: number; remaining: number | null }> = {};
+        standardIngredients.forEach(ing => {
+            stats[ing.name] = { used: 0, unit: ing.unit, par: ing.par ?? 0, reorder: ing.reorder ?? 0, remaining: null };
         });
 
         // 2. Apply Sales Data to calculate total consumption
-        const storeSales = sales.filter(s => s.storeId === store.id);
         storeSales.forEach(sale => {
             sale.items.forEach(saleItem => {
                 // In SalesReporter, menuId IS the Category Name
@@ -1531,8 +1571,15 @@ const HQStoreDetail: React.FC<{
             });
         });
 
+        Object.keys(stats).forEach(ingName => {
+            const par = stats[ingName].par;
+            if (par > 0) {
+                stats[ingName].remaining = Math.max(0, par - stats[ingName].used);
+            }
+        });
+
         return stats;
-    }, [store, sales, storeMenus, ingredients, categories, standardIngredients, storeSales]);
+    }, [standardIngredients, categoryUsageMap, storeSales]);
 
     return (
         <div className="p-8 max-w-7xl mx-auto w-full relative">
@@ -1773,10 +1820,12 @@ const HQStoreDetail: React.FC<{
                     </div>
                     <div className="space-y-4">
                         {Object.entries(inventoryStats).map(([name, data]) => {
-                            // Mocking a "Starting Stock" to show a progress bar visual (e.g., 50,000 units base)
-                            const mockMax = 50000; 
-                            const percentUsed = Math.min(100, (data.used / mockMax) * 100);
-                            const isLow = percentUsed > 80;
+                            const baseStock = data.par > 0 ? data.par : null;
+                            const remaining = data.remaining;
+                            const percentUsed = baseStock ? Math.min(100, (data.used / baseStock) * 100) : 0;
+                            const isLow = baseStock
+                                ? (data.reorder > 0 ? (remaining !== null && remaining <= data.reorder) : percentUsed > 80)
+                                : false;
 
                             return (
                                 <div key={name} className="p-4 border rounded-xl hover:border-black transition">
@@ -1786,7 +1835,17 @@ const HQStoreDetail: React.FC<{
                                             <div className="text-xs text-gray-500">Standard Ingredient</div>
                                         </div>
                                         <div className="text-right">
-                                            <div className="text-lg font-extrabold">{data.used.toLocaleString()} <span className="text-xs font-medium text-gray-400">{data.unit} used</span></div>
+                                            <div className="text-lg font-extrabold">
+                                                {data.used.toLocaleString()}
+                                                <span className="text-xs font-medium text-gray-400"> {data.unit} used</span>
+                                            </div>
+                                            <div className="text-xs text-gray-500">
+                                                {baseStock ? (
+                                                    <>Remaining: {remaining?.toLocaleString()} {data.unit}</>
+                                                ) : (
+                                                    <>Set stock in Global Settings</>
+                                                )}
+                                            </div>
                                         </div>
                                     </div>
                                     {/* Simulated Stock Bar */}
@@ -1798,7 +1857,7 @@ const HQStoreDetail: React.FC<{
                                     </div>
                                     <div className="flex justify-between mt-2 text-[10px] font-bold text-gray-400 uppercase">
                                         <span>Current Consumption</span>
-                                        {isLow && <span className="text-red-500 flex items-center gap-1"><AlertCircle className="w-3 h-3"/> High Usage</span>}
+                                        {isLow && <span className="text-red-500 flex items-center gap-1"><AlertCircle className="w-3 h-3"/> Reorder Recommended</span>}
                                     </div>
                                 </div>
                             );
@@ -1821,40 +1880,86 @@ const HQStoreDetail: React.FC<{
                                 <th className="p-4 rounded-l-lg">Date</th>
                                 <th className="p-4 text-right">Total Sales</th>
                                 <th className="p-4 text-center">Status</th>
+                                <th className="p-4 text-center">Items</th>
                                 <th className="p-4 text-center rounded-r-lg">Receipt</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-50">
-                            {sales.filter(s => s.storeId === store.id).sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map(sale => (
-                                <tr key={sale.id} className="hover:bg-gray-50 transition">
-                                    <td className="p-4 font-medium">{sale.date}</td>
-                                    <td className="p-4 text-right font-bold font-mono">
-                                        {sale.isClosed ? '-' : `${store.currency} ${sale.totalAmount.toLocaleString()}`}
-                                    </td>
-                                    <td className="p-4 text-center">
-                                        {sale.isClosed ? (
-                                            <span className="bg-gray-100 text-gray-600 px-2 py-1 rounded text-xs font-bold uppercase">Closed</span>
-                                        ) : (
-                                            <span className="bg-emerald-100 text-emerald-700 px-2 py-1 rounded text-xs font-bold uppercase">Open</span>
-                                        )}
-                                    </td>
-                                    <td className="p-4 text-center">
-                                        {sale.receiptImage ? (
-                                            <button 
-                                                onClick={() => setViewingReceipt(sale.receiptImage!)}
-                                                className="inline-flex items-center gap-1 text-xs font-bold text-blue-600 hover:bg-blue-50 px-3 py-1 rounded-full transition"
+                            {sortedStoreSales.map(sale => (
+                                <React.Fragment key={sale.id}>
+                                    <tr className="hover:bg-gray-50 transition">
+                                        <td className="p-4 font-medium">{sale.date}</td>
+                                        <td className="p-4 text-right font-bold font-mono">
+                                            {sale.isClosed ? '-' : `${store.currency} ${sale.totalAmount.toLocaleString()}`}
+                                        </td>
+                                        <td className="p-4 text-center">
+                                            {sale.isClosed ? (
+                                                <span className="bg-gray-100 text-gray-600 px-2 py-1 rounded text-xs font-bold uppercase">Closed</span>
+                                            ) : (
+                                                <span className="bg-emerald-100 text-emerald-700 px-2 py-1 rounded text-xs font-bold uppercase">Open</span>
+                                            )}
+                                        </td>
+                                        <td className="p-4 text-center">
+                                            <button
+                                                type="button"
+                                                onClick={() => toggleSaleDetails(sale.id)}
+                                                className="text-xs font-bold text-gray-700 px-3 py-1 rounded-full border border-gray-200 hover:bg-gray-50 transition"
                                             >
-                                                <ImageIcon className="w-3 h-3"/> View Receipt
+                                                {expandedSales.has(sale.id) ? 'Hide' : 'View'}
                                             </button>
-                                        ) : (
-                                            <span className="text-gray-300 text-xs italic">No Image</span>
-                                        )}
-                                    </td>
-                                </tr>
+                                        </td>
+                                        <td className="p-4 text-center">
+                                            {sale.receiptImage ? (
+                                                <button 
+                                                    onClick={() => setViewingReceipt(sale.receiptImage!)}
+                                                    className="inline-flex items-center gap-1 text-xs font-bold text-blue-600 hover:bg-blue-50 px-3 py-1 rounded-full transition"
+                                                >
+                                                    <ImageIcon className="w-3 h-3"/> View Receipt
+                                                </button>
+                                            ) : (
+                                                <span className="text-gray-300 text-xs italic">No Image</span>
+                                            )}
+                                        </td>
+                                    </tr>
+                                    {expandedSales.has(sale.id) && (
+                                        <tr>
+                                            <td colSpan={5} className="p-4 bg-gray-50">
+                                                <div className="text-xs font-bold text-gray-500 uppercase mb-2">Category Quantities</div>
+                                                {sale.items?.length ? (
+                                                    <div className="flex flex-wrap gap-2">
+                                                        {sale.items.map((item, idx) => (
+                                                            <div key={idx} className="bg-white border border-gray-200 px-2 py-1 rounded text-xs font-bold text-gray-700">
+                                                                {item.menuId} • {item.quantity}
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                ) : (
+                                                    <div className="text-xs text-gray-400">No item data for this report.</div>
+                                                )}
+
+                                                <div className="text-xs font-bold text-gray-500 uppercase mt-4 mb-2">Estimated Ingredient Usage</div>
+                                                {sale.items?.length ? (
+                                                    <div className="flex flex-wrap gap-2">
+                                                        {Object.entries(getIngredientUsageForSale(sale)).map(([ingName, qty]) => (
+                                                            <div key={ingName} className="bg-white border border-gray-200 px-2 py-1 rounded text-xs font-bold text-gray-700">
+                                                                {ingName} • {qty.toFixed(1)} {ingredientUnitMap[ingName] || ''}
+                                                            </div>
+                                                        ))}
+                                                        {Object.keys(getIngredientUsageForSale(sale)).length === 0 && (
+                                                            <div className="text-xs text-gray-400">No ingredient mapping for this sale.</div>
+                                                        )}
+                                                    </div>
+                                                ) : (
+                                                    <div className="text-xs text-gray-400">No item data for this report.</div>
+                                                )}
+                                            </td>
+                                        </tr>
+                                    )}
+                                </React.Fragment>
                             ))}
-                            {sales.filter(s => s.storeId === store.id).length === 0 && (
+                            {sortedStoreSales.length === 0 && (
                                 <tr>
-                                    <td colSpan={4} className="p-8 text-center text-gray-400">No sales reports found.</td>
+                                    <td colSpan={5} className="p-8 text-center text-gray-400">No sales reports found.</td>
                                 </tr>
                             )}
                         </tbody>
@@ -1924,24 +2029,30 @@ const ConfigList: React.FC<{
 };
 
 const IngredientConfigList: React.FC<{
-    items: { name: string; unit: string }[];
-    onUpdate: (items: { name: string; unit: string }[]) => void;
+    items: { name: string; unit: string; par?: number; reorder?: number }[];
+    onUpdate: (items: { name: string; unit: string; par?: number; reorder?: number }[]) => void;
 }> = ({ items, onUpdate }) => {
     const [name, setName] = useState('');
     const [unit, setUnit] = useState('');
+    const [par, setPar] = useState('');
+    const [reorder, setReorder] = useState('');
     
     const handleAdd = () => {
         if (name && unit) {
-            onUpdate([...items, { name, unit }]);
+            const nextPar = par === '' ? 0 : Number(par);
+            const nextReorder = reorder === '' ? 0 : Number(reorder);
+            onUpdate([...items, { name, unit, par: Number.isNaN(nextPar) ? 0 : nextPar, reorder: Number.isNaN(nextReorder) ? 0 : nextReorder }]);
             setName('');
             setUnit('');
+            setPar('');
+            setReorder('');
         }
     };
 
     return (
         <div className="mb-6">
             <h3 className="font-bold text-gray-700 mb-1">Standard Ingredients</h3>
-            <p className="text-xs text-gray-500 mb-3">Manage standard ingredients available for recipes (Name & Unit).</p>
+            <p className="text-xs text-gray-500 mb-3">Manage standard ingredients (Name, Unit, Stock, Reorder threshold).</p>
             <div className="flex gap-2 mb-3">
                 <input 
                     value={name} 
@@ -1955,12 +2066,45 @@ const IngredientConfigList: React.FC<{
                     className="flex-1 border border-gray-300 rounded-lg p-2 text-sm outline-none focus:border-black bg-white text-black" 
                     placeholder="Unit (e.g. g)" 
                 />
+                <input
+                    value={par}
+                    onChange={e => setPar(e.target.value.replace(/[^\d.]/g, ''))}
+                    className="w-24 border border-gray-300 rounded-lg p-2 text-sm outline-none focus:border-black bg-white text-black text-right"
+                    placeholder="Stock"
+                />
+                <input
+                    value={reorder}
+                    onChange={e => setReorder(e.target.value.replace(/[^\d.]/g, ''))}
+                    className="w-24 border border-gray-300 rounded-lg p-2 text-sm outline-none focus:border-black bg-white text-black text-right"
+                    placeholder="Reorder"
+                />
                 <button onClick={handleAdd} className="bg-black text-white px-4 rounded-lg font-bold text-sm hover:bg-gray-800">Add</button>
             </div>
             <div className="flex flex-wrap gap-2">
                 {items.map((item, idx) => (
-                    <div key={idx} className="bg-gray-100 text-gray-800 px-3 py-1 rounded-full text-xs font-medium flex items-center gap-2 group border border-gray-200">
-                        {item.name} <span className="text-gray-500">({item.unit})</span>
+                    <div key={idx} className="bg-gray-100 text-gray-800 px-3 py-2 rounded-xl text-xs font-medium flex items-center gap-2 group border border-gray-200">
+                        <div className="font-bold">{item.name}</div>
+                        <span className="text-gray-500">({item.unit})</span>
+                        <input
+                            value={String(item.par ?? 0)}
+                            onChange={(e) => {
+                                const val = e.target.value.replace(/[^\d.]/g, '');
+                                const next = items.map((it, i) => i === idx ? { ...it, par: val === '' ? 0 : Number(val) } : it);
+                                onUpdate(next);
+                            }}
+                            className="w-16 border border-gray-300 rounded-lg p-1 text-right text-xs bg-white"
+                            placeholder="Stock"
+                        />
+                        <input
+                            value={String(item.reorder ?? 0)}
+                            onChange={(e) => {
+                                const val = e.target.value.replace(/[^\d.]/g, '');
+                                const next = items.map((it, i) => i === idx ? { ...it, reorder: val === '' ? 0 : Number(val) } : it);
+                                onUpdate(next);
+                            }}
+                            className="w-16 border border-gray-300 rounded-lg p-1 text-right text-xs bg-white"
+                            placeholder="Reorder"
+                        />
                         <button onClick={() => onUpdate(items.filter((_, i) => i !== idx))} className="text-gray-400 hover:text-red-500"><XCircle className="w-3 h-3"/></button>
                     </div>
                 ))}
@@ -1983,7 +2127,7 @@ const HQDashboard: React.FC<{
       currencies: string[];
       positions: string[];
       categories: string[];
-      standardIngredients: { name: string; unit: string }[];
+      standardIngredients: { name: string; unit: string; par?: number; reorder?: number }[];
   };
   onUpdateGlobalConfig: (key: string, values: any) => void;
   onUpdateStore: (store: Store) => void;
@@ -2377,7 +2521,7 @@ const StoreDashboard: React.FC<{
   ingredients: Ingredient[];
   globalConfig: {
       categories: string[];
-      standardIngredients: { name: string; unit: string }[];
+      standardIngredients: { name: string; unit: string; par?: number; reorder?: number }[];
       positions: string[];
   };
   onAddSale: (sale: Sale) => void;
