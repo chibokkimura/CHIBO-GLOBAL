@@ -2308,7 +2308,7 @@ const LoginScreen: React.FC = () => {
                     </button>
 
                     <p className="text-xs text-gray-400 mt-6 leading-relaxed">
-                        로그인 후 권한이 없는 계정은 접근이 제한됩니다.
+                        Access is restricted for unauthorized accounts after login.
                     </p>
                 </div>
             </div>
@@ -2404,16 +2404,16 @@ const OnboardingScreen: React.FC<{
   return (
     <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
       <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-xl">
-        <div className="text-2xl font-extrabold mb-2">최초 설정</div>
-        <div className="text-gray-500 mb-6">OWNER 계정 프로필과 점포를 생성합니다.</div>
+        <div className="text-2xl font-extrabold mb-2">Initial Setup</div>
+        <div className="text-gray-500 mb-6">Create your OWNER profile and store.</div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
-            <label className="text-sm font-semibold text-gray-700">이름(표시용)</label>
-            <input value={name} onChange={(e) => setName(e.target.value)} className="mt-1 w-full px-3 py-2 rounded-xl border border-gray-200" placeholder="예: Keito Kimura" />
+            <label className="text-sm font-semibold text-gray-700">Display Name</label>
+            <input value={name} onChange={(e) => setName(e.target.value)} className="mt-1 w-full px-3 py-2 rounded-xl border border-gray-200" placeholder="e.g. Keito Kimura" />
           </div>
           <div>
-            <label className="text-sm font-semibold text-gray-700">점포명</label>
+            <label className="text-sm font-semibold text-gray-700">Store Name</label>
           <select value={storeName} onChange={(e) => setStoreName(e.target.value)} className="mt-1 w-full px-3 py-2 rounded-xl border border-gray-200">
   <option value="">Select approved name...</option>
   {globalConfig.storeNames.map(name => (
@@ -2450,15 +2450,15 @@ const OnboardingScreen: React.FC<{
 
         <div className="mt-6 flex gap-3">
           <button onClick={submit} disabled={loading || !storeName} className="px-4 py-2 rounded-xl bg-black text-white font-semibold disabled:opacity-50">
-            {loading ? '생성 중...' : '생성'}
+            {loading ? 'Creating...' : 'Create'}
           </button>
           <button onClick={() => signOut()} className="px-4 py-2 rounded-xl border border-gray-200 hover:bg-gray-50 transition font-semibold">
-            로그아웃
+            Sign Out
           </button>
         </div>
 
         <div className="mt-6 text-xs text-gray-400 leading-relaxed">
-          HQ 계정은 app_users 테이블에 role=HQ로 수동 등록하는 방식이 가장 안정적입니다.
+          For HQ accounts, manually registering role=HQ in app_users is the most stable method.
         </div>
       </div>
     </div>
@@ -2469,6 +2469,12 @@ const OnboardingScreen: React.FC<{
 const App = () => {
   const [user, setUser] = useState<User | null>(null);
   const [sessionEmail, setSessionEmail] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (typeof document !== 'undefined') {
+      document.documentElement.lang = 'en';
+    }
+  }, []);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -2584,7 +2590,7 @@ const App = () => {
  // Map Supabase session email -> app user (DB + HQ override)
 const HQ_EMAILS = [
   'chibo.k.kimura@gmail.com',
-  // 여기에 HQ로 지정할 이메일 추가
+  // Add HQ emails here
 ];
 
 const [resolvedUser, setResolvedUser] = useState<User | null>(null);
@@ -2599,7 +2605,7 @@ const loadResolvedUser = async () => {
 
   const email = sessionEmail.toLowerCase();
 
-  // 1) HQ 이메일이면 HQ 자동 지정
+  // 1) If HQ email, auto-assign HQ
   if (HQ_EMAILS.includes(email)) {
     try {
       setAuthLoading(true);
@@ -2679,7 +2685,7 @@ if (!sessionEmail) return <LoginScreen />;
 if (authLoading) {
   return (
     <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
-      <div className="text-gray-500 text-sm">세션을 확인하는 중입니다...</div>
+      <div className="text-gray-500 text-sm">Checking session...</div>
     </div>
   );
 }
@@ -2701,7 +2707,7 @@ if (!resolvedUser) {
   if (!user) {
     return (
       <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
-        <div className="text-gray-500 text-sm">세션을 불러오는 중입니다...</div>
+        <div className="text-gray-500 text-sm">Loading session...</div>
       </div>
     );
   }
@@ -2758,7 +2764,7 @@ if (!myStore) {
           ingredients={ingredients}
           globalConfig={globalConfig}
           onAddSale={async (s) => {
-  setSales(prev => [s, ...prev]);   // 즉시 반영
+  setSales(prev => [s, ...prev]);   // immediate UI update
   try {
     await addSale(s);
   } finally {
