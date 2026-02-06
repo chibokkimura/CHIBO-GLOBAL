@@ -20,6 +20,33 @@ type AppUserRow = {
   store_id: string | null;
 };
 
+type GlobalConfig = {
+  storeNames: string[];
+  countries: string[];
+  cities: string[];
+  currencies: string[];
+  positions: string[];
+  categories: string[];
+  standardIngredients: { name: string; unit: string }[];
+};
+
+const DEFAULT_GLOBAL_CONFIG: GlobalConfig = {
+  storeNames: ['CHIBO', 'CHIBO Express', 'CHIBO Premium'],
+  countries: ['South Korea', 'Vietnam', 'Philippines', 'China', 'Taiwan', 'Others'],
+  cities: ['Seoul', 'Hanoi', 'Manila', 'Ningbo', 'Kaohsiung', 'Daejeon', 'Unknown', 'Osaka', 'Tokyo'],
+  currencies: ['JPY', 'USD', 'KRW', 'VND', 'THB'],
+  positions: ['Manager', 'Chef', 'Server', 'Part-time'],
+  categories: ['Okonomiyaki', 'Yakisoba', 'Teppan Dishes', 'Side Menu', 'Alcohol', 'Soft Drinks'],
+  standardIngredients: [
+    { name: 'Cabbage', unit: 'g' },
+    { name: 'Pork Belly', unit: 'g' },
+    { name: 'Okonomiyaki Flour', unit: 'g' },
+    { name: 'Egg', unit: 'pcs' },
+    { name: 'Otafuku Sauce', unit: 'ml' },
+    { name: 'Noodles', unit: 'g' }
+  ]
+};
+
 async function getMyAppUser(): Promise<AppUserRow | null> {
   const { data: authData } = await supabase.auth.getUser();
   const uid = authData.user?.id;
@@ -64,6 +91,39 @@ async function upsertMyHqProfile(params: { name: string; email: string }) {
     store_id: null,
   });
 
+  if (error) throw error;
+}
+
+async function loadGlobalConfig(): Promise<{ config: GlobalConfig; exists: boolean }> {
+  try {
+    const { data, error } = await supabase
+      .from('global_config')
+      .select('config')
+      .eq('id', 'global')
+      .maybeSingle();
+    if (error) throw error;
+    if (!data?.config) {
+      return { config: DEFAULT_GLOBAL_CONFIG, exists: false };
+    }
+    const cfg = data.config as Partial<GlobalConfig>;
+    return {
+      config: {
+        ...DEFAULT_GLOBAL_CONFIG,
+        ...cfg,
+        standardIngredients: cfg.standardIngredients ?? DEFAULT_GLOBAL_CONFIG.standardIngredients,
+      },
+      exists: true,
+    };
+  } catch (e) {
+    console.warn('Failed to load global_config, falling back to defaults.', e);
+    return { config: DEFAULT_GLOBAL_CONFIG, exists: false };
+  }
+}
+
+async function saveGlobalConfig(config: GlobalConfig) {
+  const { error } = await supabase
+    .from('global_config')
+    .upsert({ id: 'global', config });
   if (error) throw error;
 }
 
@@ -2438,18 +2498,21 @@ const App = () => {
     try {
       setDataLoading(true);
       setDataError(null);
-      const [st, ing, emp, mn, sl] = await Promise.all([
+      const [st, ing, emp, mn, sl, gc] = await Promise.all([
         loadStores(),
         loadIngredients(),
         loadEmployees(),
         loadMenus(),
         loadSales(),
+        loadGlobalConfig(),
       ]);
       setStores(st);
       setIngredients(ing);
       setEmployees(emp);
       setMenus(mn);
       setSales(sl);
+      setGlobalConfig(gc.config);
+      setGlobalConfigExists(gc.exists);
     } catch (e: any) {
       setDataError(e?.message ?? 'Failed to load data');
     } finally {
@@ -2484,6 +2547,7 @@ const App = () => {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'employees' }, () => scheduleRefreshAll())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'ingredients' }, () => scheduleRefreshAll())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'app_users' }, () => scheduleRefreshAll())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'global_config' }, () => scheduleRefreshAll())
       .subscribe();
 
     return () => {
@@ -2505,29 +2569,8 @@ const App = () => {
   }, [sessionEmail, refreshAll]);
   
 
- const [globalConfig, setGlobalConfig] = useState(() => {
-  const saved = localStorage.getItem('globalConfig');
-  if (saved) return JSON.parse(saved);
-  return {
-    storeNames: ['CHIBO', 'CHIBO Express', 'CHIBO Premium'],
-    countries: ['South Korea', 'Vietnam', 'Philippines', 'China', 'Taiwan', 'Others'],
-    cities: ['Seoul', 'Hanoi', 'Manila', 'Ningbo', 'Kaohsiung', 'Daejeon', 'Unknown', 'Osaka', 'Tokyo'],
-    currencies: ['JPY', 'USD', 'KRW', 'VND', 'THB'],
-    positions: ['Manager', 'Chef', 'Server', 'Part-time'],
-    categories: ['Okonomiyaki', 'Yakisoba', 'Teppan Dishes', 'Side Menu', 'Alcohol', 'Soft Drinks'],
-    standardIngredients: [
-      { name: 'Cabbage', unit: 'g' },
-      { name: 'Pork Belly', unit: 'g' },
-      { name: 'Okonomiyaki Flour', unit: 'g' },
-      { name: 'Egg', unit: 'pcs' },
-      { name: 'Otafuku Sauce', unit: 'ml' },
-      { name: 'Noodles', unit: 'g' }
-    ]
-  };
-});
-useEffect(() => {
-  localStorage.setItem('globalConfig', JSON.stringify(globalConfig));
-}, [globalConfig]);
+  const [globalConfig, setGlobalConfig] = useState<GlobalConfig>(DEFAULT_GLOBAL_CONFIG);
+  const [globalConfigExists, setGlobalConfigExists] = useState<boolean>(false);
 
   // Handlers
 
@@ -2606,6 +2649,25 @@ useEffect(() => {
   setUser(resolvedUser);
 }, [resolvedUser]);
 
+useEffect(() => {
+  if (user?.role !== UserRole.HQ) return;
+  if (globalConfigExists) return;
+  saveGlobalConfig(globalConfig)
+    .then(() => setGlobalConfigExists(true))
+    .catch((e) => console.error('Failed to seed global config', e));
+}, [user, globalConfigExists, globalConfig]);
+
+const handleUpdateGlobalConfig = async (key: string, values: any) => {
+  const next = { ...globalConfig, [key]: values } as GlobalConfig;
+  setGlobalConfig(next);
+  setGlobalConfigExists(true);
+  try {
+    await saveGlobalConfig(next);
+  } catch (e) {
+    console.error('Failed to save global config', e);
+  }
+};
+
 
 
 useEffect(() => {
@@ -2658,7 +2720,7 @@ if (!resolvedUser) {
               menus={menus}
               ingredients={ingredients}
               globalConfig={globalConfig}
-              onUpdateGlobalConfig={(k, v) => setGlobalConfig({...globalConfig, [k]: v})}
+              onUpdateGlobalConfig={handleUpdateGlobalConfig}
               onUpdateStore={async (s) => { const { error } = await supabase.from('stores').update({ name: s.name, country: s.country, city: s.city, owner_email: s.ownerEmail, currency: s.currency, royalty_percentage: s.royaltyPercentage }).eq('id', s.id); if (error) throw error; await refreshAll(); }}
               onUpdateMenu={async (m) => { await saveMenu(m); await refreshAll(); }}
               onCreateMenu={async (m) => { await saveMenu(m); await refreshAll(); }}
