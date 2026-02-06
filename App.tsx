@@ -2457,9 +2457,7 @@ const OnboardingScreen: React.FC<{
           </button>
         </div>
 
-        <div className="mt-6 text-xs text-gray-400 leading-relaxed">
-          For HQ accounts, manually registering role=HQ in app_users is the most stable method.
-        </div>
+      
       </div>
     </div>
   );
