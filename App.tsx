@@ -307,13 +307,93 @@ const getMissingDates = (sales: Sale[], storeId: string, daysBack = 7) => {
   return dates;
 };
 
-// Mock Exchange Rates for HQ View (Normalize to USD)
-const EXCHANGE_RATES: Record<string, number> = {
-  'JPY': 0.0067,
-  'KRW': 0.00075,
-  'USD': 1.0,
-  'VND': 0.000041,
-  'THB': 0.028
+// FX rates (currency per USD). Live rates fetched in app; fallback used if unavailable.
+const FALLBACK_USD_RATES: Record<string, number> = {
+  USD: 1,
+  JPY: 150,
+  KRW: 1320,
+  VND: 24500,
+  THB: 36,
+  CNY: 7.2,
+  PHP: 56,
+  TWD: 31,
+};
+
+const FX_API_URL = (import.meta as any)?.env?.VITE_FX_API_URL || 'https://open.er-api.com/v6/latest/USD';
+const FX_CACHE_KEY = 'chibo_fx_rates_usd_v1';
+const FX_CACHE_TTL_MS = 1000 * 60 * 60 * 6; // 6 hours
+
+type FxRatesStatus = 'loading' | 'ok' | 'stale' | 'error';
+
+const readFxCache = () => {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(FX_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed?.rates || !parsed?.fetchedAt) return null;
+    return parsed as { rates: Record<string, number>; fetchedAt: number };
+  } catch {
+    return null;
+  }
+};
+
+const writeFxCache = (rates: Record<string, number>) => {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(FX_CACHE_KEY, JSON.stringify({ rates, fetchedAt: Date.now() }));
+  } catch {
+    // ignore cache write errors
+  }
+};
+
+const useFxRates = () => {
+  const cached = readFxCache();
+  const [rates, setRates] = useState<Record<string, number> | null>(cached?.rates ?? null);
+  const [status, setStatus] = useState<FxRatesStatus>(cached ? 'stale' : 'loading');
+  const [lastUpdated, setLastUpdated] = useState<number | null>(cached?.fetchedAt ?? null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const fetchRates = async () => {
+      try {
+        const res = await fetch(FX_API_URL);
+        if (!res.ok) throw new Error('FX rates request failed');
+        const data = await res.json();
+        const nextRates = data?.rates || data?.conversion_rates;
+        if (!nextRates || !nextRates.JPY) throw new Error('FX rates missing');
+        if (cancelled) return;
+        setRates(nextRates);
+        setStatus('ok');
+        setLastUpdated(Date.now());
+        writeFxCache(nextRates);
+      } catch (e) {
+        if (cancelled) return;
+        setStatus(cached ? 'stale' : 'error');
+        // keep cached rates if any
+      }
+    };
+
+    fetchRates();
+    const intervalId = window.setInterval(fetchRates, 1000 * 60 * 60); // hourly refresh
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, []);
+
+  return { rates, status, lastUpdated };
+};
+
+const convertToJPY = (amount: number, currency: string, rates: Record<string, number> | null) => {
+  if (currency === 'JPY') return amount;
+  const table = rates ?? FALLBACK_USD_RATES;
+  const rateLocal = table[currency];
+  const rateJPY = table['JPY'];
+  if (!rateLocal || !rateJPY) return null;
+  // rates are "currency per USD": local -> USD -> JPY
+  return (amount / rateLocal) * rateJPY;
 };
 
 // --- Components ---
@@ -323,7 +403,9 @@ const SalesAnalyticsModal: React.FC<{
     onClose: () => void;
     sales: Sale[];
     stores: Store[];
-}> = ({ isOpen, onClose, sales, stores }) => {
+    fxRates: Record<string, number> | null;
+    fxStatus: FxRatesStatus;
+}> = ({ isOpen, onClose, sales, stores, fxRates, fxStatus }) => {
     const [activeTab, setActiveTab] = useState<'period' | 'country' | 'store'>('period');
 
     useEffect(() => {
@@ -343,9 +425,8 @@ const SalesAnalyticsModal: React.FC<{
             const store = stores.find(s => s.id === sale.storeId);
             if (!store) return;
 
-            // Normalize amount to USD
-            const rate = EXCHANGE_RATES[store.currency] || 1;
-            const amountUSD = sale.totalAmount * rate;
+            // Normalize amount to JPY
+            const amountJPY = convertToJPY(sale.totalAmount, store.currency, fxRates) ?? 0;
 
             let key = '';
             if (activeTab === 'period') {
@@ -357,14 +438,14 @@ const SalesAnalyticsModal: React.FC<{
             }
 
             if (key) {
-                data[key] = (data[key] || 0) + amountUSD;
+                data[key] = (data[key] || 0) + amountJPY;
             }
         });
 
         return Object.entries(data)
             .map(([name, value]) => ({ name, value }))
             .sort((a, b) => activeTab === 'period' ? a.name.localeCompare(b.name) : b.value - a.value);
-    }, [sales, stores, activeTab]);
+    }, [sales, stores, activeTab, fxRates]);
 
     if (!isOpen) return null;
 
@@ -376,7 +457,9 @@ const SalesAnalyticsModal: React.FC<{
                         <h2 className="text-2xl font-bold flex items-center gap-2">
                             <BarChart3 className="w-6 h-6"/> Sales Analytics
                         </h2>
-                        <p className="text-sm text-gray-500">Detailed breakdown of network performance (Normalized to USD)</p>
+                        <p className="text-sm text-gray-500">
+                            Detailed breakdown of network performance (Normalized to JPY{fxStatus === 'ok' ? '' : ' • Approx.'})
+                        </p>
                     </div>
                     <button onClick={onClose} className="p-2 hover:bg-gray-200 rounded-full transition"><X className="w-6 h-6"/></button>
                 </div>
@@ -425,7 +508,7 @@ const SalesAnalyticsModal: React.FC<{
                                         <Tooltip 
                                             cursor={{fill: '#f3f4f6'}}
                                             contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
-                                            formatter={(value: number) => [`$${value.toLocaleString(undefined, {maximumFractionDigits: 0})}`, 'Revenue']}
+                                            formatter={(value: number) => [`JPY ${value.toLocaleString(undefined, {maximumFractionDigits: 0})}`, 'Revenue']}
                                         />
                                         <Bar dataKey="value" fill="#111827" radius={[0, 4, 4, 0]} barSize={activeTab === 'store' ? 20 : 40}>
                                             {aggregatedData.map((entry, index) => (
@@ -441,7 +524,7 @@ const SalesAnalyticsModal: React.FC<{
                                     <thead className="bg-gray-50 text-gray-500 font-bold uppercase text-xs">
                                         <tr>
                                             <th className="p-4">{activeTab === 'period' ? 'Month' : activeTab === 'country' ? 'Country' : 'Store Name'}</th>
-                                            <th className="p-4 text-right">Total Revenue (USD Est.)</th>
+                                            <th className="p-4 text-right">Total Revenue (JPY Est.)</th>
                                             <th className="p-4 text-right">Contribution</th>
                                         </tr>
                                     </thead>
@@ -452,7 +535,7 @@ const SalesAnalyticsModal: React.FC<{
                                             return (
                                                 <tr key={idx} className="hover:bg-gray-50">
                                                     <td className="p-4 font-medium">{item.name}</td>
-                                                    <td className="p-4 text-right font-bold">${item.value.toLocaleString(undefined, {maximumFractionDigits: 0})}</td>
+                                                    <td className="p-4 text-right font-bold">JPY {item.value.toLocaleString(undefined, {maximumFractionDigits: 0})}</td>
                                                     <td className="p-4 text-right text-gray-500">{percent.toFixed(1)}%</td>
                                                 </tr>
                                             );
@@ -491,7 +574,9 @@ const NavButton: React.FC<{ active: boolean; onClick: () => void; icon: any; lab
   </button>
 );
 
-const FinancialsTable: React.FC<{ stores: Store[]; sales: Sale[] }> = ({ stores, sales }) => {
+const FinancialsTable: React.FC<{ stores: Store[]; sales: Sale[]; fxRates: Record<string, number> | null; fxStatus: FxRatesStatus }> = ({ stores, sales, fxRates, fxStatus }) => {
+  const currentMonthKey = new Date().toISOString().slice(0, 7);
+
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
         <div className="p-6 border-b flex justify-between items-center bg-gray-50">
@@ -503,19 +588,18 @@ const FinancialsTable: React.FC<{ stores: Store[]; sales: Sale[] }> = ({ stores,
                 <thead className="bg-white text-gray-400 font-bold uppercase text-xs border-b">
                     <tr>
                         <th className="p-4 font-extrabold tracking-wider">Store</th>
-                        <th className="p-4 text-right font-extrabold tracking-wider">Revenue (Local)</th>
-                        <th className="p-4 text-right font-extrabold tracking-wider">Revenue (USD Est.)</th>
-                        <th className="p-4 text-right font-extrabold tracking-wider">Royalty (Est.)</th>
+                        <th className="p-4 text-right font-extrabold tracking-wider">Revenue (Local, This Month)</th>
+                        <th className="p-4 text-right font-extrabold tracking-wider">Revenue (JPY Est.)</th>
+                        <th className="p-4 text-right font-extrabold tracking-wider">Royalty (JPY Est.)</th>
                         <th className="p-4 text-center font-extrabold tracking-wider">Health</th>
                     </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-50">
                     {stores.map(store => {
-                        const storeSales = sales.filter(s => s.storeId === store.id);
+                        const storeSales = sales.filter(s => s.storeId === store.id && s.date.slice(0, 7) === currentMonthKey);
                         const totalRevenue = storeSales.reduce((sum, s) => sum + s.totalAmount, 0);
-                        const rate = EXCHANGE_RATES[store.currency] || 1;
-                        const totalUSD = totalRevenue * rate;
-                        const royalty = totalUSD * (store.royaltyPercentage / 100);
+                        const totalJPY = convertToJPY(totalRevenue, store.currency, fxRates);
+                        const royaltyJPY = totalJPY !== null ? totalJPY * (store.royaltyPercentage / 100) : null;
 
                         return (
                             <tr key={store.id} className="hover:bg-gray-50 transition-colors">
@@ -527,10 +611,10 @@ const FinancialsTable: React.FC<{ stores: Store[]; sales: Sale[] }> = ({ stores,
                                     {store.currency} {totalRevenue.toLocaleString()}
                                 </td>
                                 <td className="p-4 text-right font-mono text-gray-900 font-bold">
-                                    ${totalUSD.toLocaleString(undefined, {maximumFractionDigits: 0})}
+                                    {totalJPY === null ? '—' : `JPY ${totalJPY.toLocaleString(undefined, {maximumFractionDigits: 0})}`}
                                 </td>
                                 <td className="p-4 text-right font-mono text-indigo-600 font-bold">
-                                    ${royalty.toLocaleString(undefined, {maximumFractionDigits: 0})}
+                                    {royaltyJPY === null ? '—' : `JPY ${royaltyJPY.toLocaleString(undefined, {maximumFractionDigits: 0})}`}
                                 </td>
                                 <td className="p-4 text-center">
                                     <span className="bg-emerald-100 text-emerald-700 px-2 py-1 rounded-full text-[10px] font-black uppercase tracking-wide">Good</span>
@@ -540,6 +624,9 @@ const FinancialsTable: React.FC<{ stores: Store[]; sales: Sale[] }> = ({ stores,
                     })}
                 </tbody>
             </table>
+        </div>
+        <div className="px-6 py-3 text-[10px] text-gray-400 border-t bg-white">
+            {fxStatus === 'ok' ? 'FX: Live rates' : 'FX: Approx. (cached or fallback)'}
         </div>
     </div>
   );
@@ -1644,6 +1731,7 @@ const HQDashboard: React.FC<{
   const [isSalesAnalyticsOpen, setIsSalesAnalyticsOpen] = useState(false);
   const navReadyRef = useRef(false);
   const popLockRef = useRef(false);
+  const { rates: fxRates, status: fxStatus } = useFxRates();
   
   // Tabs for Settings
   const [settingsTab, setSettingsTab] = useState<'general' | 'locations' | 'finance' | 'ops' | 'menu'>('general');
@@ -1666,15 +1754,14 @@ const HQDashboard: React.FC<{
           const store = stores.find(s => s.id === sale.storeId);
           if (!store) return;
 
-          const rate = EXCHANGE_RATES[store.currency] || 1;
-          const amountUSD = sale.totalAmount * rate;
+          const amountJPY = convertToJPY(sale.totalAmount, store.currency, fxRates) ?? 0;
           const monthKey = sale.date.slice(0, 7);
 
           if (monthKey === currentMonthKey) {
-              totalSalesCurrentMonth += amountUSD;
-              totalRoyaltyCurrentMonth += amountUSD * (store.royaltyPercentage / 100);
+              totalSalesCurrentMonth += amountJPY;
+              totalRoyaltyCurrentMonth += amountJPY * (store.royaltyPercentage / 100);
           } else if (monthKey === prevMonthKey) {
-              totalSalesLastMonth += amountUSD;
+              totalSalesLastMonth += amountJPY;
           }
       });
 
@@ -1690,7 +1777,7 @@ const HQDashboard: React.FC<{
           activeStores: stores.length,
           inventoryAlerts: 3 // Mocked for now, as global inventory check is heavy
       };
-  }, [sales, stores]);
+  }, [sales, stores, fxRates]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -1870,6 +1957,8 @@ const HQDashboard: React.FC<{
             onClose={() => setIsSalesAnalyticsOpen(false)} 
             sales={sales}
             stores={stores}
+            fxRates={fxRates}
+            fxStatus={fxStatus}
        />
 
        <div className="flex-1 p-8 overflow-y-auto space-y-8 max-w-7xl mx-auto w-full">
@@ -1889,13 +1978,13 @@ const HQDashboard: React.FC<{
                       </h3>
                       <div className="group/tooltip relative">
                           <Info className="w-4 h-4 opacity-50 hover:opacity-100 cursor-help"/>
-                          <div className="absolute right-0 top-6 w-48 bg-gray-800 text-white text-xs p-2 rounded shadow-lg opacity-0 group-hover/tooltip:opacity-100 transition-opacity pointer-events-none z-50">
-                              Sum of all daily sales reports submitted by stores this month (converted to USD).
+                          <div className="absolute right-0 top-6 w-56 bg-gray-800 text-white text-xs p-2 rounded shadow-lg opacity-0 group-hover/tooltip:opacity-100 transition-opacity pointer-events-none z-50">
+                              Sum of all daily sales reports submitted by stores this month (converted to JPY).
                           </div>
                       </div>
                   </div>
                   <div className="text-3xl font-extrabold mt-2 relative z-10">
-                      ${metrics.totalSalesCurrentMonth.toLocaleString(undefined, {maximumFractionDigits: 0})}
+                      JPY {metrics.totalSalesCurrentMonth.toLocaleString(undefined, {maximumFractionDigits: 0})}
                   </div>
                   <div className="flex items-center gap-2 mt-2 relative z-10">
                       <span className={`text-xs font-bold ${metrics.growthRate >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
@@ -1906,7 +1995,7 @@ const HQDashboard: React.FC<{
                       </span>
                   </div>
                   <div className="mt-4 text-[10px] text-gray-400 font-bold border-t border-white/10 pt-2">
-                      Basis: Current Month ({metrics.currentMonthName})
+                      Basis: Current Month ({metrics.currentMonthName}) • FX: {fxStatus === 'ok' ? 'Live' : 'Approx.'}
                   </div>
               </button>
               
@@ -1939,10 +2028,10 @@ const HQDashboard: React.FC<{
                       </div>
                   </div>
                   <div className="text-3xl font-extrabold mt-2 text-indigo-600">
-                      ${metrics.totalRoyaltyCurrentMonth.toLocaleString(undefined, {maximumFractionDigits: 0})}
+                      JPY {metrics.totalRoyaltyCurrentMonth.toLocaleString(undefined, {maximumFractionDigits: 0})}
                   </div>
                   <div className="mt-8 text-[10px] text-gray-400 font-bold border-t border-gray-100 pt-2">
-                      Basis: Est. for {metrics.currentMonthName}
+                      Basis: Est. for {metrics.currentMonthName} • FX: {fxStatus === 'ok' ? 'Live' : 'Approx.'}
                   </div>
               </div>
 
@@ -1965,7 +2054,7 @@ const HQDashboard: React.FC<{
            </div>
 
            {/* Financials Table */}
-           <FinancialsTable stores={stores} sales={sales} />
+           <FinancialsTable stores={stores} sales={sales} fxRates={fxRates} fxStatus={fxStatus} />
            
            {/* Store Grid (Clickable) */}
            <div>
