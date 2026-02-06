@@ -293,11 +293,11 @@ async function addSale(sale: Sale) {
 // --- Helper Functions ---
 const formatDate = (date: Date) => date.toISOString().split('T')[0];
 
-const getMissingDates = (sales: Sale[], storeId: string) => {
+const getMissingDates = (sales: Sale[], storeId: string, daysBack = 7) => {
   const dates: string[] = [];
   const today = new Date();
   // Check last 7 days (excluding today as it might not be over)
-  for (let i = 1; i <= 7; i++) {
+  for (let i = 1; i <= daysBack; i++) {
     const d = new Date(today);
     d.setDate(today.getDate() - i);
     const dateStr = formatDate(d);
@@ -1279,7 +1279,15 @@ const HQStoreDetail: React.FC<{
     const storeMenus = menus.filter(m => m.storeId === store.id);
     const [editingMenu, setEditingMenu] = useState<Menu | null>(null);
     const [viewingReceipt, setViewingReceipt] = useState<string | null>(null);
-    const missingDates = useMemo(() => getMissingDates(sales, store.id), [sales, store.id]);
+    const missingDates = useMemo(() => getMissingDates(sales, store.id, 7), [sales, store.id]);
+    const missingDatesAll = useMemo(() => getMissingDates(sales, store.id, 120), [sales, store.id]);
+    const missingDateSet = useMemo(() => new Set(missingDatesAll), [missingDatesAll]);
+    const submittedDateSet = useMemo(() => new Set(storeSales.map(s => s.date)), [storeSales]);
+    const [showMissingCalendar, setShowMissingCalendar] = useState(false);
+    const [calendarMonth, setCalendarMonth] = useState(() => {
+        const d = new Date();
+        return new Date(d.getFullYear(), d.getMonth(), 1);
+    });
 
     // --- Real-time Inventory Calculation Logic ---
     const inventoryStats = useMemo(() => {
@@ -2118,6 +2126,38 @@ const StoreDashboard: React.FC<{
         return { currentMonthSales, growth };
     }, [storeSales]);
 
+    const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+
+    const calendarCells = useMemo(() => {
+        const year = calendarMonth.getFullYear();
+        const month = calendarMonth.getMonth();
+        const start = new Date(year, month, 1);
+        const end = new Date(year, month + 1, 0);
+        const startWeekday = start.getDay();
+        const daysInMonth = end.getDate();
+        const cells: Array<string | null> = [];
+
+        for (let i = 0; i < startWeekday; i++) cells.push(null);
+        for (let day = 1; day <= daysInMonth; day++) {
+            const d = new Date(year, month, day);
+            cells.push(formatDate(d));
+        }
+        return cells;
+    }, [calendarMonth]);
+
+    const today = new Date();
+    const currentMonthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+    const canGoNextMonth = calendarMonth.getTime() < currentMonthStart.getTime();
+
+    const goPrevMonth = () => {
+        setCalendarMonth(prev => new Date(prev.getFullYear(), prev.getMonth() - 1, 1));
+    };
+
+    const goNextMonth = () => {
+        if (!canGoNextMonth) return;
+        setCalendarMonth(prev => new Date(prev.getFullYear(), prev.getMonth() + 1, 1));
+    };
+
     useEffect(() => {
         if (typeof window === 'undefined') return;
         if (!navReadyRef.current) {
@@ -2168,6 +2208,100 @@ const StoreDashboard: React.FC<{
                     }}
                     onBack={() => setEditingMenu(null)}
                 />
+            )}
+
+            {showMissingCalendar && (
+                <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
+                    <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg">
+                        <div className="flex items-center justify-between px-6 pt-5">
+                            <div className="font-extrabold text-lg">Missing Reports Calendar</div>
+                            <button
+                                type="button"
+                                onClick={() => setShowMissingCalendar(false)}
+                                className="p-2 rounded-full hover:bg-gray-100 transition"
+                            >
+                                <X className="w-5 h-5 text-gray-500" />
+                            </button>
+                        </div>
+                        <div className="px-6 pb-6">
+                            <div className="flex items-center justify-between mt-3 mb-4">
+                                <button
+                                    type="button"
+                                    onClick={goPrevMonth}
+                                    className="px-3 py-1 rounded-lg border border-gray-200 text-sm font-semibold hover:bg-gray-50 transition"
+                                >
+                                    Prev
+                                </button>
+                                <div className="font-semibold text-sm">
+                                    {monthNames[calendarMonth.getMonth()]} {calendarMonth.getFullYear()}
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={goNextMonth}
+                                    disabled={!canGoNextMonth}
+                                    className="px-3 py-1 rounded-lg border border-gray-200 text-sm font-semibold disabled:opacity-50 hover:bg-gray-50 transition"
+                                >
+                                    Next
+                                </button>
+                            </div>
+
+                            <div className="grid grid-cols-7 gap-2 text-xs text-gray-400 mb-2">
+                                <div>Sun</div>
+                                <div>Mon</div>
+                                <div>Tue</div>
+                                <div>Wed</div>
+                                <div>Thu</div>
+                                <div>Fri</div>
+                                <div>Sat</div>
+                            </div>
+
+                            <div className="grid grid-cols-7 gap-2">
+                                {calendarCells.map((dateStr, idx) => {
+                                    if (!dateStr) {
+                                        return <div key={`empty-${idx}`} />;
+                                    }
+                                    const isMissing = missingDateSet.has(dateStr);
+                                    const isSubmitted = submittedDateSet.has(dateStr);
+                                    const isFuture = new Date(dateStr) > today;
+                                    return (
+                                        <button
+                                            key={dateStr}
+                                            type="button"
+                                            disabled={isFuture}
+                                            onClick={() => {
+                                                if (!isMissing) return;
+                                                setReportDate(dateStr);
+                                                setView('report');
+                                                setShowMissingCalendar(false);
+                                            }}
+                                            className={`h-9 rounded-lg text-xs font-semibold border transition ${
+                                                isMissing
+                                                    ? 'bg-red-100 border-red-300 text-red-700 hover:bg-red-200'
+                                                    : isSubmitted
+                                                        ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
+                                                        : 'bg-white border-gray-200 text-gray-500'
+                                            } ${isFuture ? 'opacity-40 cursor-not-allowed' : ''}`}
+                                            title={isMissing ? 'Missing report' : (isSubmitted ? 'Submitted' : 'No report')}
+                                        >
+                                            {dateStr.slice(8)}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+
+                            <div className="mt-4 flex items-center gap-3 text-xs text-gray-500">
+                                <div className="flex items-center gap-1">
+                                    <span className="inline-block w-3 h-3 rounded bg-red-100 border border-red-300" />
+                                    Missing
+                                </div>
+                                <div className="flex items-center gap-1">
+                                    <span className="inline-block w-3 h-3 rounded bg-emerald-50 border border-emerald-200" />
+                                    Submitted
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             )}
             
             <div className="bg-white border-b px-6 py-4 flex justify-between items-center sticky top-0 z-40">
@@ -2238,6 +2372,16 @@ const StoreDashboard: React.FC<{
   </button>
 ))}
 
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              setCalendarMonth(new Date(new Date().getFullYear(), new Date().getMonth(), 1));
+                                              setShowMissingCalendar(true);
+                                            }}
+                                            className="px-2 py-1 bg-white text-red-700 text-xs font-bold rounded border border-red-200 hover:bg-red-50 transition"
+                                          >
+                                            View Older Dates
+                                          </button>
                                         </div>
                                     </div>
                                 </div>
