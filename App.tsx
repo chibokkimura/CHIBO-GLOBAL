@@ -94,7 +94,7 @@ async function upsertMyHqProfile(params: { name: string; email: string }) {
   if (error) throw error;
 }
 
-async function loadGlobalConfig(): Promise<{ config: GlobalConfig; exists: boolean }> {
+async function loadGlobalConfig(): Promise<{ config: GlobalConfig; exists: boolean | null }> {
   try {
     const { data, error } = await supabase
       .from('global_config')
@@ -116,7 +116,7 @@ async function loadGlobalConfig(): Promise<{ config: GlobalConfig; exists: boole
     };
   } catch (e) {
     console.warn('Failed to load global_config, falling back to defaults.', e);
-    return { config: DEFAULT_GLOBAL_CONFIG, exists: false };
+    return { config: DEFAULT_GLOBAL_CONFIG, exists: null };
   }
 }
 
@@ -2595,8 +2595,8 @@ const App = () => {
       setEmployees(emp);
       setMenus(mn);
       setSales(sl);
-      setGlobalConfig(gc.config);
-      setGlobalConfigExists(gc.exists);
+      setGlobalConfig((prev) => (gc.exists === null ? prev : gc.config));
+      setGlobalConfigExists((prev) => (gc.exists === null ? prev : gc.exists));
     } catch (e: any) {
       setDataError(e?.message ?? 'Failed to load data');
     } finally {
@@ -2735,11 +2735,11 @@ useEffect(() => {
 
 useEffect(() => {
   if (user?.role !== UserRole.HQ) return;
-  if (globalConfigExists) return;
-  saveGlobalConfig(globalConfig)
+  if (globalConfigExists !== false) return;
+  saveGlobalConfig(DEFAULT_GLOBAL_CONFIG)
     .then(() => setGlobalConfigExists(true))
     .catch((e) => console.error('Failed to seed global config', e));
-}, [user, globalConfigExists, globalConfig]);
+}, [user, globalConfigExists]);
 
 const handleUpdateGlobalConfig = async (key: string, values: any) => {
   const next = { ...globalConfig, [key]: values } as GlobalConfig;
