@@ -1358,15 +1358,52 @@ const HQStoreDetail: React.FC<{
     categories: string[];
     standardIngredients: { name: string; unit: string }[];
     onBack: () => void;
+    onUpdateStore: (store: Store) => void;
     onUpdateMenu: (menu: Menu) => void;
     onCreateMenu: (menu: Menu) => void;
     onDeleteMenu: (id: string) => void;
     onAddIngredient: (ing: Ingredient) => void;
-}> = ({ store, sales, menus, ingredients, categories, standardIngredients, onBack, onUpdateMenu, onCreateMenu, onDeleteMenu, onAddIngredient }) => {
+}> = ({ store, sales, menus, ingredients, categories, standardIngredients, onBack, onUpdateStore, onUpdateMenu, onCreateMenu, onDeleteMenu, onAddIngredient }) => {
     const storeMenus = menus.filter(m => m.storeId === store.id);
     const [editingMenu, setEditingMenu] = useState<Menu | null>(null);
     const [viewingReceipt, setViewingReceipt] = useState<string | null>(null);
     const missingDates = useMemo(() => getMissingDates(sales, store.id), [sales, store.id]);
+    const [royaltyDraft, setRoyaltyDraft] = useState<string>(String(store.royaltyPercentage ?? 0));
+    const [royaltySaving, setRoyaltySaving] = useState(false);
+    const [royaltyError, setRoyaltyError] = useState<string | null>(null);
+
+    useEffect(() => {
+        setRoyaltyDraft(String(store.royaltyPercentage ?? 0));
+    }, [store.royaltyPercentage]);
+
+    const normalizePercentInput = (value: string) => {
+        const cleaned = value.replace(/[^\d.]/g, '');
+        const parts = cleaned.split('.');
+        if (parts.length <= 1) return cleaned;
+        return `${parts[0]}.${parts.slice(1).join('')}`;
+    };
+
+    const saveRoyaltyRate = async () => {
+        const next = parseFloat(royaltyDraft);
+        if (Number.isNaN(next)) {
+            setRoyaltyError('Enter a valid number.');
+            return;
+        }
+        if (next < 0 || next > 100) {
+            setRoyaltyError('Royalty rate must be between 0 and 100.');
+            return;
+        }
+        try {
+            setRoyaltySaving(true);
+            setRoyaltyError(null);
+            await onUpdateStore({ ...store, royaltyPercentage: next });
+        } catch (e) {
+            console.error('Failed to update royalty rate', e);
+            setRoyaltyError('Failed to update. Please try again.');
+        } finally {
+            setRoyaltySaving(false);
+        }
+    };
 
     // --- Real-time Inventory Calculation Logic ---
     const inventoryStats = useMemo(() => {
@@ -1454,6 +1491,27 @@ const HQStoreDetail: React.FC<{
                 <div className="text-right">
                     <div className="text-sm font-bold text-gray-500">Currency</div>
                     <div className="text-xl font-bold">{store.currency}</div>
+                    <div className="mt-4 text-sm font-bold text-gray-500">Royalty Rate (%)</div>
+                    <div className="mt-1 flex items-center gap-2 justify-end">
+                        <input
+                            type="text"
+                            inputMode="decimal"
+                            value={royaltyDraft}
+                            onChange={(e) => setRoyaltyDraft(normalizePercentInput(e.target.value))}
+                            className="w-24 px-2 py-1 rounded-lg border border-gray-200 text-right font-bold"
+                        />
+                        <button
+                            type="button"
+                            onClick={saveRoyaltyRate}
+                            disabled={royaltySaving || Number.isNaN(parseFloat(royaltyDraft))}
+                            className="px-3 py-1 rounded-lg bg-black text-white text-xs font-bold disabled:opacity-50"
+                        >
+                            {royaltySaving ? 'Saving...' : 'Save'}
+                        </button>
+                    </div>
+                    {royaltyError && (
+                        <div className="mt-2 text-xs text-red-600 text-right">{royaltyError}</div>
+                    )}
                 </div>
             </div>
 
@@ -1475,8 +1533,25 @@ const HQStoreDetail: React.FC<{
                                             <p className="font-bold mb-2">The following dates are missing:</p>
                                             <div className="flex flex-wrap gap-2">
                                                 {missingDates.map(d => (
-                                                    <span key={d} className="bg-white border border-red-200 px-2 py-1 rounded text-xs font-bold text-red-600 shadow-sm">{d}</span>
+                                                    <button
+                                                        key={d}
+                                                        type="button"
+                                                        onClick={() => {
+                                                            const subject = encodeURIComponent(`Missing Daily Report: ${store.name} (${d})`);
+                                                            const body = encodeURIComponent(
+                                                                `Hello,\n\nPlease submit the daily sales report for ${d}.\n\nStore: ${store.name}\nLocation: ${store.city}, ${store.country}\n\nThank you.`
+                                                            );
+                                                            window.location.href = `mailto:${store.ownerEmail}?subject=${subject}&body=${body}`;
+                                                        }}
+                                                        className="bg-white border border-red-200 px-2 py-1 rounded text-xs font-bold text-red-600 shadow-sm hover:bg-red-50 transition"
+                                                        title="Send email reminder"
+                                                    >
+                                                        {d}
+                                                    </button>
                                                 ))}
+                                            </div>
+                                            <div className="mt-2 text-xs text-red-500">
+                                                Tip: Click a date to open an email reminder to the owner.
                                             </div>
                                         </>
                                     ) : (
@@ -1818,6 +1893,14 @@ const HQDashboard: React.FC<{
     return () => window.removeEventListener('popstate', onPopState);
   }, [stores, selectedStore]);
 
+  useEffect(() => {
+    if (!selectedStore) return;
+    const updated = stores.find(s => s.id === selectedStore.id);
+    if (updated && (updated.royaltyPercentage !== selectedStore.royaltyPercentage || updated.currency !== selectedStore.currency || updated.name !== selectedStore.name)) {
+      setSelectedStore(updated);
+    }
+  }, [stores, selectedStore]);
+
   if (selectedStore) {
     return (
       <HQStoreDetail 
@@ -1828,6 +1911,7 @@ const HQDashboard: React.FC<{
         categories={globalConfig.categories}
         standardIngredients={globalConfig.standardIngredients}
         onBack={() => setSelectedStore(null)}
+        onUpdateStore={onUpdateStore}
         onUpdateMenu={onUpdateMenu}
         onCreateMenu={onCreateMenu}
         onDeleteMenu={onDeleteMenu}
