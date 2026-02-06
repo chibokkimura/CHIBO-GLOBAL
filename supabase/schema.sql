@@ -37,6 +37,15 @@ create table if not exists public.ingredients (
   unit text not null
 );
 
+create table if not exists public.store_ingredient_stock (
+  store_id text not null references public.stores(id) on delete cascade,
+  ingredient_name text not null,
+  unit text not null,
+  par numeric not null default 0,
+  reorder numeric not null default 0,
+  primary key (store_id, ingredient_name, unit)
+);
+
 create table if not exists public.employees (
   id text primary key,
   store_id text not null references public.stores(id) on delete cascade,
@@ -115,6 +124,7 @@ alter table public.app_users enable row level security;
 alter table public.global_config enable row level security;
 alter table public.stores enable row level security;
 alter table public.ingredients enable row level security;
+alter table public.store_ingredient_stock enable row level security;
 alter table public.employees enable row level security;
 alter table public.menus enable row level security;
 alter table public.menu_recipe_items enable row level security;
@@ -198,6 +208,28 @@ drop policy if exists "ingredients_delete_hq" on public.ingredients;
 create policy "ingredients_delete_hq"
 on public.ingredients for delete
 using (public.is_hq());
+
+-- store_ingredient_stock: HQ all; OWNER only own store
+drop policy if exists "store_ingredient_stock_select_hq_or_own" on public.store_ingredient_stock;
+create policy "store_ingredient_stock_select_hq_or_own"
+on public.store_ingredient_stock for select
+using (public.is_hq() or store_id = public.current_store_id());
+
+drop policy if exists "store_ingredient_stock_write_hq_or_own" on public.store_ingredient_stock;
+create policy "store_ingredient_stock_write_hq_or_own"
+on public.store_ingredient_stock for insert
+with check (public.is_hq() or store_id = public.current_store_id());
+
+drop policy if exists "store_ingredient_stock_update_hq_or_own" on public.store_ingredient_stock;
+create policy "store_ingredient_stock_update_hq_or_own"
+on public.store_ingredient_stock for update
+using (public.is_hq() or store_id = public.current_store_id())
+with check (public.is_hq() or store_id = public.current_store_id());
+
+drop policy if exists "store_ingredient_stock_delete_hq_or_own" on public.store_ingredient_stock;
+create policy "store_ingredient_stock_delete_hq_or_own"
+on public.store_ingredient_stock for delete
+using (public.is_hq() or store_id = public.current_store_id());
 
 -- employees: HQ all; OWNER only own store
 drop policy if exists "employees_select_hq_or_own" on public.employees;
