@@ -1365,12 +1365,22 @@ const HQStoreDetail: React.FC<{
     onAddIngredient: (ing: Ingredient) => void;
 }> = ({ store, sales, menus, ingredients, categories, standardIngredients, onBack, onUpdateStore, onUpdateMenu, onCreateMenu, onDeleteMenu, onAddIngredient }) => {
     const storeMenus = menus.filter(m => m.storeId === store.id);
+    const storeSales = useMemo(() => sales.filter(s => s.storeId === store.id), [sales, store.id]);
     const [editingMenu, setEditingMenu] = useState<Menu | null>(null);
     const [viewingReceipt, setViewingReceipt] = useState<string | null>(null);
     const missingDates = useMemo(() => getMissingDates(sales, store.id), [sales, store.id]);
+    const missingDatesAll = useMemo(() => getMissingDates(sales, store.id, 120), [sales, store.id]);
+    const missingDateSet = useMemo(() => new Set(missingDatesAll), [missingDatesAll]);
+    const submittedDateSet = useMemo(() => new Set(storeSales.map(s => s.date)), [storeSales]);
+    const [showMissingCalendar, setShowMissingCalendar] = useState(false);
+    const [calendarMonth, setCalendarMonth] = useState(() => {
+        const d = new Date();
+        return new Date(d.getFullYear(), d.getMonth(), 1);
+    });
     const [royaltyDraft, setRoyaltyDraft] = useState<string>(String(store.royaltyPercentage ?? 0));
     const [royaltySaving, setRoyaltySaving] = useState(false);
     const [royaltyError, setRoyaltyError] = useState<string | null>(null);
+    const [emailInfo, setEmailInfo] = useState<string | null>(null);
 
     useEffect(() => {
         setRoyaltyDraft(String(store.royaltyPercentage ?? 0));
@@ -1404,6 +1414,70 @@ const HQStoreDetail: React.FC<{
             setRoyaltySaving(false);
         }
     };
+
+    const openEmailReminder = (date: string) => {
+        const subject = encodeURIComponent(`Missing Daily Report: ${store.name} (${date})`);
+        const body = encodeURIComponent(
+            `Hello,\n\nPlease submit the daily sales report for ${date}.\n\nStore: ${store.name}\nLocation: ${store.city}, ${store.country}\n\nThank you.`
+        );
+        const gmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(store.ownerEmail)}&su=${subject}&body=${body}`;
+        const mailtoUrl = `mailto:${store.ownerEmail}?subject=${subject}&body=${body}`;
+        const win = window.open(gmailUrl, '_blank', 'noopener,noreferrer');
+        if (!win) {
+            window.location.href = mailtoUrl;
+        }
+        setEmailInfo(`Email draft opened for ${store.ownerEmail} (${date}).`);
+        window.setTimeout(() => setEmailInfo(null), 3000);
+    };
+
+    const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+
+    const calendarCells = useMemo(() => {
+        const year = calendarMonth.getFullYear();
+        const month = calendarMonth.getMonth();
+        const start = new Date(year, month, 1);
+        const end = new Date(year, month + 1, 0);
+        const startWeekday = start.getDay();
+        const daysInMonth = end.getDate();
+        const cells: Array<string | null> = [];
+
+        for (let i = 0; i < startWeekday; i++) cells.push(null);
+        for (let day = 1; day <= daysInMonth; day++) {
+            const d = new Date(year, month, day);
+            cells.push(formatDate(d));
+        }
+        return cells;
+    }, [calendarMonth]);
+
+    const today = new Date();
+    const currentMonthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+    const canGoNextMonth = calendarMonth.getTime() < currentMonthStart.getTime();
+
+    const goPrevMonth = () => {
+        setCalendarMonth(prev => new Date(prev.getFullYear(), prev.getMonth() - 1, 1));
+    };
+
+    const goNextMonth = () => {
+        if (!canGoNextMonth) return;
+        setCalendarMonth(prev => new Date(prev.getFullYear(), prev.getMonth() + 1, 1));
+    };
+
+    const monthlyRevenueData = useMemo(() => {
+        const data: { name: string; value: number }[] = [];
+        const now = new Date();
+        for (let i = 11; i >= 0; i--) {
+            const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+            const key = formatDate(d).slice(0, 7);
+            const total = storeSales
+                .filter(s => s.date.startsWith(key))
+                .reduce((sum, s) => sum + s.totalAmount, 0);
+            data.push({
+                name: d.toLocaleString('en-US', { month: 'short' }),
+                value: total,
+            });
+        }
+        return data;
+    }, [storeSales]);
 
     // --- Real-time Inventory Calculation Logic ---
     const inventoryStats = useMemo(() => {
@@ -1458,10 +1532,101 @@ const HQStoreDetail: React.FC<{
         });
 
         return stats;
-    }, [store, sales, storeMenus, ingredients, categories, standardIngredients]);
+    }, [store, sales, storeMenus, ingredients, categories, standardIngredients, storeSales]);
 
     return (
         <div className="p-8 max-w-7xl mx-auto w-full relative">
+            {showMissingCalendar && (
+                <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
+                    <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg">
+                        <div className="flex items-center justify-between px-6 pt-5">
+                            <div className="font-extrabold text-lg">Missing Reports Calendar</div>
+                            <button
+                                type="button"
+                                onClick={() => setShowMissingCalendar(false)}
+                                className="p-2 rounded-full hover:bg-gray-100 transition"
+                            >
+                                <X className="w-5 h-5 text-gray-500" />
+                            </button>
+                        </div>
+                        <div className="px-6 pb-6">
+                            <div className="flex items-center justify-between mt-3 mb-4">
+                                <button
+                                    type="button"
+                                    onClick={goPrevMonth}
+                                    className="px-3 py-1 rounded-lg border border-gray-200 text-sm font-semibold hover:bg-gray-50 transition"
+                                >
+                                    Prev
+                                </button>
+                                <div className="font-semibold text-sm">
+                                    {monthNames[calendarMonth.getMonth()]} {calendarMonth.getFullYear()}
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={goNextMonth}
+                                    disabled={!canGoNextMonth}
+                                    className="px-3 py-1 rounded-lg border border-gray-200 text-sm font-semibold disabled:opacity-50 hover:bg-gray-50 transition"
+                                >
+                                    Next
+                                </button>
+                            </div>
+
+                            <div className="grid grid-cols-7 gap-2 text-xs text-gray-400 mb-2">
+                                <div>Sun</div>
+                                <div>Mon</div>
+                                <div>Tue</div>
+                                <div>Wed</div>
+                                <div>Thu</div>
+                                <div>Fri</div>
+                                <div>Sat</div>
+                            </div>
+
+                            <div className="grid grid-cols-7 gap-2">
+                                {calendarCells.map((dateStr, idx) => {
+                                    if (!dateStr) {
+                                        return <div key={`empty-${idx}`} />;
+                                    }
+                                    const isMissing = missingDateSet.has(dateStr);
+                                    const isSubmitted = submittedDateSet.has(dateStr);
+                                    const isFuture = new Date(dateStr) > today;
+                                    return (
+                                        <button
+                                            key={dateStr}
+                                            type="button"
+                                            disabled={isFuture}
+                                            onClick={() => {
+                                                if (!isMissing) return;
+                                                openEmailReminder(dateStr);
+                                            }}
+                                            className={`h-9 rounded-lg text-xs font-semibold border transition ${
+                                                isMissing
+                                                    ? 'bg-red-100 border-red-300 text-red-700 hover:bg-red-200'
+                                                    : isSubmitted
+                                                        ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
+                                                        : 'bg-white border-gray-200 text-gray-500'
+                                            } ${isFuture ? 'opacity-40 cursor-not-allowed' : ''}`}
+                                            title={isMissing ? 'Missing report' : (isSubmitted ? 'Submitted' : 'No report')}
+                                        >
+                                            {dateStr.slice(8)}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+
+                            <div className="mt-4 flex items-center gap-3 text-xs text-gray-500">
+                                <div className="flex items-center gap-1">
+                                    <span className="inline-block w-3 h-3 rounded bg-red-100 border border-red-300" />
+                                    Missing
+                                </div>
+                                <div className="flex items-center gap-1">
+                                    <span className="inline-block w-3 h-3 rounded bg-emerald-50 border border-emerald-200" />
+                                    Submitted
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
             {editingMenu && (
                  <RecipeEditor 
                   menu={editingMenu}
@@ -1537,11 +1702,7 @@ const HQStoreDetail: React.FC<{
                                                         key={d}
                                                         type="button"
                                                         onClick={() => {
-                                                            const subject = encodeURIComponent(`Missing Daily Report: ${store.name} (${d})`);
-                                                            const body = encodeURIComponent(
-                                                                `Hello,\n\nPlease submit the daily sales report for ${d}.\n\nStore: ${store.name}\nLocation: ${store.city}, ${store.country}\n\nThank you.`
-                                                            );
-                                                            window.location.href = `mailto:${store.ownerEmail}?subject=${subject}&body=${body}`;
+                                                            openEmailReminder(d);
                                                         }}
                                                         className="bg-white border border-red-200 px-2 py-1 rounded text-xs font-bold text-red-600 shadow-sm hover:bg-red-50 transition"
                                                         title="Send email reminder"
@@ -1549,10 +1710,23 @@ const HQStoreDetail: React.FC<{
                                                         {d}
                                                     </button>
                                                 ))}
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        setCalendarMonth(new Date(new Date().getFullYear(), new Date().getMonth(), 1));
+                                                        setShowMissingCalendar(true);
+                                                    }}
+                                                    className="bg-white border border-red-200 px-2 py-1 rounded text-xs font-bold text-red-700 shadow-sm hover:bg-red-50 transition"
+                                                >
+                                                    View Older Dates
+                                                </button>
                                             </div>
                                             <div className="mt-2 text-xs text-red-500">
                                                 Tip: Click a date to open an email reminder to the owner.
                                             </div>
+                                            {emailInfo && (
+                                                <div className="mt-2 text-xs text-emerald-600">{emailInfo}</div>
+                                            )}
                                         </>
                                     ) : (
                                         <p>All daily reports for the last 7 days have been submitted.</p>
@@ -1564,10 +1738,27 @@ const HQStoreDetail: React.FC<{
 
                     <div className="bg-white p-6 rounded-2xl shadow-sm border">
                         <h2 className="text-xl font-bold mb-4">Store Performance</h2>
-                        {/* Reusing charts logic conceptually, but simplified here for space */}
-                        <div className="h-64 flex items-center justify-center bg-gray-50 rounded-xl text-gray-400">
-                            <BarChart3 className="w-8 h-8 mb-2" />
-                            <span className="ml-2 font-medium">Store-specific analytics would appear here</span>
+                        <div className="h-64 bg-gray-50 rounded-xl p-2">
+                            {monthlyRevenueData.every(d => d.value === 0) ? (
+                                <div className="h-full flex items-center justify-center text-gray-400">
+                                    <BarChart3 className="w-8 h-8 mb-2" />
+                                    <span className="ml-2 font-medium">No sales data for the last 12 months</span>
+                                </div>
+                            ) : (
+                                <ResponsiveContainer width="100%" height="100%">
+                                    <BarChart data={monthlyRevenueData} margin={{ top: 10, right: 10, left: 0, bottom: 10 }}>
+                                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#eee" />
+                                        <XAxis dataKey="name" tick={{ fontSize: 12 }} axisLine={false} tickLine={false} />
+                                        <YAxis tick={{ fontSize: 12 }} axisLine={false} tickLine={false} />
+                                        <Tooltip
+                                            cursor={{ fill: '#f9fafb' }}
+                                            contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+                                            formatter={(value: number) => [`${store.currency} ${value.toLocaleString()}`, 'Monthly Sales']}
+                                        />
+                                        <Bar dataKey="value" fill="black" radius={[4, 4, 0, 0]} barSize={20} />
+                                    </BarChart>
+                                </ResponsiveContainer>
+                            )}
                         </div>
                     </div>
                 </div>
