@@ -1640,6 +1640,8 @@ const HQDashboard: React.FC<{
   const [selectedStore, setSelectedStore] = useState<Store | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isSalesAnalyticsOpen, setIsSalesAnalyticsOpen] = useState(false);
+  const navReadyRef = useRef(false);
+  const popLockRef = useRef(false);
   
   // Tabs for Settings
   const [settingsTab, setSettingsTab] = useState<'general' | 'locations' | 'finance' | 'ops' | 'menu'>('general');
@@ -1687,6 +1689,45 @@ const HQDashboard: React.FC<{
           inventoryAlerts: 3 // Mocked for now, as global inventory check is heavy
       };
   }, [sales, stores]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (!navReadyRef.current) {
+      window.history.replaceState({ screen: 'hq', selectedStoreId: null }, '');
+      navReadyRef.current = true;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (!navReadyRef.current) return;
+    if (popLockRef.current) {
+      popLockRef.current = false;
+      return;
+    }
+    window.history.pushState({ screen: 'hq', selectedStoreId: selectedStore?.id ?? null }, '');
+  }, [selectedStore]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onPopState = (e: PopStateEvent) => {
+      const state = e.state;
+      if (!state || state.screen !== 'hq') {
+        // keep user inside app while session is valid
+        window.history.pushState({ screen: 'hq', selectedStoreId: selectedStore?.id ?? null }, '');
+        return;
+      }
+      popLockRef.current = true;
+      if (!state.selectedStoreId) {
+        setSelectedStore(null);
+        return;
+      }
+      const store = stores.find(s => s.id === state.selectedStoreId) ?? null;
+      setSelectedStore(store);
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, [stores, selectedStore]);
 
   if (selectedStore) {
     return (
@@ -1983,6 +2024,8 @@ const StoreDashboard: React.FC<{
     const [view, setView] = useState<'dashboard' | 'report' | 'menu' | 'staff'>('dashboard');
     const [reportDate, setReportDate] = useState<string | null>(null);
     const [editingMenu, setEditingMenu] = useState<Menu | null>(null);
+    const navReadyRef = useRef(false);
+    const popLockRef = useRef(false);
     const storeMenus = menus.filter(m => m.storeId === store.id);
     const storeEmployees = employees.filter(e => e.storeId === store.id);
     const storeSales = sales.filter(s => s.storeId === store.id);
@@ -2072,6 +2115,41 @@ const StoreDashboard: React.FC<{
 
         return { currentMonthSales, growth };
     }, [storeSales]);
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        if (!navReadyRef.current) {
+            window.history.replaceState({ screen: 'owner', view: 'dashboard', reportDate: null }, '');
+            navReadyRef.current = true;
+        }
+    }, []);
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        if (!navReadyRef.current) return;
+        if (popLockRef.current) {
+            popLockRef.current = false;
+            return;
+        }
+        window.history.pushState({ screen: 'owner', view, reportDate }, '');
+    }, [view, reportDate]);
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        const onPopState = (e: PopStateEvent) => {
+            const state = e.state;
+            if (!state || state.screen !== 'owner') {
+                window.history.pushState({ screen: 'owner', view, reportDate }, '');
+                return;
+            }
+            popLockRef.current = true;
+            setReportDate(state.reportDate ?? null);
+            setView(state.view ?? 'dashboard');
+            setEditingMenu(null);
+        };
+        window.addEventListener('popstate', onPopState);
+        return () => window.removeEventListener('popstate', onPopState);
+    }, [view, reportDate]);
 
     return (
         <div className="min-h-screen bg-gray-50 flex flex-col">
@@ -2457,7 +2535,9 @@ const OnboardingScreen: React.FC<{
           </button>
         </div>
 
-      
+        <div className="mt-6 text-xs text-gray-400 leading-relaxed">
+          For HQ accounts, manually registering role=HQ in app_users is the most stable method.
+        </div>
       </div>
     </div>
   );
