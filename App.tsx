@@ -30,6 +30,8 @@ type GlobalConfig = {
   standardIngredients: { name: string; unit: string }[];
 };
 
+type GlobalConfigLoadState = 'loading' | 'loaded' | 'error';
+
 const DEFAULT_GLOBAL_CONFIG: GlobalConfig = {
   storeNames: ['CHIBO', 'CHIBO Express', 'CHIBO Premium'],
   countries: ['South Korea', 'Vietnam', 'Philippines', 'China', 'Taiwan', 'Others'],
@@ -2404,7 +2406,10 @@ const OnboardingScreen: React.FC<{
     cities: string[];
     currencies: string[];
   };
-}> = ({ onDone, globalConfig }) => {
+  globalConfigStatus: GlobalConfigLoadState;
+  globalConfigError: string | null;
+  onReload: () => void;
+}> = ({ onDone, globalConfig, globalConfigStatus, globalConfigError, onReload }) => {
 
   const [name, setName] = useState('');
   const [storeName, setStoreName] = useState('');
@@ -2413,6 +2418,21 @@ const OnboardingScreen: React.FC<{
   const [currency, setCurrency] = useState('JPY');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const configReady = globalConfigStatus === 'loaded';
+
+  useEffect(() => {
+    if (!configReady) return;
+    if (globalConfig.countries.length > 0 && !globalConfig.countries.includes(country)) {
+      setCountry(globalConfig.countries[0]);
+    }
+    if (globalConfig.cities.length > 0 && !globalConfig.cities.includes(city)) {
+      setCity(globalConfig.cities[0]);
+    }
+    if (globalConfig.currencies.length > 0 && !globalConfig.currencies.includes(currency)) {
+      setCurrency(globalConfig.currencies[0]);
+    }
+  }, [configReady, globalConfig, country, city, currency]);
 
   const withTimeout = async <T,>(promise: Promise<T>, ms: number, label: string): Promise<T> => {
     let timer: number | undefined;
@@ -2485,6 +2505,23 @@ const OnboardingScreen: React.FC<{
         <div className="text-2xl font-extrabold mb-2">Initial Setup</div>
         <div className="text-gray-500 mb-6">Create your OWNER profile and store.</div>
 
+        {globalConfigStatus !== 'loaded' && (
+          <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700 flex items-center justify-between gap-3">
+            <span>
+              {globalConfigStatus === 'loading'
+                ? 'Loading global settings...'
+                : (globalConfigError ?? 'Failed to load global settings.')}
+            </span>
+            <button
+              type="button"
+              onClick={onReload}
+              className="px-3 py-1 rounded-lg border border-amber-300 bg-white text-amber-700 font-semibold hover:bg-amber-100 transition"
+            >
+              Retry
+            </button>
+          </div>
+        )}
+
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
             <label className="text-sm font-semibold text-gray-700">Display Name</label>
@@ -2492,28 +2529,28 @@ const OnboardingScreen: React.FC<{
           </div>
           <div>
             <label className="text-sm font-semibold text-gray-700">Store Name</label>
-          <select value={storeName} onChange={(e) => setStoreName(e.target.value)} className="mt-1 w-full px-3 py-2 rounded-xl border border-gray-200">
+          <select value={storeName} onChange={(e) => setStoreName(e.target.value)} disabled={!configReady} className="mt-1 w-full px-3 py-2 rounded-xl border border-gray-200 disabled:opacity-50">
   <option value="">Select approved name...</option>
   {globalConfig.storeNames.map(name => (
     <option key={name} value={name}>{name}</option>
   ))}
 </select>
 
-<select value={country} onChange={(e) => setCountry(e.target.value)} className="mt-1 w-full px-3 py-2 rounded-xl border border-gray-200">
+<select value={country} onChange={(e) => setCountry(e.target.value)} disabled={!configReady} className="mt-1 w-full px-3 py-2 rounded-xl border border-gray-200 disabled:opacity-50">
   <option value="">Select Country</option>
   {globalConfig.countries.map(c => (
     <option key={c} value={c}>{c}</option>
   ))}
 </select>
 
-<select value={city} onChange={(e) => setCity(e.target.value)} className="mt-1 w-full px-3 py-2 rounded-xl border border-gray-200">
+<select value={city} onChange={(e) => setCity(e.target.value)} disabled={!configReady} className="mt-1 w-full px-3 py-2 rounded-xl border border-gray-200 disabled:opacity-50">
   <option value="">Select City</option>
   {globalConfig.cities.map(c => (
     <option key={c} value={c}>{c}</option>
   ))}
 </select>
 
-<select value={currency} onChange={(e) => setCurrency(e.target.value)} className="mt-1 w-full px-3 py-2 rounded-xl border border-gray-200">
+<select value={currency} onChange={(e) => setCurrency(e.target.value)} disabled={!configReady} className="mt-1 w-full px-3 py-2 rounded-xl border border-gray-200 disabled:opacity-50">
   <option value="">Select Currency</option>
   {globalConfig.currencies.map(c => (
     <option key={c} value={c}>{c}</option>
@@ -2527,7 +2564,7 @@ const OnboardingScreen: React.FC<{
         {error && <div className="mt-4 text-sm text-red-600">{error}</div>}
 
         <div className="mt-6 flex gap-3">
-          <button onClick={submit} disabled={loading || !storeName} className="px-4 py-2 rounded-xl bg-black text-white font-semibold disabled:opacity-50">
+          <button onClick={submit} disabled={loading || !storeName || !configReady} className="px-4 py-2 rounded-xl bg-black text-white font-semibold disabled:opacity-50">
             {loading ? 'Creating...' : 'Create'}
           </button>
           <button onClick={() => signOut()} className="px-4 py-2 rounded-xl border border-gray-200 hover:bg-gray-50 transition font-semibold">
@@ -2579,29 +2616,78 @@ const App = () => {
   const refreshTimerRef = useRef<number | null>(null);
 
   const refreshAll = useCallback(async () => {
-    try {
-      setDataLoading(true);
-      setDataError(null);
-      const [st, ing, emp, mn, sl, gc] = await Promise.all([
-        loadStores(),
-        loadIngredients(),
-        loadEmployees(),
-        loadMenus(),
-        loadSales(),
-        loadGlobalConfig(),
-      ]);
-      setStores(st);
-      setIngredients(ing);
-      setEmployees(emp);
-      setMenus(mn);
-      setSales(sl);
-      setGlobalConfig((prev) => (gc.exists === null ? prev : gc.config));
-      setGlobalConfigExists((prev) => (gc.exists === null ? prev : gc.exists));
-    } catch (e: any) {
-      setDataError(e?.message ?? 'Failed to load data');
-    } finally {
-      setDataLoading(false);
+    setDataLoading(true);
+    setDataError(null);
+    setGlobalConfigError(null);
+    setGlobalConfigStatus((prev) => (prev === 'loaded' ? prev : 'loading'));
+
+    const results = await Promise.allSettled([
+      loadStores(),
+      loadIngredients(),
+      loadEmployees(),
+      loadMenus(),
+      loadSales(),
+      loadGlobalConfig(),
+    ]);
+
+    const errors: string[] = [];
+
+    const stRes = results[0];
+    if (stRes.status === 'fulfilled') {
+      setStores(stRes.value);
+    } else {
+      errors.push(stRes.reason?.message ?? 'Failed to load stores');
     }
+
+    const ingRes = results[1];
+    if (ingRes.status === 'fulfilled') {
+      setIngredients(ingRes.value);
+    } else {
+      errors.push(ingRes.reason?.message ?? 'Failed to load ingredients');
+    }
+
+    const empRes = results[2];
+    if (empRes.status === 'fulfilled') {
+      setEmployees(empRes.value);
+    } else {
+      errors.push(empRes.reason?.message ?? 'Failed to load employees');
+    }
+
+    const mnRes = results[3];
+    if (mnRes.status === 'fulfilled') {
+      setMenus(mnRes.value);
+    } else {
+      errors.push(mnRes.reason?.message ?? 'Failed to load menus');
+    }
+
+    const slRes = results[4];
+    if (slRes.status === 'fulfilled') {
+      setSales(slRes.value);
+    } else {
+      errors.push(slRes.reason?.message ?? 'Failed to load sales');
+    }
+
+    const gcRes = results[5];
+    if (gcRes.status === 'fulfilled') {
+      const gc = gcRes.value;
+      if (gc.exists === null) {
+        setGlobalConfigStatus('error');
+        setGlobalConfigError('Failed to load global settings.');
+      } else {
+        setGlobalConfig(gc.config);
+        setGlobalConfigExists(gc.exists);
+        setGlobalConfigStatus('loaded');
+      }
+    } else {
+      setGlobalConfigStatus('error');
+      setGlobalConfigError(gcRes.reason?.message ?? 'Failed to load global settings.');
+    }
+
+    if (errors.length > 0) {
+      setDataError(errors[0]);
+    }
+
+    setDataLoading(false);
   }, []);
 
   const scheduleRefreshAll = useCallback(() => {
@@ -2655,6 +2741,8 @@ const App = () => {
 
   const [globalConfig, setGlobalConfig] = useState<GlobalConfig>(DEFAULT_GLOBAL_CONFIG);
   const [globalConfigExists, setGlobalConfigExists] = useState<boolean>(false);
+  const [globalConfigStatus, setGlobalConfigStatus] = useState<GlobalConfigLoadState>('loading');
+  const [globalConfigError, setGlobalConfigError] = useState<string | null>(null);
 
   // Handlers
 
@@ -2736,11 +2824,12 @@ useEffect(() => {
 
 useEffect(() => {
   if (user?.role !== UserRole.HQ) return;
+  if (globalConfigStatus !== 'loaded') return;
   if (globalConfigExists !== false) return;
   saveGlobalConfig(DEFAULT_GLOBAL_CONFIG)
     .then(() => setGlobalConfigExists(true))
     .catch((e) => console.error('Failed to seed global config', e));
-}, [user, globalConfigExists]);
+}, [user, globalConfigExists, globalConfigStatus]);
 
 const handleUpdateGlobalConfig = async (key: string, values: any) => {
   const next = { ...globalConfig, [key]: values } as GlobalConfig;
@@ -2773,6 +2862,9 @@ if (!resolvedUser) {
   return (
     <OnboardingScreen
       globalConfig={globalConfig}
+      globalConfigStatus={globalConfigStatus}
+      globalConfigError={globalConfigError}
+      onReload={() => refreshAll()}
       onDone={async () => {
         await refreshAll();
         await loadResolvedUser();
@@ -2823,6 +2915,9 @@ if (!myStore) {
   return (
     <OnboardingScreen
       globalConfig={globalConfig}
+      globalConfigStatus={globalConfigStatus}
+      globalConfigError={globalConfigError}
+      onReload={() => refreshAll()}
       onDone={async () => {
         await refreshAll();
         await loadResolvedUser();
