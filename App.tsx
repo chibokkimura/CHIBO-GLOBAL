@@ -1043,7 +1043,6 @@ const RecipeEditor: React.FC<{
     const [newIngUnit, setNewIngUnit] = useState('');
     const [newIngQty, setNewIngQty] = useState('');
     const [localIngredients, setLocalIngredients] = useState<Ingredient[]>(ingredients);
-    const [recipeError, setRecipeError] = useState<string | null>(null);
 
     useEffect(() => {
         setLocalIngredients(ingredients);
@@ -1060,17 +1059,14 @@ const RecipeEditor: React.FC<{
         }
     };
 
-    const handleAddIngredientToRecipe = async () => {
-        const name = newIngName.trim();
-        const unit = newIngUnit.trim();
-        if (!name || !unit || !newIngQty) return;
+    const handleAddIngredientToRecipe = () => {
+        if (!newIngName || !newIngUnit || !newIngQty) return;
         const qty = parseFloat(newIngQty);
         if (qty <= 0) return;
-        setRecipeError(null);
 
         // Check if ingredient exists globally (by name and unit)
         let existingIng = localIngredients.find(
-            i => i.name.toLowerCase() === name.toLowerCase() && i.unit.toLowerCase() === unit.toLowerCase()
+            i => i.name.toLowerCase() === newIngName.toLowerCase() && i.unit.toLowerCase() === newIngUnit.toLowerCase()
         );
 
         let ingredientId = existingIng?.id;
@@ -1079,17 +1075,11 @@ const RecipeEditor: React.FC<{
             // Create new ingredient globally
             const newIngredient: Ingredient = {
                 id: `I_${Date.now()}`,
-                name,
-                unit
+                name: newIngName,
+                unit: newIngUnit
             };
-            try {
-                await onAddIngredient(newIngredient);
-                setLocalIngredients(prev => [...prev, newIngredient]);
-            } catch (e) {
-                console.error('Failed to add ingredient', e);
-                setRecipeError('Ingredient could not be added. Ask HQ to add it in Global Settings.');
-                return;
-            }
+            onAddIngredient(newIngredient);
+            setLocalIngredients(prev => [...prev, newIngredient]);
             ingredientId = newIngredient.id;
         }
 
@@ -1277,26 +1267,13 @@ const RecipeEditor: React.FC<{
                             {editedMenu.recipe.length === 0 && (
                                 <div className="text-center py-8 text-gray-400 text-sm italic">No ingredients configured for this item.</div>
                             )}
-                            {recipeError && (
-                                <div className="text-sm text-red-600 font-semibold">{recipeError}</div>
-                            )}
                         </div>
                     </div>
                 </div>
 
                 <div className="p-4 border-t bg-gray-50 flex justify-end gap-3">
                     <button onClick={onBack} className="px-6 py-3 font-bold text-gray-500 hover:bg-gray-100 rounded-xl transition">Cancel</button>
-                    <button
-                        onClick={() => {
-                            const missing = editedMenu.recipe.filter(r => !localIngredients.find(i => i.id === r.ingredientId));
-                            if (missing.length > 0) {
-                                setRecipeError('Some ingredients are missing. Remove and re-add them.');
-                                return;
-                            }
-                            onSave(editedMenu);
-                        }}
-                        className="bg-black text-white px-8 py-3 rounded-xl font-bold hover:bg-gray-800 shadow-lg flex items-center gap-2"
-                    >
+                    <button onClick={() => onSave(editedMenu)} className="bg-black text-white px-8 py-3 rounded-xl font-bold hover:bg-gray-800 shadow-lg flex items-center gap-2">
                         <Save className="w-4 h-4" /> Save Item
                     </button>
                 </div>
@@ -3623,6 +3600,7 @@ const StoreDashboard: React.FC<{
 };
 
 const LoginScreen: React.FC = () => {
+    const [loginError, setLoginError] = useState<string | null>(null);
     return (
         <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
             <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md">
@@ -3634,12 +3612,24 @@ const LoginScreen: React.FC = () => {
                     <p className="text-gray-500 mb-8">Global Franchise Manager</p>
 
                     <button
-                        onClick={() => signInWithGoogle()}
+                        onClick={async () => {
+                            try {
+                                setLoginError(null);
+                                await signInWithGoogle();
+                            } catch (e: any) {
+                                console.error('Login failed', e);
+                                setLoginError(e?.message ?? 'Login failed. Check OAuth settings.');
+                            }
+                        }}
                         className="w-full inline-flex items-center justify-center gap-3 px-4 py-3 rounded-xl border border-gray-200 hover:border-gray-300 hover:bg-gray-50 transition font-semibold"
                     >
                         <span className="text-lg">G</span>
                         Continue with Google
                     </button>
+
+                    {loginError && (
+                        <div className="mt-4 text-xs text-red-600">{loginError}</div>
+                    )}
 
                     <p className="text-xs text-gray-400 mt-6 leading-relaxed">
                         Access is restricted for unauthorized accounts after login.
@@ -4044,8 +4034,24 @@ const App = () => {
   
   
   const handleLogout = async () => {
-    await signOut();
-    setUser(null);
+    try {
+      await signOut();
+    } catch (e) {
+      console.error('Sign out failed', e);
+    } finally {
+      try {
+        Object.keys(localStorage).forEach(key => {
+          if (key.startsWith('sb-')) {
+            localStorage.removeItem(key);
+          }
+        });
+      } catch {
+        // ignore storage errors
+      }
+      setResolvedUser(null);
+      setSessionEmail(null);
+      setUser(null);
+    }
   };
 
  // Map Supabase session email -> app user (DB + HQ override)
