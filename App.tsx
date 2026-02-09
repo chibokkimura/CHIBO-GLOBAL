@@ -330,27 +330,38 @@ async function deleteMenu(menuId: string) {
 }
 
 async function saveEmployees(storeId: string, emps: Employee[]) {
-  await supabase.from('employees').delete().eq('store_id', storeId);
-  if (emps.length) {
-    const rows = emps.map(e => ({
-      id: e.id,
-      store_id: storeId,
-      name: e.name,
-      position: e.position,
-      age: e.age ?? null,
-      image_url: e.imageUrl ?? null,
-    }));
-    const { error } = await supabase.from('employees').insert(rows);
+  const rows = emps.map(e => ({
+    id: e.id,
+    store_id: storeId,
+    name: e.name,
+    position: e.position,
+    age: e.age ?? null,
+    image_url: e.imageUrl ?? null,
+  }));
+
+  if (rows.length) {
+    const { error: upsertErr } = await supabase.from('employees').upsert(rows, { onConflict: 'id' });
+    if (upsertErr) throw upsertErr;
+
+    const idList = rows.map(r => `'${r.id}'`).join(',');
+    const { error: deleteErr } = await supabase
+      .from('employees')
+      .delete()
+      .eq('store_id', storeId)
+      .not('id', 'in', `(${idList})`);
+    if (deleteErr) throw deleteErr;
+  } else {
+    const { error } = await supabase.from('employees').delete().eq('store_id', storeId);
     if (error) throw error;
   }
 }
 
 async function addIngredient(ing: Ingredient) {
-  const { error } = await supabase.from('ingredients').insert({
+  const { error } = await supabase.from('ingredients').upsert({
     id: ing.id,
     name: ing.name,
     unit: ing.unit,
-  });
+  }, { onConflict: 'id' });
   if (error) throw error;
 }
 
@@ -1050,7 +1061,12 @@ const RecipeEditor: React.FC<{
     }, [standardIngredients]);
 
     useEffect(() => {
-        setLocalIngredients(ingredients);
+        setLocalIngredients(prev => {
+            if (prev.length === 0) return ingredients;
+            const map = new Map(prev.map(i => [i.id, i]));
+            ingredients.forEach(i => map.set(i.id, i));
+            return Array.from(map.values());
+        });
     }, [ingredients]);
 
     const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1062,6 +1078,20 @@ const RecipeEditor: React.FC<{
             };
             reader.readAsDataURL(file);
         }
+    };
+
+    const hashString = (value: string) => {
+        let hash = 0;
+        for (let i = 0; i < value.length; i += 1) {
+            hash = ((hash << 5) - hash) + value.charCodeAt(i);
+            hash |= 0;
+        }
+        return Math.abs(hash).toString(36);
+    };
+
+    const makeIngredientId = (name: string, unit: string) => {
+        const key = `${name.toLowerCase()}::${unit.toLowerCase()}`;
+        return `I_${hashString(key)}`;
     };
 
     const handleAddIngredientToRecipe = async () => {
@@ -1078,8 +1108,9 @@ const RecipeEditor: React.FC<{
             return;
         }
 
+        const ingredientPool = [...localIngredients, ...ingredients];
         // Check if ingredient exists globally (by name and unit)
-        let existingIng = localIngredients.find(
+        let existingIng = ingredientPool.find(
             i => i.name.toLowerCase() === name.toLowerCase() && i.unit.toLowerCase() === unit.toLowerCase()
         );
 
@@ -1088,7 +1119,7 @@ const RecipeEditor: React.FC<{
         if (!ingredientId) {
             // Create new ingredient globally
             const newIngredient: Ingredient = {
-                id: `I_${Date.now()}`,
+                id: makeIngredientId(name, unit),
                 name,
                 unit
             };
@@ -1256,7 +1287,7 @@ const RecipeEditor: React.FC<{
                                 </button>
                             </div>
                             <p className="text-[10px] text-gray-400 mt-2">
-                                * Entering a new ingredient name will automatically add it to the global ingredient list.
+                                * Only standard ingredients can be used. Add/edit the list in Global Settings.
                             </p>
                         </div>
 
@@ -3943,26 +3974,17 @@ const App = () => {
   const [dataError, setDataError] = useState<string | null>(null);
   const [syncingIngredients, setSyncingIngredients] = useState(false);
 
-  const updateEmployeesForStore = useCallback(async (storeId: string, emps: Employee[]) => {
-    const normalized = emps.map(e => ({ ...e, storeId }));
-    setEmployees(prev => [
-      ...prev.filter(e => e.storeId !== storeId),
-      ...normalized
-    ]);
-    try {
-      await saveEmployees(storeId, normalized);
-    } catch (e) {
-      console.error('Failed to save employees', e);
-      await refreshAll();
-      throw e;
-    } finally {
-      await refreshAll();
-    }
-  }, [refreshAll]);
 
   const refreshTimerRef = useRef<number | null>(null);
+  const refreshInFlightRef = useRef<boolean>(false);
+  const refreshQueuedRef = useRef<boolean>(false);
 
   const refreshAll = useCallback(async () => {
+    if (refreshInFlightRef.current) {
+      refreshQueuedRef.current = true;
+      return;
+    }
+    refreshInFlightRef.current = true;
     setDataLoading(true);
     setDataError(null);
     setGlobalConfigError(null);
@@ -4043,6 +4065,13 @@ const App = () => {
     }
 
     setDataLoading(false);
+    refreshInFlightRef.current = false;
+    if (refreshQueuedRef.current) {
+      refreshQueuedRef.current = false;
+      window.setTimeout(() => {
+        refreshAll();
+      }, 50);
+    }
   }, []);
 
   const ensureStandardIngredients = useCallback(async () => {
@@ -4085,8 +4114,25 @@ const App = () => {
     }
     refreshTimerRef.current = window.setTimeout(() => {
       refreshAll();
-    }, 250);
+    }, 800);
   }, [sessionEmail, refreshAll]);
+
+  const updateEmployeesForStore = useCallback(async (storeId: string, emps: Employee[]) => {
+    const normalized = emps.map(e => ({ ...e, storeId }));
+    setEmployees(prev => [
+      ...prev.filter(e => e.storeId !== storeId),
+      ...normalized
+    ]);
+    try {
+      await saveEmployees(storeId, normalized);
+    } catch (e) {
+      console.error('Failed to save employees', e);
+      await refreshAll();
+      throw e;
+    } finally {
+      scheduleRefreshAll();
+    }
+  }, [refreshAll, scheduleRefreshAll]);
 
   useEffect(() => {
     if (sessionEmail) {
@@ -4123,7 +4169,7 @@ const App = () => {
     if (!sessionEmail) return;
     const intervalId = window.setInterval(() => {
       refreshAll();
-    }, 15000);
+    }, 30000);
     return () => window.clearInterval(intervalId);
   }, [sessionEmail, refreshAll]);
   
@@ -4312,14 +4358,81 @@ if (!resolvedUser) {
               storeStocks={storeStocks}
               globalConfig={globalConfig}
               onUpdateGlobalConfig={handleUpdateGlobalConfig}
-              onUpdateStore={async (s) => { const { error } = await supabase.from('stores').update({ name: s.name, country: s.country, city: s.city, owner_email: s.ownerEmail, currency: s.currency, royalty_percentage: s.royaltyPercentage }).eq('id', s.id); if (error) throw error; await refreshAll(); }}
-              onSaveStoreStocks={async (storeId, rows) => { await saveStoreIngredientStocks(storeId, rows); await refreshAll(); }}
-              onDeleteStore={async (storeId) => { const { error } = await supabase.from('stores').delete().eq('id', storeId); if (error) throw error; await refreshAll(); }}
-              onUpdateMenu={async (m) => { await saveMenu(m); await refreshAll(); }}
-              onCreateMenu={async (m) => { await saveMenu(m); await refreshAll(); }}
-              onDeleteMenu={async (id) => { await deleteMenu(id); await refreshAll(); }}
+              onUpdateStore={async (s) => {
+                setStores(prev => prev.map(store => store.id === s.id ? s : store));
+                const { error } = await supabase.from('stores').update({ name: s.name, country: s.country, city: s.city, owner_email: s.ownerEmail, currency: s.currency, royalty_percentage: s.royaltyPercentage }).eq('id', s.id);
+                if (error) {
+                  await refreshAll();
+                  throw error;
+                }
+                scheduleRefreshAll();
+              }}
+              onSaveStoreStocks={async (storeId, rows) => {
+                setStoreStocks(prev => [
+                  ...prev.filter(r => r.storeId !== storeId),
+                  ...rows.map(r => ({ storeId, ingredientName: r.ingredientName, unit: r.unit, par: r.par, reorder: r.reorder }))
+                ]);
+                try {
+                  await saveStoreIngredientStocks(storeId, rows);
+                } catch (e) {
+                  await refreshAll();
+                  throw e;
+                } finally {
+                  scheduleRefreshAll();
+                }
+              }}
+              onDeleteStore={async (storeId) => {
+                setStores(prev => prev.filter(s => s.id !== storeId));
+                const { error } = await supabase.from('stores').delete().eq('id', storeId);
+                if (error) {
+                  await refreshAll();
+                  throw error;
+                }
+                scheduleRefreshAll();
+              }}
+              onUpdateMenu={async (m) => {
+                setMenus(prev => {
+                  const exists = prev.some(menu => menu.id === m.id);
+                  if (exists) return prev.map(menu => menu.id === m.id ? m : menu);
+                  return [...prev, m];
+                });
+                try {
+                  await saveMenu(m);
+                } catch (e) {
+                  await refreshAll();
+                  throw e;
+                } finally {
+                  scheduleRefreshAll();
+                }
+              }}
+              onCreateMenu={async (m) => {
+                setMenus(prev => {
+                  const exists = prev.some(menu => menu.id === m.id);
+                  if (exists) return prev.map(menu => menu.id === m.id ? m : menu);
+                  return [...prev, m];
+                });
+                try {
+                  await saveMenu(m);
+                } catch (e) {
+                  await refreshAll();
+                  throw e;
+                } finally {
+                  scheduleRefreshAll();
+                }
+              }}
+              onDeleteMenu={async (id) => {
+                setMenus(prev => prev.filter(menu => menu.id !== id));
+                try {
+                  await deleteMenu(id);
+                } catch (e) {
+                  await refreshAll();
+                  throw e;
+                } finally {
+                  scheduleRefreshAll();
+                }
+              }}
               onUpdateEmployees={async (storeId, emps) => { await updateEmployeesForStore(storeId, emps); }}
-              onAddIngredient={async (i) => { await addIngredient(i); await refreshAll(); }}
+              onAddIngredient={async (i) => { await addIngredient(i); scheduleRefreshAll(); }}
           />
       );
   }
@@ -4445,15 +4558,53 @@ if (!myStore) {
                 }
               }
             } finally {
-              await refreshAll();
+              scheduleRefreshAll();
             }
           }}
 
-          onUpdateMenu={async (m) => { await saveMenu(m); await refreshAll(); }}
-          onCreateMenu={async (m) => { await saveMenu(m); await refreshAll(); }}
-          onDeleteMenu={async (id) => { await deleteMenu(id); await refreshAll(); }}
+          onUpdateMenu={async (m) => {
+            setMenus(prev => {
+              const exists = prev.some(menu => menu.id === m.id);
+              if (exists) return prev.map(menu => menu.id === m.id ? m : menu);
+              return [...prev, m];
+            });
+            try {
+              await saveMenu(m);
+            } catch (e) {
+              await refreshAll();
+              throw e;
+            } finally {
+              scheduleRefreshAll();
+            }
+          }}
+          onCreateMenu={async (m) => {
+            setMenus(prev => {
+              const exists = prev.some(menu => menu.id === m.id);
+              if (exists) return prev.map(menu => menu.id === m.id ? m : menu);
+              return [...prev, m];
+            });
+            try {
+              await saveMenu(m);
+            } catch (e) {
+              await refreshAll();
+              throw e;
+            } finally {
+              scheduleRefreshAll();
+            }
+          }}
+          onDeleteMenu={async (id) => {
+            setMenus(prev => prev.filter(menu => menu.id !== id));
+            try {
+              await deleteMenu(id);
+            } catch (e) {
+              await refreshAll();
+              throw e;
+            } finally {
+              scheduleRefreshAll();
+            }
+          }}
           onUpdateEmployees={async (emps) => { await updateEmployeesForStore(myStore.id, emps); }}
-          onAddIngredient={async (i) => { await addIngredient(i); await refreshAll(); }}
+          onAddIngredient={async (i) => { await addIngredient(i); scheduleRefreshAll(); }}
       />
   );
 }
