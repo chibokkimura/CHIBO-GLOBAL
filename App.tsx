@@ -1043,6 +1043,7 @@ const RecipeEditor: React.FC<{
     const [newIngUnit, setNewIngUnit] = useState('');
     const [newIngQty, setNewIngQty] = useState('');
     const [localIngredients, setLocalIngredients] = useState<Ingredient[]>(ingredients);
+    const [recipeError, setRecipeError] = useState<string | null>(null);
 
     useEffect(() => {
         setLocalIngredients(ingredients);
@@ -1059,14 +1060,17 @@ const RecipeEditor: React.FC<{
         }
     };
 
-    const handleAddIngredientToRecipe = () => {
-        if (!newIngName || !newIngUnit || !newIngQty) return;
+    const handleAddIngredientToRecipe = async () => {
+        const name = newIngName.trim();
+        const unit = newIngUnit.trim();
+        if (!name || !unit || !newIngQty) return;
         const qty = parseFloat(newIngQty);
         if (qty <= 0) return;
+        setRecipeError(null);
 
         // Check if ingredient exists globally (by name and unit)
         let existingIng = localIngredients.find(
-            i => i.name.toLowerCase() === newIngName.toLowerCase() && i.unit.toLowerCase() === newIngUnit.toLowerCase()
+            i => i.name.toLowerCase() === name.toLowerCase() && i.unit.toLowerCase() === unit.toLowerCase()
         );
 
         let ingredientId = existingIng?.id;
@@ -1075,11 +1079,17 @@ const RecipeEditor: React.FC<{
             // Create new ingredient globally
             const newIngredient: Ingredient = {
                 id: `I_${Date.now()}`,
-                name: newIngName,
-                unit: newIngUnit
+                name,
+                unit
             };
-            onAddIngredient(newIngredient);
-            setLocalIngredients(prev => [...prev, newIngredient]);
+            try {
+                await onAddIngredient(newIngredient);
+                setLocalIngredients(prev => [...prev, newIngredient]);
+            } catch (e) {
+                console.error('Failed to add ingredient', e);
+                setRecipeError('Ingredient could not be added. Ask HQ to add it in Global Settings.');
+                return;
+            }
             ingredientId = newIngredient.id;
         }
 
@@ -1267,13 +1277,26 @@ const RecipeEditor: React.FC<{
                             {editedMenu.recipe.length === 0 && (
                                 <div className="text-center py-8 text-gray-400 text-sm italic">No ingredients configured for this item.</div>
                             )}
+                            {recipeError && (
+                                <div className="text-sm text-red-600 font-semibold">{recipeError}</div>
+                            )}
                         </div>
                     </div>
                 </div>
 
                 <div className="p-4 border-t bg-gray-50 flex justify-end gap-3">
                     <button onClick={onBack} className="px-6 py-3 font-bold text-gray-500 hover:bg-gray-100 rounded-xl transition">Cancel</button>
-                    <button onClick={() => onSave(editedMenu)} className="bg-black text-white px-8 py-3 rounded-xl font-bold hover:bg-gray-800 shadow-lg flex items-center gap-2">
+                    <button
+                        onClick={() => {
+                            const missing = editedMenu.recipe.filter(r => !localIngredients.find(i => i.id === r.ingredientId));
+                            if (missing.length > 0) {
+                                setRecipeError('Some ingredients are missing. Remove and re-add them.');
+                                return;
+                            }
+                            onSave(editedMenu);
+                        }}
+                        className="bg-black text-white px-8 py-3 rounded-xl font-bold hover:bg-gray-800 shadow-lg flex items-center gap-2"
+                    >
                         <Save className="w-4 h-4" /> Save Item
                     </button>
                 </div>
