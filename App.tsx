@@ -1126,11 +1126,11 @@ const RecipeEditor: React.FC<{
                     <div className="mb-6">
                         <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Item Image</label>
                         <div className="border-2 border-dashed border-gray-300 rounded-xl p-6 text-center relative bg-gray-50 hover:bg-gray-100 transition group">
-                            <input type="file" accept="image/*" onChange={handleImageUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+                            <input type="file" accept="image/*" onChange={handleImageUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
                             {editedMenu.imageUrl ? (
                                 <div className="relative h-64 w-full">
                                     <img src={editedMenu.imageUrl} alt="Menu Preview" className="h-full w-full object-contain rounded-lg" />
-                                    <div className="absolute inset-0 flex items-center justify-center bg-black/50 opacity-0 group-hover:opacity-100 transition text-white font-bold">
+                                    <div className="absolute inset-0 flex items-center justify-center bg-black/50 opacity-0 group-hover:opacity-100 transition text-white font-bold pointer-events-none">
                                         Click to Change Image
                                     </div>
                                 </div>
