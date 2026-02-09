@@ -1043,6 +1043,11 @@ const RecipeEditor: React.FC<{
     const [newIngUnit, setNewIngUnit] = useState('');
     const [newIngQty, setNewIngQty] = useState('');
     const [localIngredients, setLocalIngredients] = useState<Ingredient[]>(ingredients);
+    const [recipeError, setRecipeError] = useState<string | null>(null);
+
+    const standardKeys = useMemo(() => {
+        return new Set(standardIngredients.map(si => `${si.name.toLowerCase()}::${si.unit.toLowerCase()}`));
+    }, [standardIngredients]);
 
     useEffect(() => {
         setLocalIngredients(ingredients);
@@ -1059,14 +1064,23 @@ const RecipeEditor: React.FC<{
         }
     };
 
-    const handleAddIngredientToRecipe = () => {
-        if (!newIngName || !newIngUnit || !newIngQty) return;
+    const handleAddIngredientToRecipe = async () => {
+        const name = newIngName.trim();
+        const unit = newIngUnit.trim();
+        if (!name || !unit || !newIngQty) return;
         const qty = parseFloat(newIngQty);
         if (qty <= 0) return;
+        setRecipeError(null);
+
+        const key = `${name.toLowerCase()}::${unit.toLowerCase()}`;
+        if (!standardKeys.has(key)) {
+            setRecipeError('Only standard ingredients can be used. Ask HQ to add it in Global Settings.');
+            return;
+        }
 
         // Check if ingredient exists globally (by name and unit)
         let existingIng = localIngredients.find(
-            i => i.name.toLowerCase() === newIngName.toLowerCase() && i.unit.toLowerCase() === newIngUnit.toLowerCase()
+            i => i.name.toLowerCase() === name.toLowerCase() && i.unit.toLowerCase() === unit.toLowerCase()
         );
 
         let ingredientId = existingIng?.id;
@@ -1075,11 +1089,17 @@ const RecipeEditor: React.FC<{
             // Create new ingredient globally
             const newIngredient: Ingredient = {
                 id: `I_${Date.now()}`,
-                name: newIngName,
-                unit: newIngUnit
+                name,
+                unit
             };
-            onAddIngredient(newIngredient);
-            setLocalIngredients(prev => [...prev, newIngredient]);
+            try {
+                await onAddIngredient(newIngredient);
+                setLocalIngredients(prev => [...prev, newIngredient]);
+            } catch (e) {
+                console.error('Failed to add ingredient', e);
+                setRecipeError('Ingredient could not be added. Ask HQ to add it in Global Settings.');
+                return;
+            }
             ingredientId = newIngredient.id;
         }
 
@@ -1267,13 +1287,26 @@ const RecipeEditor: React.FC<{
                             {editedMenu.recipe.length === 0 && (
                                 <div className="text-center py-8 text-gray-400 text-sm italic">No ingredients configured for this item.</div>
                             )}
+                            {recipeError && (
+                                <div className="text-sm text-red-600 font-semibold">{recipeError}</div>
+                            )}
                         </div>
                     </div>
                 </div>
 
                 <div className="p-4 border-t bg-gray-50 flex justify-end gap-3">
                     <button onClick={onBack} className="px-6 py-3 font-bold text-gray-500 hover:bg-gray-100 rounded-xl transition">Cancel</button>
-                    <button onClick={() => onSave(editedMenu)} className="bg-black text-white px-8 py-3 rounded-xl font-bold hover:bg-gray-800 shadow-lg flex items-center gap-2">
+                    <button
+                        onClick={() => {
+                            const missing = editedMenu.recipe.filter(r => !localIngredients.find(i => i.id === r.ingredientId));
+                            if (missing.length > 0) {
+                                setRecipeError('Some ingredients are missing. Remove and re-add them.');
+                                return;
+                            }
+                            onSave(editedMenu);
+                        }}
+                        className="bg-black text-white px-8 py-3 rounded-xl font-bold hover:bg-gray-800 shadow-lg flex items-center gap-2"
+                    >
                         <Save className="w-4 h-4" /> Save Item
                     </button>
                 </div>
@@ -1372,20 +1405,39 @@ const EmployeeManager: React.FC<{
   onUpdate: (employees: Employee[]) => void;
 }> = ({ store, employees, positions, onUpdate }) => {
     const [editingEmp, setEditingEmp] = useState<Employee | null>(null);
+    const [empError, setEmpError] = useState<string | null>(null);
+    const [empSaving, setEmpSaving] = useState(false);
 
-    const handleSave = (emp: Employee) => {
-        const exists = employees.find(e => e.id === emp.id);
-        if (exists) {
-            onUpdate(employees.map(e => e.id === emp.id ? emp : e));
-        } else {
-            onUpdate([...employees, emp]);
+    const handleSave = async (emp: Employee) => {
+        setEmpSaving(true);
+        setEmpError(null);
+        try {
+            const exists = employees.find(e => e.id === emp.id);
+            const next = exists
+                ? employees.map(e => e.id === emp.id ? emp : e)
+                : [...employees, emp];
+            await Promise.resolve(onUpdate(next));
+            setEditingEmp(null);
+        } catch (e) {
+            console.error('Failed to save staff', e);
+            setEmpError('Failed to save staff. Please try again.');
+        } finally {
+            setEmpSaving(false);
         }
-        setEditingEmp(null);
     };
 
-    const handleDelete = (id: string) => {
+    const handleDelete = async (id: string) => {
         if(confirm('Are you sure you want to remove this staff member?')) {
-            onUpdate(employees.filter(e => e.id !== id));
+            setEmpSaving(true);
+            setEmpError(null);
+            try {
+                await Promise.resolve(onUpdate(employees.filter(e => e.id !== id)));
+            } catch (e) {
+                console.error('Failed to delete staff', e);
+                setEmpError('Failed to delete staff. Please try again.');
+            } finally {
+                setEmpSaving(false);
+            }
         }
     };
 
@@ -1441,6 +1493,7 @@ const EmployeeManager: React.FC<{
                     </div>
                 ))}
             </div>
+            {empError && <div className="mt-3 text-sm text-red-600">{empError}</div>}
         </div>
     );
 };
@@ -3888,6 +3941,24 @@ const App = () => {
 
   const [dataLoading, setDataLoading] = useState<boolean>(false);
   const [dataError, setDataError] = useState<string | null>(null);
+  const [syncingIngredients, setSyncingIngredients] = useState(false);
+
+  const updateEmployeesForStore = useCallback(async (storeId: string, emps: Employee[]) => {
+    const normalized = emps.map(e => ({ ...e, storeId }));
+    setEmployees(prev => [
+      ...prev.filter(e => e.storeId !== storeId),
+      ...normalized
+    ]);
+    try {
+      await saveEmployees(storeId, normalized);
+    } catch (e) {
+      console.error('Failed to save employees', e);
+      await refreshAll();
+      throw e;
+    } finally {
+      await refreshAll();
+    }
+  }, [refreshAll]);
 
   const refreshTimerRef = useRef<number | null>(null);
 
@@ -3973,6 +4044,39 @@ const App = () => {
 
     setDataLoading(false);
   }, []);
+
+  const ensureStandardIngredients = useCallback(async () => {
+    if (user?.role !== UserRole.HQ) return;
+    if (globalConfigStatus !== 'loaded') return;
+    if (syncingIngredients) return;
+    const existingKeys = new Set(
+      ingredients.map(i => `${i.name.toLowerCase()}::${i.unit.toLowerCase()}`)
+    );
+    const makeIngredientId = () => {
+      if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+        return `I_${crypto.randomUUID()}`;
+      }
+      return `I_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    };
+    const toInsert = globalConfig.standardIngredients
+      .filter(si => !existingKeys.has(`${si.name.toLowerCase()}::${si.unit.toLowerCase()}`))
+      .map(si => ({
+        id: makeIngredientId(),
+        name: si.name,
+        unit: si.unit,
+      }));
+    if (toInsert.length === 0) return;
+    try {
+      setSyncingIngredients(true);
+      const { error } = await supabase.from('ingredients').insert(toInsert);
+      if (error) throw error;
+      await refreshAll();
+    } catch (e) {
+      console.error('Failed to sync standard ingredients', e);
+    } finally {
+      setSyncingIngredients(false);
+    }
+  }, [user, globalConfigStatus, globalConfig.standardIngredients, ingredients, syncingIngredients, refreshAll]);
 
   const scheduleRefreshAll = useCallback(() => {
     if (!sessionEmail) return;
@@ -4124,6 +4228,10 @@ useEffect(() => {
 }, [resolvedUser]);
 
 useEffect(() => {
+  ensureStandardIngredients();
+}, [ensureStandardIngredients]);
+
+useEffect(() => {
   if (user?.role !== UserRole.HQ) return;
   if (globalConfigStatus !== 'loaded') return;
   if (globalConfigExists !== false) return;
@@ -4138,6 +4246,9 @@ const handleUpdateGlobalConfig = async (key: string, values: any) => {
   setGlobalConfigExists(true);
   try {
     await saveGlobalConfig(next);
+    if (key === 'standardIngredients') {
+      await ensureStandardIngredients();
+    }
   } catch (e) {
     console.error('Failed to save global config', e);
   }
@@ -4207,7 +4318,7 @@ if (!resolvedUser) {
               onUpdateMenu={async (m) => { await saveMenu(m); await refreshAll(); }}
               onCreateMenu={async (m) => { await saveMenu(m); await refreshAll(); }}
               onDeleteMenu={async (id) => { await deleteMenu(id); await refreshAll(); }}
-              onUpdateEmployees={async (storeId, emps) => { await saveEmployees(storeId, emps); await refreshAll(); }}
+              onUpdateEmployees={async (storeId, emps) => { await updateEmployeesForStore(storeId, emps); }}
               onAddIngredient={async (i) => { await addIngredient(i); await refreshAll(); }}
           />
       );
@@ -4341,7 +4452,7 @@ if (!myStore) {
           onUpdateMenu={async (m) => { await saveMenu(m); await refreshAll(); }}
           onCreateMenu={async (m) => { await saveMenu(m); await refreshAll(); }}
           onDeleteMenu={async (id) => { await deleteMenu(id); await refreshAll(); }}
-          onUpdateEmployees={async (emps) => { await saveEmployees(myStore.id, emps); await refreshAll(); }}
+          onUpdateEmployees={async (emps) => { await updateEmployeesForStore(myStore.id, emps); }}
           onAddIngredient={async (i) => { await addIngredient(i); await refreshAll(); }}
       />
   );
