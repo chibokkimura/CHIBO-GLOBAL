@@ -1393,16 +1393,19 @@ const HQStoreDetail: React.FC<{
     menus: Menu[];
     ingredients: Ingredient[];
     storeStocks: StoreIngredientStock[];
+    allStores: Store[];
     categories: string[];
     standardIngredients: { name: string; unit: string; par?: number; reorder?: number }[];
     onBack: () => void;
     onUpdateStore: (store: Store) => void;
     onSaveStoreStocks: (storeId: string, rows: { ingredientName: string; unit: string; par: number; reorder: number }[]) => void;
+    onMergeStores: (sourceId: string, targetId: string) => Promise<void>;
+    onDeleteStore: (storeId: string) => Promise<void>;
     onUpdateMenu: (menu: Menu) => void;
     onCreateMenu: (menu: Menu) => void;
     onDeleteMenu: (id: string) => void;
     onAddIngredient: (ing: Ingredient) => void;
-}> = ({ store, sales, menus, ingredients, storeStocks, categories, standardIngredients, onBack, onUpdateStore, onSaveStoreStocks, onUpdateMenu, onCreateMenu, onDeleteMenu, onAddIngredient }) => {
+}> = ({ store, sales, menus, ingredients, storeStocks, allStores, categories, standardIngredients, onBack, onUpdateStore, onSaveStoreStocks, onMergeStores, onDeleteStore, onUpdateMenu, onCreateMenu, onDeleteMenu, onAddIngredient }) => {
     const storeMenus = menus.filter(m => m.storeId === store.id);
     const storeSales = useMemo(() => sales.filter(s => s.storeId === store.id), [sales, store.id]);
     const sortedStoreSales = useMemo(
@@ -1429,6 +1432,16 @@ const HQStoreDetail: React.FC<{
     const [stockDrafts, setStockDrafts] = useState<{ ingredientName: string; unit: string; par: number; reorder: number }[]>([]);
     const [stockSaving, setStockSaving] = useState(false);
     const [stockError, setStockError] = useState<string | null>(null);
+    const [owners, setOwners] = useState<{ email: string; name: string }[]>([]);
+    const [ownersError, setOwnersError] = useState<string | null>(null);
+    const [mergeSourceId, setMergeSourceId] = useState<string>('');
+    const [mergeBusy, setMergeBusy] = useState(false);
+    const [mergeError, setMergeError] = useState<string | null>(null);
+    const [linkEmail, setLinkEmail] = useState('');
+    const [linkBusy, setLinkBusy] = useState(false);
+    const [linkError, setLinkError] = useState<string | null>(null);
+    const [linkSuccess, setLinkSuccess] = useState<string | null>(null);
+    const [deleteError, setDeleteError] = useState<string | null>(null);
 
     useEffect(() => {
         setRoyaltyDraft(String(store.royaltyPercentage ?? 0));
@@ -1599,6 +1612,132 @@ const HQStoreDetail: React.FC<{
         });
         setStockDrafts(next);
     }, [standardIngredients, storeStockMap]);
+
+    useEffect(() => {
+        let cancelled = false;
+        const loadOwners = async () => {
+            try {
+                setOwnersError(null);
+                const { data, error } = await supabase
+                    .from('app_users')
+                    .select('email,name')
+                    .eq('store_id', store.id);
+                if (error) throw error;
+                if (cancelled) return;
+                setOwners((data ?? []).map((r: any) => ({ email: r.email, name: r.name })));
+            } catch (e) {
+                if (!cancelled) {
+                    setOwnersError('Failed to load owners.');
+                }
+            }
+        };
+        loadOwners();
+        return () => { cancelled = true; };
+    }, [store.id]);
+
+    const refreshOwners = async () => {
+        try {
+            const { data, error } = await supabase
+                .from('app_users')
+                .select('email,name')
+                .eq('store_id', store.id);
+            if (error) throw error;
+            setOwners((data ?? []).map((r: any) => ({ email: r.email, name: r.name })));
+        } catch {
+            setOwnersError('Failed to load owners.');
+        }
+    };
+
+    const mergeCandidates = useMemo(
+        () => allStores.filter(s =>
+            s.id !== store.id &&
+            s.name === store.name &&
+            s.country === store.country &&
+            s.city === store.city
+        ),
+        [allStores, store]
+    );
+
+    const handleMerge = async () => {
+        if (!mergeSourceId) return;
+        try {
+            setMergeBusy(true);
+            setMergeError(null);
+            const source = allStores.find(s => s.id === mergeSourceId);
+            if (!source) throw new Error('Source store not found.');
+            const sourceSales = sales.filter(s => s.storeId === source.id);
+            const targetSales = sales.filter(s => s.storeId === store.id);
+            if (source.currency !== store.currency && (sourceSales.length > 0 || targetSales.length > 0)) {
+                setMergeError('Currency differs between stores. Merge is blocked because sales currency would be mixed.');
+                setMergeBusy(false);
+                return;
+            }
+            await onMergeStores(mergeSourceId, store.id);
+            setMergeSourceId('');
+        } catch (e) {
+            console.error('Merge failed', e);
+            setMergeError('Failed to merge stores.');
+        } finally {
+            setMergeBusy(false);
+        }
+    };
+
+    const handleLinkAccount = async () => {
+        const email = linkEmail.trim().toLowerCase();
+        if (!email) {
+            setLinkError('Enter an email to link.');
+            return;
+        }
+        try {
+            setLinkBusy(true);
+            setLinkError(null);
+            setLinkSuccess(null);
+            const { data, error } = await supabase
+                .from('app_users')
+                .select('user_id,email,role,store_id')
+                .eq('email', email)
+                .maybeSingle();
+            if (error) throw error;
+            if (!data) {
+                setLinkError('Account not found. Ask them to sign in once first.');
+                return;
+            }
+            if (data.role === 'HQ') {
+                setLinkError('HQ accounts cannot be linked to a store.');
+                return;
+            }
+            const { error: upErr } = await supabase
+                .from('app_users')
+                .update({ store_id: store.id, role: 'OWNER' })
+                .eq('user_id', data.user_id);
+            if (upErr) throw upErr;
+            setLinkSuccess(`${email} linked to this store.`);
+            setLinkEmail('');
+            await refreshOwners();
+        } catch (e) {
+            console.error('Failed to link account', e);
+            setLinkError('Failed to link account.');
+        } finally {
+            setLinkBusy(false);
+        }
+    };
+
+    const handleDeleteStore = async () => {
+        setDeleteError(null);
+        if (storeSales.length > 0 || storeMenus.length > 0) {
+            setDeleteError('Store has data. Delete is blocked to prevent data loss.');
+            return;
+        }
+        const ok = window.confirm(`Delete store "${store.name}"? This cannot be undone.`);
+        if (!ok) return;
+        try {
+            await onDeleteStore(store.id);
+            onBack();
+        } catch (e) {
+            console.error('Failed to delete store', e);
+            setDeleteError('Failed to delete store.');
+        }
+    };
 
     // Average ingredient usage per category (based on menu recipes)
     const categoryUsageMap = useMemo(() => {
@@ -1847,6 +1986,13 @@ const HQStoreDetail: React.FC<{
                     <div className="flex items-center gap-2 text-gray-500 mt-2">
                         <MapPin className="w-4 h-4"/> {store.city}, {store.country} • Owner: {store.ownerEmail}
                     </div>
+                    <div className="mt-2 text-xs text-gray-500">
+                        {owners.length > 0 ? (
+                            <span>Linked Accounts: {owners.map(o => o.email).join(', ')}</span>
+                        ) : (
+                            <span>{ownersError ? ownersError : 'Linked Accounts: —'}</span>
+                        )}
+                    </div>
                 </div>
                 <div className="text-right">
                     <div className="text-sm font-bold text-gray-500">Currency</div>
@@ -1929,6 +2075,84 @@ const HQStoreDetail: React.FC<{
                                 </div>
                             </div>
                         </div>
+                    </div>
+
+                    {mergeCandidates.length > 0 && (
+                        <div className="bg-white p-6 rounded-2xl shadow-sm border">
+                            <h2 className="text-xl font-bold mb-2">Merge Duplicate Store</h2>
+                            <p className="text-xs text-gray-500 mb-4">
+                                If multiple accounts created duplicate stores (same name/city/country), you can merge them into this store.
+                            </p>
+                            <div className="flex flex-col md:flex-row gap-3">
+                                <select
+                                    value={mergeSourceId}
+                                    onChange={(e) => setMergeSourceId(e.target.value)}
+                                    className="flex-1 border border-gray-200 rounded-xl p-2 text-sm"
+                                >
+                                    <option value="">Select store to merge into this one</option>
+                                    {mergeCandidates.map(s => (
+                                        <option key={s.id} value={s.id}>
+                                            {s.name} • {s.city}, {s.country} • {s.currency}
+                                        </option>
+                                    ))}
+                                </select>
+                                <button
+                                    type="button"
+                                    onClick={handleMerge}
+                                    disabled={!mergeSourceId || mergeBusy}
+                                    className="px-4 py-2 rounded-xl bg-black text-white text-sm font-bold disabled:opacity-50"
+                                >
+                                    {mergeBusy ? 'Merging...' : 'Merge'}
+                                </button>
+                            </div>
+                            {mergeError && <div className="mt-3 text-xs text-red-600">{mergeError}</div>}
+                            <div className="mt-3 text-[10px] text-gray-400">
+                                Note: If currencies differ and sales exist, merge is blocked to avoid mixing currencies.
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="bg-white p-6 rounded-2xl shadow-sm border">
+                        <h2 className="text-xl font-bold mb-2">Link Account to This Store</h2>
+                        <p className="text-xs text-gray-500 mb-4">
+                            Use this when a manager created the wrong store. This links their account to this store without touching existing data.
+                        </p>
+                        <div className="flex flex-col md:flex-row gap-3">
+                            <input
+                                value={linkEmail}
+                                onChange={(e) => setLinkEmail(e.target.value)}
+                                placeholder="manager@email.com"
+                                className="flex-1 border border-gray-200 rounded-xl p-2 text-sm"
+                            />
+                            <button
+                                type="button"
+                                onClick={handleLinkAccount}
+                                disabled={linkBusy}
+                                className="px-4 py-2 rounded-xl bg-black text-white text-sm font-bold disabled:opacity-50"
+                            >
+                                {linkBusy ? 'Linking...' : 'Link Account'}
+                            </button>
+                        </div>
+                        {linkError && <div className="mt-3 text-xs text-red-600">{linkError}</div>}
+                        {linkSuccess && <div className="mt-3 text-xs text-emerald-600">{linkSuccess}</div>}
+                        <div className="mt-3 text-[10px] text-gray-400">
+                            Note: The user must sign in at least once so their account exists.
+                        </div>
+                    </div>
+
+                    <div className="bg-white p-6 rounded-2xl shadow-sm border border-red-200">
+                        <h2 className="text-xl font-bold mb-2 text-red-700">Delete Empty Store</h2>
+                        <p className="text-xs text-red-600 mb-4">
+                            Use this only for mistakenly created stores with no data.
+                        </p>
+                        <button
+                            type="button"
+                            onClick={handleDeleteStore}
+                            className="px-4 py-2 rounded-xl bg-red-600 text-white text-sm font-bold hover:bg-red-700"
+                        >
+                            Delete Store
+                        </button>
+                        {deleteError && <div className="mt-3 text-xs text-red-600">{deleteError}</div>}
                     </div>
 
                     <div className="bg-white p-6 rounded-2xl shadow-sm border">
@@ -2290,11 +2514,12 @@ const HQDashboard: React.FC<{
   onUpdateGlobalConfig: (key: string, values: any) => void;
   onUpdateStore: (store: Store) => void;
   onSaveStoreStocks: (storeId: string, rows: { ingredientName: string; unit: string; par: number; reorder: number }[]) => void;
+  onDeleteStore: (storeId: string) => Promise<void>;
   onUpdateMenu: (menu: Menu) => void;
   onCreateMenu: (menu: Menu) => void;
   onDeleteMenu: (id: string) => void;
   onAddIngredient: (ing: Ingredient) => void;
-}> = ({ user, onLogout, stores, sales, menus, ingredients, storeStocks, globalConfig, onUpdateGlobalConfig, onUpdateStore, onSaveStoreStocks, onUpdateMenu, onCreateMenu, onDeleteMenu, onAddIngredient }) => {
+}> = ({ user, onLogout, stores, sales, menus, ingredients, storeStocks, globalConfig, onUpdateGlobalConfig, onUpdateStore, onSaveStoreStocks, onDeleteStore, onUpdateMenu, onCreateMenu, onDeleteMenu, onAddIngredient }) => {
   const [selectedStore, setSelectedStore] = useState<Store | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isSalesAnalyticsOpen, setIsSalesAnalyticsOpen] = useState(false);
@@ -2403,11 +2628,14 @@ const HQDashboard: React.FC<{
         menus={menus}
         ingredients={ingredients}
         storeStocks={storeStocks}
+        allStores={stores}
         categories={globalConfig.categories}
         standardIngredients={globalConfig.standardIngredients}
         onBack={() => setSelectedStore(null)}
         onUpdateStore={onUpdateStore}
         onSaveStoreStocks={onSaveStoreStocks}
+        onMergeStores={async (sourceId, targetId) => { await supabase.rpc('merge_stores', { p_source_id: sourceId, p_target_id: targetId }); await refreshAll(); }}
+        onDeleteStore={onDeleteStore}
         onUpdateMenu={onUpdateMenu}
         onCreateMenu={onCreateMenu}
         onDeleteMenu={onDeleteMenu}
@@ -3755,6 +3983,7 @@ if (!resolvedUser) {
               onUpdateGlobalConfig={handleUpdateGlobalConfig}
               onUpdateStore={async (s) => { const { error } = await supabase.from('stores').update({ name: s.name, country: s.country, city: s.city, owner_email: s.ownerEmail, currency: s.currency, royalty_percentage: s.royaltyPercentage }).eq('id', s.id); if (error) throw error; await refreshAll(); }}
               onSaveStoreStocks={async (storeId, rows) => { await saveStoreIngredientStocks(storeId, rows); await refreshAll(); }}
+              onDeleteStore={async (storeId) => { const { error } = await supabase.from('stores').delete().eq('id', storeId); if (error) throw error; await refreshAll(); }}
               onUpdateMenu={async (m) => { await saveMenu(m); await refreshAll(); }}
               onCreateMenu={async (m) => { await saveMenu(m); await refreshAll(); }}
               onDeleteMenu={async (id) => { await deleteMenu(id); await refreshAll(); }}
