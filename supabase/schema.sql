@@ -116,6 +116,29 @@ as $$
   limit 1;
 $$;
 
+create or replace function public.find_store_for_onboarding(
+  p_name text,
+  p_country text,
+  p_city text,
+  p_currency text
+)
+returns table (id text)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select s.id
+  from public.stores s
+  where s.name = p_name
+    and s.country = p_country
+    and s.city = p_city
+    and s.currency = p_currency
+  limit 1;
+$$;
+
+grant execute on function public.find_store_for_onboarding(text, text, text, text) to authenticated;
+
 -- =========================
 -- RLS
 -- =========================
