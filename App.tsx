@@ -3266,6 +3266,12 @@ const OnboardingScreen: React.FC<{
       setLoading(true);
       setError(null);
 
+      if (!storeName || !country || !city || !currency) {
+        setError('Please select store name, country, city, and currency.');
+        setLoading(false);
+        return;
+      }
+
       const { data: authData } = await withTimeout(
         supabase.auth.getUser(),
         8000,
@@ -3273,6 +3279,31 @@ const OnboardingScreen: React.FC<{
       );
       const email = authData.user?.email;
       if (!email) throw new Error('No email in session');
+
+      // 0) Check for existing store with same selections (RPC bypasses RLS)
+      const { data: existingRows, error: existingErr } = await withTimeout(
+        supabase.rpc('find_store_for_onboarding', {
+          p_name: storeName,
+          p_country: country,
+          p_city: city,
+          p_currency: currency,
+        }),
+        10000,
+        'Find store'
+      );
+      if (existingErr) throw existingErr;
+      const existingStoreId = Array.isArray(existingRows) ? existingRows[0]?.id : null;
+
+      if (existingStoreId) {
+        // Join existing store
+        await withTimeout(
+          upsertMyOwnerProfile({ name: name || email, email, storeId: existingStoreId }),
+          10000,
+          'Join existing store'
+        );
+        await withTimeout(onDone(), 12000, 'Sync data');
+        return;
+      }
 
       const storeId = `S_${crypto.randomUUID()}`;
 
