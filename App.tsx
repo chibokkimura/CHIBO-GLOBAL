@@ -186,6 +186,37 @@ async function saveStoreIngredientStocks(storeId: string, rows: { ingredientName
   if (error) throw error;
 }
 
+async function loadStoreAccounts(storeId: string): Promise<{ email: string; name: string }[]> {
+  const { data, error } = await supabase.rpc('list_store_accounts', { p_store_id: storeId });
+  if (!error) {
+    return (data ?? []).map((r: any) => ({ email: r.email, name: r.name }));
+  }
+  const { data: rows, error: selectError } = await supabase
+    .from('app_users')
+    .select('email,name')
+    .eq('store_id', storeId);
+  if (selectError) throw selectError;
+  return (rows ?? []).map((r: any) => ({ email: r.email, name: r.name }));
+}
+
+async function linkAccountToStore(email: string, storeId: string) {
+  const { error } = await supabase.rpc('link_account_to_store', { p_email: email, p_store_id: storeId });
+  if (!error) return;
+  const { data, error: selectErr } = await supabase
+    .from('app_users')
+    .select('user_id,role')
+    .eq('email', email)
+    .maybeSingle();
+  if (selectErr) throw selectErr;
+  if (!data) throw new Error('Account not found.');
+  if (data.role === 'HQ') throw new Error('HQ accounts cannot be linked to a store.');
+  const { error: upErr } = await supabase
+    .from('app_users')
+    .update({ store_id: storeId, role: 'OWNER' })
+    .eq('user_id', data.user_id);
+  if (upErr) throw upErr;
+}
+
 async function loadEmployees(): Promise<Employee[]> {
   const { data, error } = await supabase.from('employees').select('*').order('id');
   if (error) throw error;
@@ -1643,13 +1674,9 @@ const HQStoreDetail: React.FC<{
         const loadOwners = async () => {
             try {
                 setOwnersError(null);
-                const { data, error } = await supabase
-                    .from('app_users')
-                    .select('email,name')
-                    .eq('store_id', store.id);
-                if (error) throw error;
+                const rows = await loadStoreAccounts(store.id);
                 if (cancelled) return;
-                setOwners((data ?? []).map((r: any) => ({ email: r.email, name: r.name })));
+                setOwners(rows);
             } catch (e) {
                 if (!cancelled) {
                     setOwnersError('Failed to load owners.');
@@ -1662,12 +1689,8 @@ const HQStoreDetail: React.FC<{
 
     const refreshOwners = async () => {
         try {
-            const { data, error } = await supabase
-                .from('app_users')
-                .select('email,name')
-                .eq('store_id', store.id);
-            if (error) throw error;
-            setOwners((data ?? []).map((r: any) => ({ email: r.email, name: r.name })));
+            const rows = await loadStoreAccounts(store.id);
+            setOwners(rows);
         } catch {
             setOwnersError('Failed to load owners.');
         }
@@ -1717,25 +1740,7 @@ const HQStoreDetail: React.FC<{
             setLinkBusy(true);
             setLinkError(null);
             setLinkSuccess(null);
-            const { data, error } = await supabase
-                .from('app_users')
-                .select('user_id,email,role,store_id')
-                .eq('email', email)
-                .maybeSingle();
-            if (error) throw error;
-            if (!data) {
-                setLinkError('Account not found. Ask them to sign in once first.');
-                return;
-            }
-            if (data.role === 'HQ') {
-                setLinkError('HQ accounts cannot be linked to a store.');
-                return;
-            }
-            const { error: upErr } = await supabase
-                .from('app_users')
-                .update({ store_id: store.id, role: 'OWNER' })
-                .eq('user_id', data.user_id);
-            if (upErr) throw upErr;
+            await linkAccountToStore(email, store.id);
             setLinkSuccess(`${email} linked to this store.`);
             setLinkEmail('');
             await refreshOwners();
