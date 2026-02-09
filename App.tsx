@@ -539,7 +539,7 @@ const SalesAnalyticsModal: React.FC<{
     if (!isOpen) return null;
 
     return (
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200" onClick={onClose}>
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200">
             <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
                 <div className="p-6 border-b flex justify-between items-center bg-gray-50">
                     <div>
@@ -1114,7 +1114,7 @@ const RecipeEditor: React.FC<{
     };
 
     return (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200" onClick={onBack}>
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200">
             <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
                 <div className="p-6 border-b flex justify-between items-center bg-gray-50">
                     <h2 className="text-2xl font-bold">Edit Item: {menu.name}</h2>
@@ -1302,7 +1302,7 @@ const StaffEditor: React.FC<{
     };
 
     return (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200" onClick={onBack}>
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200">
              <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
                 <div className="p-6 border-b flex justify-between items-center bg-gray-50">
                     <h2 className="text-2xl font-bold">Staff Details</h2>
@@ -2541,7 +2541,7 @@ const HQStoreDetail: React.FC<{
             </div>
 
             {viewingReceipt && (
-                <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 backdrop-blur-sm p-4" onClick={() => setViewingReceipt(null)}>
+                <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 backdrop-blur-sm p-4">
                     <div className="relative max-w-4xl max-h-full">
                         <img src={viewingReceipt} alt="Receipt" className="max-w-full max-h-[90vh] rounded-lg shadow-2xl" />
                         <button onClick={() => setViewingReceipt(null)} className="absolute -top-4 -right-4 bg-white text-black rounded-full p-2 hover:bg-gray-200 transition shadow-lg">
@@ -2859,7 +2859,7 @@ const HQDashboard: React.FC<{
        </div>
 
        {isSettingsOpen && (
-           <div className="fixed inset-0 bg-black/60 z-[100] flex items-center justify-center p-4 backdrop-blur-sm" onClick={() => setIsSettingsOpen(false)}>
+           <div className="fixed inset-0 bg-black/60 z-[100] flex items-center justify-center p-4 backdrop-blur-sm">
                <div className="bg-white rounded-2xl shadow-xl max-w-2xl w-full flex flex-col max-h-[90vh]" onClick={e => e.stopPropagation()}>
                    <div className="p-6 border-b flex justify-between items-center bg-gray-50 rounded-t-2xl">
                        <h2 className="text-xl font-bold">Global Configuration</h2>
