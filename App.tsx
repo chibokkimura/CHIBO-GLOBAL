@@ -1042,6 +1042,11 @@ const RecipeEditor: React.FC<{
     const [newIngName, setNewIngName] = useState('');
     const [newIngUnit, setNewIngUnit] = useState('');
     const [newIngQty, setNewIngQty] = useState('');
+    const [localIngredients, setLocalIngredients] = useState<Ingredient[]>(ingredients);
+
+    useEffect(() => {
+        setLocalIngredients(ingredients);
+    }, [ingredients]);
 
     const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
@@ -1060,7 +1065,7 @@ const RecipeEditor: React.FC<{
         if (qty <= 0) return;
 
         // Check if ingredient exists globally (by name and unit)
-        let existingIng = ingredients.find(
+        let existingIng = localIngredients.find(
             i => i.name.toLowerCase() === newIngName.toLowerCase() && i.unit.toLowerCase() === newIngUnit.toLowerCase()
         );
 
@@ -1074,6 +1079,7 @@ const RecipeEditor: React.FC<{
                 unit: newIngUnit
             };
             onAddIngredient(newIngredient);
+            setLocalIngredients(prev => [...prev, newIngredient]);
             ingredientId = newIngredient.id;
         }
 
@@ -1236,7 +1242,7 @@ const RecipeEditor: React.FC<{
 
                         <div className="space-y-2">
                             {editedMenu.recipe.map(item => {
-                                const ing = ingredients.find(i => i.id === item.ingredientId);
+                                const ing = localIngredients.find(i => i.id === item.ingredientId);
                                 const ingName = ing ? ing.name : 'Unknown Ingredient';
                                 const ingUnit = ing ? ing.unit : '';
 
