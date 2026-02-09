@@ -139,6 +139,47 @@ $$;
 
 grant execute on function public.find_store_for_onboarding(text, text, text, text) to authenticated;
 
+create or replace function public.merge_stores(
+  p_source_id text,
+  p_target_id text
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if p_source_id is null or p_target_id is null then
+    raise exception 'Source and target store are required';
+  end if;
+  if p_source_id = p_target_id then
+    return;
+  end if;
+  if not public.is_hq() then
+    raise exception 'Not authorized';
+  end if;
+
+  update public.sales set store_id = p_target_id where store_id = p_source_id;
+  update public.menus set store_id = p_target_id where store_id = p_source_id;
+  update public.employees set store_id = p_target_id where store_id = p_source_id;
+  update public.app_users set store_id = p_target_id where store_id = p_source_id;
+
+  insert into public.store_ingredient_stock (store_id, ingredient_name, unit, par, reorder)
+  select p_target_id, ingredient_name, unit, par, reorder
+  from public.store_ingredient_stock
+  where store_id = p_source_id
+  on conflict (store_id, ingredient_name, unit)
+  do update set
+    par = greatest(public.store_ingredient_stock.par, excluded.par),
+    reorder = greatest(public.store_ingredient_stock.reorder, excluded.reorder);
+
+  delete from public.store_ingredient_stock where store_id = p_source_id;
+  delete from public.stores where id = p_source_id;
+end;
+$$;
+
+grant execute on function public.merge_stores(text, text) to authenticated;
+
 -- =========================
 -- RLS
 -- =========================
@@ -170,6 +211,12 @@ create policy "app_users_update_self"
 on public.app_users for update
 using (user_id = auth.uid())
 with check (user_id = auth.uid());
+
+drop policy if exists "app_users_update_hq" on public.app_users;
+create policy "app_users_update_hq"
+on public.app_users for update
+using (public.is_hq())
+with check (public.is_hq());
 
 -- global_config: everyone can read; only HQ can write
 drop policy if exists "global_config_select_all" on public.global_config;
