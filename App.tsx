@@ -1443,12 +1443,14 @@ const HQStoreDetail: React.FC<{
     store: Store;
     sales: Sale[];
     menus: Menu[];
+    employees: Employee[];
     ingredients: Ingredient[];
     storeStocks: StoreIngredientStock[];
     allStores: Store[];
     categories: string[];
     standardIngredients: { name: string; unit: string; par?: number; reorder?: number }[];
     currencies: string[];
+    positions: string[];
     onBack: () => void;
     onUpdateStore: (store: Store) => void;
     onSaveStoreStocks: (storeId: string, rows: { ingredientName: string; unit: string; par: number; reorder: number }[]) => void;
@@ -1457,9 +1459,11 @@ const HQStoreDetail: React.FC<{
     onUpdateMenu: (menu: Menu) => void;
     onCreateMenu: (menu: Menu) => void;
     onDeleteMenu: (id: string) => void;
+    onUpdateEmployees: (storeId: string, employees: Employee[]) => void;
     onAddIngredient: (ing: Ingredient) => void;
-}> = ({ store, sales, menus, ingredients, storeStocks, allStores, categories, standardIngredients, currencies, onBack, onUpdateStore, onSaveStoreStocks, onMergeStores, onDeleteStore, onUpdateMenu, onCreateMenu, onDeleteMenu, onAddIngredient }) => {
+}> = ({ store, sales, menus, employees, ingredients, storeStocks, allStores, categories, standardIngredients, currencies, positions, onBack, onUpdateStore, onSaveStoreStocks, onMergeStores, onDeleteStore, onUpdateMenu, onCreateMenu, onDeleteMenu, onUpdateEmployees, onAddIngredient }) => {
     const storeMenus = menus.filter(m => m.storeId === store.id);
+    const storeEmployees = employees.filter(e => e.storeId === store.id);
     const storeSales = useMemo(() => sales.filter(s => s.storeId === store.id), [sales, store.id]);
     const sortedStoreSales = useMemo(
         () => [...storeSales].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()),
@@ -2517,9 +2521,18 @@ const HQStoreDetail: React.FC<{
                 store={store} 
                 menus={storeMenus} 
                 onEdit={setEditingMenu}
-                onCreate={onCreateMenu}
+                onCreate={(menu) => setEditingMenu(menu)}
                 onDelete={onDeleteMenu}
             />
+
+            <div className="mt-10">
+                <EmployeeManager
+                    store={store}
+                    employees={storeEmployees}
+                    positions={positions}
+                    onUpdate={(emps) => onUpdateEmployees(store.id, emps)}
+                />
+            </div>
 
             {viewingReceipt && (
                 <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 backdrop-blur-sm p-4" onClick={() => setViewingReceipt(null)}>
@@ -2665,6 +2678,7 @@ const HQDashboard: React.FC<{
   stores: Store[];
   sales: Sale[];
   menus: Menu[];
+  employees: Employee[];
   ingredients: Ingredient[];
   storeStocks: StoreIngredientStock[];
   globalConfig: {
@@ -2683,8 +2697,9 @@ const HQDashboard: React.FC<{
   onUpdateMenu: (menu: Menu) => void;
   onCreateMenu: (menu: Menu) => void;
   onDeleteMenu: (id: string) => void;
+  onUpdateEmployees: (storeId: string, employees: Employee[]) => void;
   onAddIngredient: (ing: Ingredient) => void;
-}> = ({ user, onLogout, stores, sales, menus, ingredients, storeStocks, globalConfig, onUpdateGlobalConfig, onUpdateStore, onSaveStoreStocks, onDeleteStore, onUpdateMenu, onCreateMenu, onDeleteMenu, onAddIngredient }) => {
+}> = ({ user, onLogout, stores, sales, menus, employees, ingredients, storeStocks, globalConfig, onUpdateGlobalConfig, onUpdateStore, onSaveStoreStocks, onDeleteStore, onUpdateMenu, onCreateMenu, onDeleteMenu, onUpdateEmployees, onAddIngredient }) => {
   const [selectedStore, setSelectedStore] = useState<Store | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isSalesAnalyticsOpen, setIsSalesAnalyticsOpen] = useState(false);
@@ -2791,12 +2806,14 @@ const HQDashboard: React.FC<{
         store={selectedStore}
         sales={sales}
         menus={menus}
+        employees={employees}
         ingredients={ingredients}
         storeStocks={storeStocks}
         allStores={stores}
         categories={globalConfig.categories}
         standardIngredients={globalConfig.standardIngredients}
         currencies={globalConfig.currencies}
+        positions={globalConfig.positions}
         onBack={() => setSelectedStore(null)}
         onUpdateStore={onUpdateStore}
         onSaveStoreStocks={onSaveStoreStocks}
@@ -2805,6 +2822,7 @@ const HQDashboard: React.FC<{
         onUpdateMenu={onUpdateMenu}
         onCreateMenu={onCreateMenu}
         onDeleteMenu={onDeleteMenu}
+        onUpdateEmployees={onUpdateEmployees}
         onAddIngredient={onAddIngredient}
       />
     );
@@ -3556,7 +3574,7 @@ const StoreDashboard: React.FC<{
                             store={store}
                             menus={storeMenus}
                             onEdit={setEditingMenu}
-                            onCreate={onCreateMenu}
+                            onCreate={(menu) => setEditingMenu(menu)}
                             onDelete={onDeleteMenu}
                         />
                     )}
@@ -4143,6 +4161,7 @@ if (!resolvedUser) {
               stores={stores}
               sales={sales}
               menus={menus}
+              employees={employees}
               ingredients={ingredients}
               storeStocks={storeStocks}
               globalConfig={globalConfig}
@@ -4153,6 +4172,7 @@ if (!resolvedUser) {
               onUpdateMenu={async (m) => { await saveMenu(m); await refreshAll(); }}
               onCreateMenu={async (m) => { await saveMenu(m); await refreshAll(); }}
               onDeleteMenu={async (id) => { await deleteMenu(id); await refreshAll(); }}
+              onUpdateEmployees={async (storeId, emps) => { await saveEmployees(storeId, emps); await refreshAll(); }}
               onAddIngredient={async (i) => { await addIngredient(i); await refreshAll(); }}
           />
       );
