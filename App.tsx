@@ -186,17 +186,27 @@ async function saveStoreIngredientStocks(storeId: string, rows: { ingredientName
   if (error) throw error;
 }
 
-async function loadStoreAccounts(storeId: string): Promise<{ email: string; name: string }[]> {
+async function loadStoreAccounts(storeId: string): Promise<{ email: string; name: string; userId: string; storeId: string | null }[]> {
   const { data, error } = await supabase.rpc('list_store_accounts', { p_store_id: storeId });
   if (!error) {
-    return (data ?? []).map((r: any) => ({ email: r.email, name: r.name }));
+    return (data ?? []).map((r: any) => ({
+      email: r.email,
+      name: r.name,
+      userId: r.user_id,
+      storeId: r.store_id ?? null
+    }));
   }
   const { data: rows, error: selectError } = await supabase
     .from('app_users')
-    .select('email,name')
+    .select('user_id,email,name,store_id')
     .eq('store_id', storeId);
   if (selectError) throw selectError;
-  return (rows ?? []).map((r: any) => ({ email: r.email, name: r.name }));
+  return (rows ?? []).map((r: any) => ({
+    email: r.email,
+    name: r.name,
+    userId: r.user_id,
+    storeId: r.store_id ?? null
+  }));
 }
 
 async function linkAccountToStore(email: string, storeId: string) {
@@ -214,6 +224,17 @@ async function linkAccountToStore(email: string, storeId: string) {
     .from('app_users')
     .update({ store_id: storeId, role: 'OWNER' })
     .eq('user_id', data.user_id);
+  if (upErr) throw upErr;
+}
+
+async function unlinkAccountFromStore(email: string, storeId: string) {
+  const { error } = await supabase.rpc('unlink_account_from_store', { p_email: email, p_store_id: storeId });
+  if (!error) return;
+  const { error: upErr } = await supabase
+    .from('app_users')
+    .update({ store_id: null })
+    .eq('email', email)
+    .eq('store_id', storeId);
   if (upErr) throw upErr;
 }
 
@@ -1467,7 +1488,7 @@ const HQStoreDetail: React.FC<{
     const [stockDrafts, setStockDrafts] = useState<{ ingredientName: string; unit: string; par: number; reorder: number }[]>([]);
     const [stockSaving, setStockSaving] = useState(false);
     const [stockError, setStockError] = useState<string | null>(null);
-    const [owners, setOwners] = useState<{ email: string; name: string }[]>([]);
+    const [owners, setOwners] = useState<{ email: string; name: string; userId: string; storeId: string | null }[]>([]);
     const [ownersError, setOwnersError] = useState<string | null>(null);
     const [mergeSourceId, setMergeSourceId] = useState<string>('');
     const [mergeBusy, setMergeBusy] = useState(false);
@@ -1477,6 +1498,11 @@ const HQStoreDetail: React.FC<{
     const [linkError, setLinkError] = useState<string | null>(null);
     const [linkSuccess, setLinkSuccess] = useState<string | null>(null);
     const [deleteError, setDeleteError] = useState<string | null>(null);
+    const [moveTargets, setMoveTargets] = useState<Record<string, string>>({});
+    const [moveBusy, setMoveBusy] = useState<string | null>(null);
+    const [moveError, setMoveError] = useState<string | null>(null);
+    const [unlinkBusy, setUnlinkBusy] = useState<string | null>(null);
+    const [unlinkError, setUnlinkError] = useState<string | null>(null);
 
     useEffect(() => {
         setRoyaltyDraft(String(store.royaltyPercentage ?? 0));
@@ -1752,6 +1778,41 @@ const HQStoreDetail: React.FC<{
         }
     };
 
+    const handleMoveAccount = async (email: string) => {
+        const targetId = moveTargets[email];
+        if (!targetId) {
+            setMoveError('Select a target store.');
+            return;
+        }
+        try {
+            setMoveBusy(email);
+            setMoveError(null);
+            await linkAccountToStore(email, targetId);
+            await refreshOwners();
+        } catch (e) {
+            console.error('Failed to move account', e);
+            setMoveError('Failed to move account.');
+        } finally {
+            setMoveBusy(null);
+        }
+    };
+
+    const handleUnlinkAccount = async (email: string) => {
+        const ok = window.confirm(`Unlink ${email} from this store?`);
+        if (!ok) return;
+        try {
+            setUnlinkBusy(email);
+            setUnlinkError(null);
+            await unlinkAccountFromStore(email, store.id);
+            await refreshOwners();
+        } catch (e) {
+            console.error('Failed to unlink account', e);
+            setUnlinkError('Failed to unlink account.');
+        } finally {
+            setUnlinkBusy(null);
+        }
+    };
+
     const handleDeleteStore = async () => {
         setDeleteError(null);
         if (storeSales.length > 0 || storeMenus.length > 0) {
@@ -2019,7 +2080,10 @@ const HQStoreDetail: React.FC<{
                     <div className="mt-2 text-xs text-gray-500">
                         {owners.length > 0 ? (
                             <span>
-                                Linked Accounts: {owners.map(o => o.name ? `${o.name} (${o.email})` : o.email).join(', ')}
+                                Linked Accounts: {owners.map(o => {
+                                    const label = o.name ? `${o.name} (${o.email})` : o.email;
+                                    return o.storeId ? `${label} [${o.storeId}]` : label;
+                                }).join(', ')}
                             </span>
                         ) : (
                             <span>{ownersError ? ownersError : 'Linked Accounts: —'}</span>
@@ -2192,6 +2256,53 @@ const HQStoreDetail: React.FC<{
                         <div className="mt-3 text-[10px] text-gray-400">
                             Note: The user must sign in at least once so their account exists.
                         </div>
+                        {owners.length > 0 && (
+                            <div className="mt-5 space-y-2">
+                                <div className="text-sm font-bold text-gray-700">Linked Accounts</div>
+                                {owners.map(owner => (
+                                    <div key={owner.email} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
+                                        <div className="text-xs text-gray-700">
+                                            <div className="font-semibold">
+                                                {owner.name || '—'} <span className="text-gray-500">({owner.email})</span>
+                                            </div>
+                                            <div className="text-[11px] text-gray-500">store_id: {owner.storeId || '—'}</div>
+                                        </div>
+                                        <div className="flex flex-wrap items-center gap-2">
+                                            <select
+                                                value={moveTargets[owner.email] || ''}
+                                                onChange={(e) => setMoveTargets(prev => ({ ...prev, [owner.email]: e.target.value }))}
+                                                className="px-2 py-1 rounded-lg border border-gray-200 text-xs"
+                                            >
+                                                <option value="">Move to store...</option>
+                                                {allStores.filter(s => s.id !== store.id).map(s => (
+                                                    <option key={s.id} value={s.id}>
+                                                        {s.name} • {s.city}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                            <button
+                                                type="button"
+                                                onClick={() => handleMoveAccount(owner.email)}
+                                                disabled={moveBusy === owner.email || !moveTargets[owner.email]}
+                                                className="px-3 py-1 rounded-lg bg-black text-white text-xs font-bold disabled:opacity-50"
+                                            >
+                                                {moveBusy === owner.email ? 'Moving...' : 'Move'}
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => handleUnlinkAccount(owner.email)}
+                                                disabled={unlinkBusy === owner.email}
+                                                className="px-3 py-1 rounded-lg border border-red-200 text-red-600 text-xs font-bold disabled:opacity-50"
+                                            >
+                                                {unlinkBusy === owner.email ? 'Unlinking...' : 'Unlink'}
+                                            </button>
+                                        </div>
+                                    </div>
+                                ))}
+                                {moveError && <div className="text-xs text-red-600">{moveError}</div>}
+                                {unlinkError && <div className="text-xs text-red-600">{unlinkError}</div>}
+                            </div>
+                        )}
                     </div>
 
                     <div className="bg-white p-6 rounded-2xl shadow-sm border border-red-200">
