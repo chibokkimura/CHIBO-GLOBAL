@@ -181,13 +181,13 @@ $$;
 grant execute on function public.merge_stores(text, text) to authenticated;
 
 create or replace function public.list_store_accounts(p_store_id text)
-returns table (email text, name text)
+returns table (user_id uuid, email text, name text, store_id text)
 language sql
 stable
 security definer
 set search_path = public
 as $$
-  select u.email, u.name
+  select u.user_id, u.email, u.name, u.store_id
   from public.app_users u
   where u.store_id = p_store_id
   order by u.email;
@@ -221,6 +221,34 @@ end;
 $$;
 
 grant execute on function public.link_account_to_store(text, text) to authenticated;
+
+create or replace function public.unlink_account_from_store(
+  p_email text,
+  p_store_id text
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if not public.is_hq() then
+    raise exception 'Not authorized';
+  end if;
+
+  update public.app_users
+  set store_id = null
+  where lower(email) = lower(p_email)
+    and store_id = p_store_id
+    and role <> 'HQ';
+
+  if not found then
+    raise exception 'Account not found or is HQ.';
+  end if;
+end;
+$$;
+
+grant execute on function public.unlink_account_from_store(text, text) to authenticated;
 
 -- =========================
 -- RLS
