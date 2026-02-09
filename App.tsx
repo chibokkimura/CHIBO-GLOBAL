@@ -1396,6 +1396,7 @@ const HQStoreDetail: React.FC<{
     allStores: Store[];
     categories: string[];
     standardIngredients: { name: string; unit: string; par?: number; reorder?: number }[];
+    currencies: string[];
     onBack: () => void;
     onUpdateStore: (store: Store) => void;
     onSaveStoreStocks: (storeId: string, rows: { ingredientName: string; unit: string; par: number; reorder: number }[]) => void;
@@ -1405,7 +1406,7 @@ const HQStoreDetail: React.FC<{
     onCreateMenu: (menu: Menu) => void;
     onDeleteMenu: (id: string) => void;
     onAddIngredient: (ing: Ingredient) => void;
-}> = ({ store, sales, menus, ingredients, storeStocks, allStores, categories, standardIngredients, onBack, onUpdateStore, onSaveStoreStocks, onMergeStores, onDeleteStore, onUpdateMenu, onCreateMenu, onDeleteMenu, onAddIngredient }) => {
+}> = ({ store, sales, menus, ingredients, storeStocks, allStores, categories, standardIngredients, currencies, onBack, onUpdateStore, onSaveStoreStocks, onMergeStores, onDeleteStore, onUpdateMenu, onCreateMenu, onDeleteMenu, onAddIngredient }) => {
     const storeMenus = menus.filter(m => m.storeId === store.id);
     const storeSales = useMemo(() => sales.filter(s => s.storeId === store.id), [sales, store.id]);
     const sortedStoreSales = useMemo(
@@ -1426,6 +1427,9 @@ const HQStoreDetail: React.FC<{
     const [royaltyDraft, setRoyaltyDraft] = useState<string>(String(store.royaltyPercentage ?? 0));
     const [royaltySaving, setRoyaltySaving] = useState(false);
     const [royaltyError, setRoyaltyError] = useState<string | null>(null);
+    const [currencyDraft, setCurrencyDraft] = useState<string>(store.currency || '');
+    const [currencySaving, setCurrencySaving] = useState(false);
+    const [currencyError, setCurrencyError] = useState<string | null>(null);
     const [emailInfo, setEmailInfo] = useState<string | null>(null);
     const [expandedSales, setExpandedSales] = useState<Set<string>>(new Set());
     const [showStockEditor, setShowStockEditor] = useState(false);
@@ -1446,6 +1450,10 @@ const HQStoreDetail: React.FC<{
     useEffect(() => {
         setRoyaltyDraft(String(store.royaltyPercentage ?? 0));
     }, [store.royaltyPercentage]);
+
+    useEffect(() => {
+        setCurrencyDraft(store.currency || '');
+    }, [store.currency]);
 
     const normalizePercentInput = (value: string) => {
         const cleaned = value.replace(/[^\d.]/g, '');
@@ -1473,6 +1481,23 @@ const HQStoreDetail: React.FC<{
             setRoyaltyError('Failed to update. Please try again.');
         } finally {
             setRoyaltySaving(false);
+        }
+    };
+
+    const saveCurrency = async () => {
+        if (!currencyDraft) {
+            setCurrencyError('Select a currency.');
+            return;
+        }
+        try {
+            setCurrencySaving(true);
+            setCurrencyError(null);
+            await onUpdateStore({ ...store, currency: currencyDraft });
+        } catch (e) {
+            console.error('Failed to update currency', e);
+            setCurrencyError('Failed to update. Please try again.');
+        } finally {
+            setCurrencySaving(false);
         }
     };
 
@@ -1988,7 +2013,9 @@ const HQStoreDetail: React.FC<{
                     </div>
                     <div className="mt-2 text-xs text-gray-500">
                         {owners.length > 0 ? (
-                            <span>Linked Accounts: {owners.map(o => o.email).join(', ')}</span>
+                            <span>
+                                Linked Accounts: {owners.map(o => o.name ? `${o.name} (${o.email})` : o.email).join(', ')}
+                            </span>
                         ) : (
                             <span>{ownersError ? ownersError : 'Linked Accounts: —'}</span>
                         )}
@@ -1996,7 +2023,29 @@ const HQStoreDetail: React.FC<{
                 </div>
                 <div className="text-right">
                     <div className="text-sm font-bold text-gray-500">Currency</div>
-                    <div className="text-xl font-bold">{store.currency}</div>
+                    <div className="mt-1 flex items-center gap-2 justify-end">
+                        <select
+                            value={currencyDraft}
+                            onChange={(e) => setCurrencyDraft(e.target.value)}
+                            className="px-2 py-1 rounded-lg border border-gray-200 text-right font-bold bg-white"
+                        >
+                            <option value="">Select</option>
+                            {currencies.map(cur => (
+                                <option key={cur} value={cur}>{cur}</option>
+                            ))}
+                        </select>
+                        <button
+                            type="button"
+                            onClick={saveCurrency}
+                            disabled={currencySaving || !currencyDraft}
+                            className="px-3 py-1 rounded-lg bg-black text-white text-xs font-bold disabled:opacity-50"
+                        >
+                            {currencySaving ? 'Saving...' : 'Save'}
+                        </button>
+                    </div>
+                    {currencyError && (
+                        <div className="mt-2 text-xs text-red-600 text-right">{currencyError}</div>
+                    )}
                     <div className="mt-4 text-sm font-bold text-gray-500">Royalty Rate (%)</div>
                     <div className="mt-1 flex items-center gap-2 justify-end">
                         <input
@@ -2569,9 +2618,9 @@ const HQDashboard: React.FC<{
           growthRate,
           currentMonthName,
           activeStores: stores.length,
-          inventoryAlerts: 3 // Mocked for now, as global inventory check is heavy
+          inventoryAlerts: storeStocks.filter(row => row.reorder > 0 && row.par <= row.reorder).length
       };
-  }, [sales, stores, fxRates]);
+  }, [sales, stores, fxRates, storeStocks]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -2631,6 +2680,7 @@ const HQDashboard: React.FC<{
         allStores={stores}
         categories={globalConfig.categories}
         standardIngredients={globalConfig.standardIngredients}
+        currencies={globalConfig.currencies}
         onBack={() => setSelectedStore(null)}
         onUpdateStore={onUpdateStore}
         onSaveStoreStocks={onSaveStoreStocks}
@@ -4023,13 +4073,99 @@ if (!myStore) {
           ingredients={ingredients}
           globalConfig={globalConfig}
           onAddSale={async (s) => {
-  setSales(prev => [s, ...prev]);   // immediate UI update
-  try {
-    await addSale(s);
-  } finally {
-    await refreshAll();
-  }
-}}
+            setSales(prev => [s, ...prev]);   // immediate UI update
+            try {
+              await addSale(s);
+
+              // Apply stock consumption to store_ingredient_stock
+              if (s.items && s.items.length > 0) {
+                const standardIngredients = globalConfig.standardIngredients ?? [];
+                const standardSet = new Set(standardIngredients.map(si => si.name));
+                const standardMap = new Map(standardIngredients.map(si => [si.name, si]));
+                const storeMenus = menus.filter(m => m.storeId === s.storeId);
+
+                if (storeMenus.length > 0 && standardIngredients.length > 0) {
+                  const ingredientById = new Map(ingredients.map(i => [i.id, i]));
+                  const categories = globalConfig.categories ?? [];
+                  const categoryUsageMap: Record<string, Record<string, number>> = {};
+
+                  categories.forEach(cat => {
+                    const catMenus = storeMenus.filter(m => m.category === cat);
+                    if (catMenus.length === 0) return;
+
+                    const totals: Record<string, number> = {};
+                    catMenus.forEach(menu => {
+                      menu.recipe.forEach(r => {
+                        const ingDef = ingredientById.get(r.ingredientId);
+                        if (!ingDef || !standardSet.has(ingDef.name)) return;
+                        totals[ingDef.name] = (totals[ingDef.name] || 0) + r.quantity;
+                      });
+                    });
+
+                    const avg: Record<string, number> = {};
+                    Object.keys(totals).forEach(ingName => {
+                      avg[ingName] = totals[ingName] / catMenus.length;
+                    });
+                    if (Object.keys(avg).length > 0) {
+                      categoryUsageMap[cat] = avg;
+                    }
+                  });
+
+                  const usageByIngredient: Record<string, number> = {};
+                  s.items.forEach(item => {
+                    const avgUsage = categoryUsageMap[item.menuId];
+                    if (!avgUsage) return;
+                    const qty = Number(item.quantity || 0);
+                    if (qty <= 0) return;
+                    Object.keys(avgUsage).forEach(ingName => {
+                      usageByIngredient[ingName] = (usageByIngredient[ingName] || 0) + (avgUsage[ingName] * qty);
+                    });
+                  });
+
+                  const storeStockMap = new Map<string, StoreIngredientStock>();
+                  storeStocks
+                    .filter(row => row.storeId === s.storeId)
+                    .forEach(row => {
+                      storeStockMap.set(`${row.ingredientName}::${row.unit}`, row);
+                    });
+
+                  const updates = Object.entries(usageByIngredient)
+                    .filter(([, used]) => used > 0)
+                    .map(([ingName, used]) => {
+                      const standard = standardMap.get(ingName);
+                      if (!standard) return null;
+                      const unit = standard.unit;
+                      const key = `${ingName}::${unit}`;
+                      const row = storeStockMap.get(key);
+                      const current = row?.par ?? standard.par ?? 0;
+                      const reorder = row?.reorder ?? standard.reorder ?? 0;
+                      const next = Math.max(0, current - used);
+                      return {
+                        store_id: s.storeId,
+                        ingredient_name: ingName,
+                        unit,
+                        par: next,
+                        reorder
+                      };
+                    })
+                    .filter(Boolean) as { store_id: string; ingredient_name: string; unit: string; par: number; reorder: number }[];
+
+                  if (updates.length > 0) {
+                    try {
+                      const { error } = await supabase
+                        .from('store_ingredient_stock')
+                        .upsert(updates, { onConflict: 'store_id,ingredient_name,unit' });
+                      if (error) throw error;
+                    } catch (stockErr) {
+                      console.error('Failed to apply stock consumption', stockErr);
+                    }
+                  }
+                }
+              }
+            } finally {
+              await refreshAll();
+            }
+          }}
 
           onUpdateMenu={async (m) => { await saveMenu(m); await refreshAll(); }}
           onCreateMenu={async (m) => { await saveMenu(m); await refreshAll(); }}
