@@ -4052,6 +4052,10 @@ const App = () => {
 
   const [dataLoading, setDataLoading] = useState<boolean>(false);
   const [dataError, setDataError] = useState<string | null>(null);
+  const [globalConfig, setGlobalConfig] = useState<GlobalConfig>(DEFAULT_GLOBAL_CONFIG);
+  const [globalConfigExists, setGlobalConfigExists] = useState<boolean>(false);
+  const [globalConfigStatus, setGlobalConfigStatus] = useState<GlobalConfigLoadState>('loading');
+  const [globalConfigError, setGlobalConfigError] = useState<string | null>(null);
   const [syncingIngredients, setSyncingIngredients] = useState(false);
 
 
@@ -4253,11 +4257,6 @@ const App = () => {
     return () => window.clearInterval(intervalId);
   }, [sessionEmail, refreshAll]);
   
-
-  const [globalConfig, setGlobalConfig] = useState<GlobalConfig>(DEFAULT_GLOBAL_CONFIG);
-  const [globalConfigExists, setGlobalConfigExists] = useState<boolean>(false);
-  const [globalConfigStatus, setGlobalConfigStatus] = useState<GlobalConfigLoadState>('loading');
-  const [globalConfigError, setGlobalConfigError] = useState<string | null>(null);
 
   // Handlers
 
