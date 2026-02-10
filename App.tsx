@@ -394,13 +394,25 @@ async function saveMenu(menu: Menu) {
     return;
   }
 
-  const keepIds = nextRows.map((r) => `'${r.ingredient_id.replace(/'/g, "''")}'`).join(',');
-  const { error: pruneErr } = await supabase
+  const { data: currentRows, error: currentErr } = await supabase
     .from('menu_recipe_items')
-    .delete()
-    .eq('menu_id', menu.id)
-    .not('ingredient_id', 'in', `(${keepIds})`);
-  if (pruneErr) throw pruneErr;
+    .select('ingredient_id')
+    .eq('menu_id', menu.id);
+  if (currentErr) throw currentErr;
+
+  const keepSet = new Set(nextRows.map((r) => r.ingredient_id));
+  const toDelete = (currentRows ?? [])
+    .map((r: any) => String(r.ingredient_id))
+    .filter((ingredientId) => !keepSet.has(ingredientId));
+
+  if (toDelete.length > 0) {
+    const { error: pruneErr } = await supabase
+      .from('menu_recipe_items')
+      .delete()
+      .eq('menu_id', menu.id)
+      .in('ingredient_id', toDelete);
+    if (pruneErr) throw pruneErr;
+  }
 }
 
 async function deleteMenu(menuId: string) {
@@ -1358,7 +1370,8 @@ const RecipeEditor: React.FC<{
                 setLocalIngredients(prev => [...prev, newIngredient]);
             } catch (e) {
                 console.error('Failed to add ingredient', e);
-                setRecipeError('Failed to add ingredient. Please try again.');
+                const message = e instanceof Error ? e.message : 'Failed to add ingredient.';
+                setRecipeError(`Failed to add ingredient: ${message}`);
                 return;
             }
             ingredientId = newIngredient.id;
@@ -1380,10 +1393,11 @@ const RecipeEditor: React.FC<{
     };
 
     const updateRecipeQuantity = (ingId: string, qty: number) => {
+        if (!Number.isFinite(qty)) return;
         const newRecipe = editedMenu.recipe.map(r => {
             if (r.ingredientId === ingId) return { ...r, quantity: qty };
             return r;
-        }).filter(r => r.quantity > 0);
+        });
         setEditedMenu({ ...editedMenu, recipe: newRecipe });
     };
 
@@ -1580,13 +1594,19 @@ const RecipeEditor: React.FC<{
                                 setRecipeError('Some ingredients are missing. Remove and re-add them.');
                                 return;
                             }
+                            const invalidQty = editedMenu.recipe.find(r => !Number.isFinite(r.quantity) || r.quantity <= 0);
+                            if (invalidQty) {
+                                setRecipeError('Quantity must be greater than 0. Use the trash icon to remove an ingredient.');
+                                return;
+                            }
                             setRecipeError(null);
                             setSavingItem(true);
                             try {
                                 await Promise.resolve(onSave(editedMenu));
                             } catch (e) {
                                 console.error('Failed to save menu item', e);
-                                setRecipeError('Failed to save item. Please try again.');
+                                const message = e instanceof Error ? e.message : 'Failed to save item.';
+                                setRecipeError(`Failed to save item: ${message}`);
                             } finally {
                                 setSavingItem(false);
                             }
