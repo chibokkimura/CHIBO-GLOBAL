@@ -64,6 +64,7 @@ export interface Sale {
   items: SaleItem[];
   receiptImage?: string;
   isClosed?: boolean; // New: Flag for Closed/Rest days
+  closedReason?: string; // Optional reason when closed
 }
 
 export interface InventoryLog {
