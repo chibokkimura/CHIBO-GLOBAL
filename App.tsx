@@ -373,7 +373,7 @@ async function addIngredient(ing: Ingredient) {
     id: ing.id,
     name: ing.name,
     unit: ing.unit,
-  }, { onConflict: 'id' });
+  }, { onConflict: 'id', ignoreDuplicates: true });
   if (error) throw error;
 }
 
@@ -1111,10 +1111,6 @@ const RecipeEditor: React.FC<{
     const [localIngredients, setLocalIngredients] = useState<Ingredient[]>(ingredients);
     const [recipeError, setRecipeError] = useState<string | null>(null);
 
-    const standardKeys = useMemo(() => {
-        return new Set(standardIngredients.map(si => `${si.name.toLowerCase()}::${si.unit.toLowerCase()}`));
-    }, [standardIngredients]);
-
     useEffect(() => {
         setLocalIngredients(prev => {
             if (prev.length === 0) return ingredients;
@@ -1154,12 +1150,6 @@ const RecipeEditor: React.FC<{
         if (qty <= 0) return;
         setRecipeError(null);
 
-        const key = `${name.toLowerCase()}::${unit.toLowerCase()}`;
-        if (!standardKeys.has(key)) {
-            setRecipeError('Only standard ingredients can be used. Ask HQ to add it in Global Settings.');
-            return;
-        }
-
         const ingredientPool = [...localIngredients, ...ingredients];
         // Check if ingredient exists globally (by name and unit)
         let existingIng = ingredientPool.find(
@@ -1180,7 +1170,7 @@ const RecipeEditor: React.FC<{
                 setLocalIngredients(prev => [...prev, newIngredient]);
             } catch (e) {
                 console.error('Failed to add ingredient', e);
-                setRecipeError('Ingredient could not be added. Ask HQ to add it in Global Settings.');
+                setRecipeError('재료를 추가하지 못했습니다. 잠시 후 다시 시도해 주세요.');
                 return;
             }
             ingredientId = newIngredient.id;
@@ -1339,7 +1329,7 @@ const RecipeEditor: React.FC<{
                                 </button>
                             </div>
                             <p className="text-[10px] text-gray-400 mt-2">
-                                * Only standard ingredients can be used. Add/edit the list in Global Settings.
+                                * 표준 재료는 드롭다운에서 선택할 수 있고, 사용자 재료도 자유롭게 추가/삭제할 수 있습니다.
                             </p>
                         </div>
 
