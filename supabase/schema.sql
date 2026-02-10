@@ -542,3 +542,14 @@ using (
       and s.store_id = public.current_store_id()
   )
 );
+
+-- =========================
+-- Indexes (performance)
+-- =========================
+
+create index if not exists sales_store_date_idx on public.sales (store_id, date);
+create index if not exists sale_items_sale_id_idx on public.sale_items (sale_id);
+create index if not exists menu_recipe_items_menu_id_idx on public.menu_recipe_items (menu_id);
+create index if not exists menus_store_id_idx on public.menus (store_id);
+create index if not exists employees_store_id_idx on public.employees (store_id);
+create index if not exists store_ingredient_stock_store_id_idx on public.store_ingredient_stock (store_id);
