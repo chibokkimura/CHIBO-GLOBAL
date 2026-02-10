@@ -66,9 +66,9 @@ const RECEIPT_SIGNED_URL_TTL_SEC = 60 * 60 * 24;
 const formatLookbackLabel = (days: number) => {
   if (days >= 365 && days % 365 === 0) {
     const years = Math.max(1, Math.round(days / 365));
-    return `최근 ${years}년`;
+    return `Last ${years} year${years > 1 ? 's' : ''}`;
   }
-  return `최근 ${days}일`;
+  return `Last ${days} days`;
 };
 
 async function getMyAppUser(): Promise<AppUserRow | null> {
@@ -1273,7 +1273,7 @@ const RecipeEditor: React.FC<{
                 setLocalIngredients(prev => [...prev, newIngredient]);
             } catch (e) {
                 console.error('Failed to add ingredient', e);
-                setRecipeError('재료를 추가하지 못했습니다. 잠시 후 다시 시도해 주세요.');
+                setRecipeError('Failed to add ingredient. Please try again.');
                 return;
             }
             ingredientId = newIngredient.id;
@@ -1432,7 +1432,7 @@ const RecipeEditor: React.FC<{
                                 </button>
                             </div>
                             <p className="text-[10px] text-gray-400 mt-2">
-                                * 표준 재료는 드롭다운에서 선택할 수 있고, 사용자 재료도 자유롭게 추가/삭제할 수 있습니다.
+                                * Standard ingredients can be selected from the dropdown, and custom ingredients can be added/removed freely.
                             </p>
                         </div>
 
@@ -2686,13 +2686,13 @@ const HQStoreDetail: React.FC<{
                         <ClipboardList className="w-5 h-5"/> Sales History
                     </h2>
                     <div className="flex items-center gap-3">
-                        <span className="text-xs text-gray-400">{salesLookbackLabel} 데이터</span>
+                        <span className="text-xs text-gray-400">Showing {salesLookbackLabel} data</span>
                         <button
                             type="button"
                             onClick={onLoadMoreSales}
                             className="text-xs font-bold px-3 py-1 rounded-full border border-gray-200 hover:bg-gray-50 transition"
                         >
-                            더 보기
+                            Load more
                         </button>
                     </div>
                 </div>
