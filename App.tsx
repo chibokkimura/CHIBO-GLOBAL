@@ -302,7 +302,7 @@ async function loadSales(daysBack?: number): Promise<Sale[]> {
   const formatDateOnly = (d: Date) => d.toISOString().split('T')[0];
   let query = supabase
     .from('sales')
-    .select('id,store_id,date,total_amount,is_closed')
+    .select('id,store_id,date,total_amount,is_closed,closed_reason')
     .order('date', { ascending: false });
   if (daysBack && daysBack > 0) {
     const since = formatDateOnly(new Date(Date.now() - daysBack * 86400000));
@@ -336,6 +336,7 @@ async function loadSales(daysBack?: number): Promise<Sale[]> {
     totalAmount: Number(s.total_amount),
     items: itemsBySale[s.id] ?? [],
     isClosed: Boolean(s.is_closed),
+    closedReason: s.closed_reason ?? undefined,
   }));
 }
 
@@ -453,6 +454,7 @@ async function addSale(sale: Sale) {
     total_amount: sale.totalAmount,
     receipt_image: receiptPath,
     is_closed: sale.isClosed ?? false,
+    closed_reason: sale.closedReason ?? null,
   });
   if (sErr) throw sErr;
 
@@ -909,6 +911,7 @@ const SalesReporter: React.FC<{
   const [receiptImage, setReceiptImage] = useState<string | null>(null);
   const [manualRevenue, setManualRevenue] = useState<string>('');
   const [comment, setComment] = useState<string>('');
+  const [closedReason, setClosedReason] = useState<string>('');
 
   useEffect(() => {
     if (initialDate) {
@@ -921,7 +924,16 @@ const SalesReporter: React.FC<{
     setReceiptImage(null);
     setManualRevenue('');
     setComment('');
+    setClosedReason('');
   }, [initialDate]);
+
+  useEffect(() => {
+    if (isClosed) {
+      setReceiptImage(null);
+      setManualRevenue('');
+      setItems([]);
+    }
+  }, [isClosed]);
 
   const normalizeNumberInput = (value: string) => {
     const digits = value.replace(/[^\d]/g, '');
@@ -970,7 +982,9 @@ const SalesReporter: React.FC<{
   };
 
   const handleSave = () => {
-    if (!receiptImage) return;
+    if (!isClosed && !receiptImage) return;
+    const reason = closedReason.trim();
+    if (isClosed && !reason) return;
     const totalAmount = isClosed ? 0 : (parseFloat(manualRevenue) || 0);
     const newSale: Sale = {
       id: `SALE_${Date.now()}`,
@@ -979,10 +993,13 @@ const SalesReporter: React.FC<{
       totalAmount,
       items: isClosed ? [] : items,
       isClosed,
-      receiptImage: receiptImage || undefined
+      receiptImage: isClosed ? undefined : receiptImage || undefined,
+      closedReason: isClosed ? reason : undefined,
     };
     onSave(newSale);
   };
+
+  const canSubmit = isClosed ? closedReason.trim().length > 0 : Boolean(receiptImage);
 
   return (
     <div className="max-w-2xl mx-auto">
@@ -1011,6 +1028,22 @@ const SalesReporter: React.FC<{
             />
             <label htmlFor="isClosed" className="font-bold text-gray-700 select-none cursor-pointer">Store was closed (Rest Day)</label>
         </div>
+
+        {isClosed && (
+            <div>
+              <label className="block text-sm font-bold text-gray-700 mb-2">Reason for closure</label>
+              <textarea
+                value={closedReason}
+                onChange={e => setClosedReason(e.target.value)}
+                placeholder="Reason for closure (e.g. maintenance)"
+                rows={3}
+                className="w-full p-4 bg-gray-50 rounded-xl border border-gray-200 focus:border-black outline-none resize-none"
+              />
+              {closedReason.trim() === '' && (
+                <div className="mt-2 text-xs text-red-600">Reason is required to submit.</div>
+              )}
+            </div>
+        )}
 
         {!isClosed && (
             <div>
@@ -1073,31 +1106,33 @@ const SalesReporter: React.FC<{
             </div>
         )}
 
-        <div className="border-2 border-dashed border-gray-300 rounded-xl p-6 text-center">
-            <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" id="receipt-upload" />
-            <label htmlFor="receipt-upload" className="cursor-pointer flex flex-col items-center gap-2 hover:opacity-70 transition">
-                <div className="w-12 h-12 bg-gray-100 rounded-full flex items-center justify-center">
-                    <Camera className="w-6 h-6 text-gray-500" />
-                </div>
-                <div>
-                    <div className="text-sm font-bold text-gray-700">Upload Receipt / Daily Report</div>
-                    <div className="text-xs text-gray-400">Click to browse (JPG, PNG)</div>
-                </div>
-            </label>
-            {receiptImage && (
-                <div className="mt-4 relative inline-block group">
-                    <img src={receiptImage} alt="Receipt Preview" className="h-48 rounded-lg border shadow-sm object-contain bg-gray-50" />
-                    <button onClick={() => setReceiptImage(null)} className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-1 shadow-md hover:bg-red-600 transition"><X className="w-4 h-4" /></button>
-                </div>
-            )}
-        </div>
+        {!isClosed && (
+          <div className="border-2 border-dashed border-gray-300 rounded-xl p-6 text-center">
+              <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" id="receipt-upload" />
+              <label htmlFor="receipt-upload" className="cursor-pointer flex flex-col items-center gap-2 hover:opacity-70 transition">
+                  <div className="w-12 h-12 bg-gray-100 rounded-full flex items-center justify-center">
+                      <Camera className="w-6 h-6 text-gray-500" />
+                  </div>
+                  <div>
+                      <div className="text-sm font-bold text-gray-700">Upload Receipt / Daily Report</div>
+                      <div className="text-xs text-gray-400">Click to browse (JPG, PNG)</div>
+                  </div>
+              </label>
+              {receiptImage && (
+                  <div className="mt-4 relative inline-block group">
+                      <img src={receiptImage} alt="Receipt Preview" className="h-48 rounded-lg border shadow-sm object-contain bg-gray-50" />
+                      <button onClick={() => setReceiptImage(null)} className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-1 shadow-md hover:bg-red-600 transition"><X className="w-4 h-4" /></button>
+                  </div>
+              )}
+          </div>
+        )}
 
         <div className="flex gap-4 pt-4">
             <button onClick={onCancel} className="flex-1 py-3 font-bold text-gray-500 hover:bg-gray-50 rounded-xl">Cancel</button>
             <button
               onClick={handleSave}
-              disabled={!receiptImage}
-              className={`flex-1 py-3 bg-black text-white font-bold rounded-xl shadow-lg ${receiptImage ? 'hover:bg-gray-800' : 'opacity-50 cursor-not-allowed'}`}
+              disabled={!canSubmit}
+              className={`flex-1 py-3 bg-black text-white font-bold rounded-xl shadow-lg ${canSubmit ? 'hover:bg-gray-800' : 'opacity-50 cursor-not-allowed'}`}
             >
               Submit Report
             </button>
@@ -2713,6 +2748,11 @@ const HQStoreDetail: React.FC<{
                                     {expandedSales.has(sale.id) && (
                                         <tr>
                                             <td colSpan={5} className="p-4 bg-gray-50">
+                                                {sale.isClosed && sale.closedReason && (
+                                                    <div className="mb-3 text-xs font-semibold text-gray-600">
+                                                        Closure reason: {sale.closedReason}
+                                                    </div>
+                                                )}
                                                 <div className="text-xs font-bold text-gray-500 uppercase mb-2">Category Quantities</div>
                                                 {sale.items?.length ? (
                                                     <div className="flex flex-wrap gap-2">
