@@ -335,18 +335,10 @@ using (true);
 
 drop policy if exists "ingredients_write_hq" on public.ingredients;
 drop policy if exists "ingredients_write_hq_or_standard" on public.ingredients;
-create policy "ingredients_write_hq_or_standard"
+drop policy if exists "ingredients_insert_authenticated" on public.ingredients;
+create policy "ingredients_insert_authenticated"
 on public.ingredients for insert
-with check (
-  public.is_hq() or exists (
-    select 1
-    from public.global_config g,
-      jsonb_array_elements(g.config->'standardIngredients') elem
-    where g.id = 'global'
-      and lower(elem->>'name') = lower(ingredients.name)
-      and lower(elem->>'unit') = lower(ingredients.unit)
-  )
-);
+with check (auth.role() = 'authenticated');
 
 drop policy if exists "ingredients_update_hq" on public.ingredients;
 create policy "ingredients_update_hq"
