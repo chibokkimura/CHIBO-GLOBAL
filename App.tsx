@@ -277,7 +277,10 @@ async function loadMenus(): Promise<Menu[]> {
 }
 
 async function loadSales(): Promise<Sale[]> {
-  const { data: salesData, error: salesErr } = await supabase.from('sales').select('*').order('date', { ascending: false });
+  const { data: salesData, error: salesErr } = await supabase
+    .from('sales')
+    .select('id,store_id,date,total_amount,is_closed')
+    .order('date', { ascending: false });
   if (salesErr) throw salesErr;
 
   const { data: itemData, error: itemErr } = await supabase.from('sale_items').select('*');
@@ -296,9 +299,18 @@ async function loadSales(): Promise<Sale[]> {
     date: s.date,
     totalAmount: Number(s.total_amount),
     items: itemsBySale[s.id] ?? [],
-    receiptImage: s.receipt_image ?? undefined,
     isClosed: Boolean(s.is_closed),
   }));
+}
+
+async function loadReceiptImage(saleId: string): Promise<string | null> {
+  const { data, error } = await supabase
+    .from('sales')
+    .select('receipt_image')
+    .eq('id', saleId)
+    .single();
+  if (error) throw error;
+  return data?.receipt_image ?? null;
 }
 
 async function saveMenu(menu: Menu) {
@@ -392,6 +404,50 @@ async function addSale(sale: Sale) {
 
 // --- Helper Functions ---
 const formatDate = (date: Date) => date.toISOString().split('T')[0];
+
+type ImageResizeOptions = {
+  maxWidth: number;
+  maxHeight: number;
+  quality?: number;
+  mimeType?: string;
+};
+
+const readFileAsDataUrl = (file: File) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result as string);
+    reader.onerror = () => reject(new Error('Failed to read file'));
+    reader.readAsDataURL(file);
+  });
+
+const loadImage = (src: string) =>
+  new Promise<HTMLImageElement>((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('Failed to load image'));
+    img.src = src;
+  });
+
+const resizeImageToDataUrl = async (file: File, opts: ImageResizeOptions) => {
+  const { maxWidth, maxHeight, quality = 0.82, mimeType = 'image/jpeg' } = opts;
+  try {
+    const original = await readFileAsDataUrl(file);
+    const img = await loadImage(original);
+    const scale = Math.min(maxWidth / img.width, maxHeight / img.height, 1);
+    const width = Math.round(img.width * scale);
+    const height = Math.round(img.height * scale);
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return original;
+    ctx.drawImage(img, 0, 0, width, height);
+    return canvas.toDataURL(mimeType, quality);
+  } catch (e) {
+    console.error('Image resize failed, using original', e);
+    return readFileAsDataUrl(file);
+  }
+};
 
 const getMissingDates = (sales: Sale[], storeId: string, daysBack = 7) => {
   const dates: string[] = [];
@@ -835,15 +891,12 @@ const SalesReporter: React.FC<{
     });
   };
 
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-            setReceiptImage(reader.result as string);
-        };
-        reader.readAsDataURL(file);
-    }
+    if (!file) return;
+    const resized = await resizeImageToDataUrl(file, { maxWidth: 1800, maxHeight: 1800, quality: 0.85 });
+    setReceiptImage(resized);
+    e.currentTarget.value = '';
   };
 
   const handleSave = () => {
@@ -1069,15 +1122,12 @@ const RecipeEditor: React.FC<{
         });
     }, [ingredients]);
 
-    const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
-        if (file) {
-            const reader = new FileReader();
-            reader.onloadend = () => {
-                setEditedMenu({ ...editedMenu, imageUrl: reader.result as string });
-            };
-            reader.readAsDataURL(file);
-        }
+        if (!file) return;
+        const resized = await resizeImageToDataUrl(file, { maxWidth: 1400, maxHeight: 1400, quality: 0.82 });
+        setEditedMenu({ ...editedMenu, imageUrl: resized });
+        e.currentTarget.value = '';
     };
 
     const hashString = (value: string) => {
@@ -1354,15 +1404,12 @@ const StaffEditor: React.FC<{
 }> = ({ employee, positions, onSave, onBack }) => {
     const [editedEmp, setEditedEmp] = useState(employee);
     
-    const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
-        if (file) {
-            const reader = new FileReader();
-            reader.onloadend = () => {
-                setEditedEmp({ ...editedEmp, imageUrl: reader.result as string });
-            };
-            reader.readAsDataURL(file);
-        }
+        if (!file) return;
+        const resized = await resizeImageToDataUrl(file, { maxWidth: 640, maxHeight: 640, quality: 0.82 });
+        setEditedEmp({ ...editedEmp, imageUrl: resized });
+        e.currentTarget.value = '';
     };
 
     return (
@@ -1561,6 +1608,9 @@ const HQStoreDetail: React.FC<{
     );
     const [editingMenu, setEditingMenu] = useState<Menu | null>(null);
     const [viewingReceipt, setViewingReceipt] = useState<string | null>(null);
+    const receiptCacheRef = useRef<Record<string, string>>({});
+    const [receiptLoadingId, setReceiptLoadingId] = useState<string | null>(null);
+    const [receiptError, setReceiptError] = useState<string | null>(null);
     const missingDates = useMemo(() => getMissingDates(sales, store.id), [sales, store.id]);
     const missingDatesAll = useMemo(() => getMissingDates(sales, store.id, 120), [sales, store.id]);
     const missingDateSet = useMemo(() => new Set(missingDatesAll), [missingDatesAll]);
@@ -1597,6 +1647,30 @@ const HQStoreDetail: React.FC<{
     const [moveError, setMoveError] = useState<string | null>(null);
     const [unlinkBusy, setUnlinkBusy] = useState<string | null>(null);
     const [unlinkError, setUnlinkError] = useState<string | null>(null);
+
+    const openReceipt = async (saleId: string) => {
+        setReceiptError(null);
+        const cached = receiptCacheRef.current[saleId];
+        if (cached) {
+            setViewingReceipt(cached);
+            return;
+        }
+        setReceiptLoadingId(saleId);
+        try {
+            const src = await loadReceiptImage(saleId);
+            if (!src) {
+                setReceiptError('Receipt image not found.');
+                return;
+            }
+            receiptCacheRef.current[saleId] = src;
+            setViewingReceipt(src);
+        } catch (e) {
+            console.error('Failed to load receipt', e);
+            setReceiptError('Failed to load receipt image.');
+        } finally {
+            setReceiptLoadingId(null);
+        }
+    };
 
     useEffect(() => {
         setRoyaltyDraft(String(store.royaltyPercentage ?? 0));
@@ -2549,15 +2623,16 @@ const HQStoreDetail: React.FC<{
                                             </button>
                                         </td>
                                         <td className="p-4 text-center">
-                                            {sale.receiptImage ? (
-                                                <button 
-                                                    onClick={() => setViewingReceipt(sale.receiptImage!)}
-                                                    className="inline-flex items-center gap-1 text-xs font-bold text-blue-600 hover:bg-blue-50 px-3 py-1 rounded-full transition"
-                                                >
-                                                    <ImageIcon className="w-3 h-3"/> View Receipt
-                                                </button>
-                                            ) : (
+                                            {sale.isClosed ? (
                                                 <span className="text-gray-300 text-xs italic">No Image</span>
+                                            ) : (
+                                                <button 
+                                                    onClick={() => openReceipt(sale.id)}
+                                                    disabled={receiptLoadingId === sale.id}
+                                                    className="inline-flex items-center gap-1 text-xs font-bold text-blue-600 hover:bg-blue-50 px-3 py-1 rounded-full transition disabled:opacity-60"
+                                                >
+                                                    <ImageIcon className="w-3 h-3"/> {receiptLoadingId === sale.id ? 'Loading...' : 'View Receipt'}
+                                                </button>
                                             )}
                                         </td>
                                     </tr>
@@ -2605,6 +2680,9 @@ const HQStoreDetail: React.FC<{
                         </tbody>
                     </table>
                 </div>
+                {receiptError && (
+                    <div className="mt-3 text-xs text-red-600">{receiptError}</div>
+                )}
             </div>
 
             <MenuManager 
