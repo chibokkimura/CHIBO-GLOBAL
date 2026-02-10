@@ -364,16 +364,43 @@ async function saveMenu(menu: Menu) {
   });
   if (mErr) throw mErr;
 
-  await supabase.from('menu_recipe_items').delete().eq('menu_id', menu.id);
-  if (menu.recipe?.length) {
-    const rows = menu.recipe.map(r => ({
-      menu_id: menu.id,
-      ingredient_id: r.ingredientId,
-      quantity: r.quantity,
-    }));
-    const { error } = await supabase.from('menu_recipe_items').insert(rows);
-    if (error) throw error;
+  const mergedRecipe = new Map<string, number>();
+  for (const row of menu.recipe ?? []) {
+    if (!row.ingredientId) continue;
+    const qty = Number(row.quantity);
+    if (!Number.isFinite(qty) || qty <= 0) continue;
+    mergedRecipe.set(row.ingredientId, (mergedRecipe.get(row.ingredientId) ?? 0) + qty);
   }
+
+  const nextRows = Array.from(mergedRecipe.entries()).map(([ingredientId, quantity]) => ({
+    menu_id: menu.id,
+    ingredient_id: ingredientId,
+    quantity,
+  }));
+
+  if (nextRows.length > 0) {
+    const { error: upsertRecipeErr } = await supabase
+      .from('menu_recipe_items')
+      .upsert(nextRows, { onConflict: 'menu_id,ingredient_id' });
+    if (upsertRecipeErr) throw upsertRecipeErr;
+  }
+
+  if (nextRows.length === 0) {
+    const { error: clearErr } = await supabase
+      .from('menu_recipe_items')
+      .delete()
+      .eq('menu_id', menu.id);
+    if (clearErr) throw clearErr;
+    return;
+  }
+
+  const keepIds = nextRows.map((r) => `'${r.ingredient_id.replace(/'/g, "''")}'`).join(',');
+  const { error: pruneErr } = await supabase
+    .from('menu_recipe_items')
+    .delete()
+    .eq('menu_id', menu.id)
+    .not('ingredient_id', 'in', `(${keepIds})`);
+  if (pruneErr) throw pruneErr;
 }
 
 async function deleteMenu(menuId: string) {
@@ -533,6 +560,47 @@ const getMissingDates = (sales: Sale[], storeId: string, daysBack = 7) => {
     if (!hasReport) dates.push(dateStr);
   }
   return dates;
+};
+
+const ImageLightbox: React.FC<{
+  src: string | null;
+  alt: string;
+  onClose: () => void;
+}> = ({ src, alt, onClose }) => {
+  useEffect(() => {
+    if (!src) return;
+    const prevOverflow = document.body.style.overflow;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    document.body.style.overflow = 'hidden';
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [src, onClose]);
+
+  if (!src) return null;
+
+  return (
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 backdrop-blur-sm p-4"
+      onClick={onClose}
+    >
+      <div className="relative max-w-6xl max-h-full" onClick={(e) => e.stopPropagation()}>
+        <img src={src} alt={alt} className="max-w-full max-h-[90vh] rounded-lg shadow-2xl object-contain" />
+        <button
+          type="button"
+          onClick={onClose}
+          className="absolute -top-4 -right-4 bg-white text-black rounded-full p-2 hover:bg-gray-200 transition shadow-lg"
+          aria-label="Close image preview"
+        >
+          <X className="w-6 h-6" />
+        </button>
+      </div>
+    </div>
+  );
 };
 
 // FX rates (currency per USD). Live rates fetched in app; fallback used if unavailable.
@@ -1149,6 +1217,8 @@ const MenuManager: React.FC<{
   onCreate: (menu: Menu) => void;
   onDelete: (id: string) => void;
 }> = ({ store, menus, onEdit, onCreate, onDelete }) => {
+  const [previewImage, setPreviewImage] = useState<{ src: string; alt: string } | null>(null);
+
   return (
     <div>
       <div className="flex justify-between items-center mb-6">
@@ -1172,7 +1242,14 @@ const MenuManager: React.FC<{
           <div key={menu.id} className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 hover:shadow-md transition group">
              <div className="aspect-video bg-gray-100 rounded-lg mb-4 overflow-hidden relative">
                 {menu.imageUrl ? (
-                    <img src={menu.imageUrl} className="w-full h-full object-cover" alt={menu.name} />
+                    <button
+                      type="button"
+                      onClick={() => setPreviewImage({ src: menu.imageUrl!, alt: menu.name })}
+                      className="w-full h-full cursor-zoom-in"
+                      aria-label={`Preview image: ${menu.name}`}
+                    >
+                      <img src={menu.imageUrl} className="w-full h-full object-cover" alt={menu.name} />
+                    </button>
                 ) : (
                     <div className="flex items-center justify-center h-full text-gray-300"><ImageIcon className="w-8 h-8"/></div>
                 )}
@@ -1194,6 +1271,11 @@ const MenuManager: React.FC<{
           </div>
         ))}
       </div>
+      <ImageLightbox
+        src={previewImage?.src ?? null}
+        alt={previewImage?.alt ?? 'Menu image'}
+        onClose={() => setPreviewImage(null)}
+      />
     </div>
   );
 };
@@ -1203,8 +1285,8 @@ const RecipeEditor: React.FC<{
     ingredients: Ingredient[];
     categories: string[];
     standardIngredients: { name: string; unit: string; par?: number; reorder?: number }[];
-    onAddIngredient: (ing: Ingredient) => void;
-    onSave: (menu: Menu) => void;
+    onAddIngredient: (ing: Ingredient) => Promise<void> | void;
+    onSave: (menu: Menu) => Promise<void> | void;
     onBack: () => void;
 }> = ({ menu, ingredients, categories, standardIngredients, onAddIngredient, onSave, onBack }) => {
     const [editedMenu, setEditedMenu] = useState(menu);
@@ -1213,6 +1295,9 @@ const RecipeEditor: React.FC<{
     const [newIngQty, setNewIngQty] = useState('');
     const [localIngredients, setLocalIngredients] = useState<Ingredient[]>(ingredients);
     const [recipeError, setRecipeError] = useState<string | null>(null);
+    const [savingItem, setSavingItem] = useState(false);
+    const [previewMenuImage, setPreviewMenuImage] = useState<string | null>(null);
+    const imageInputRef = useRef<HTMLInputElement | null>(null);
 
     useEffect(() => {
         setLocalIngredients(prev => {
@@ -1322,22 +1407,37 @@ const RecipeEditor: React.FC<{
                     <div className="mb-6">
                         <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Item Image</label>
                         <div className="border-2 border-dashed border-gray-300 rounded-xl p-6 text-center relative bg-gray-50 hover:bg-gray-100 transition group">
-                            <input type="file" accept="image/*" onChange={handleImageUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
+                            <input ref={imageInputRef} type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
                             {editedMenu.imageUrl ? (
                                 <div className="relative h-64 w-full">
-                                    <img src={editedMenu.imageUrl} alt="Menu Preview" className="h-full w-full object-contain rounded-lg" />
-                                    <div className="absolute inset-0 flex items-center justify-center bg-black/50 opacity-0 group-hover:opacity-100 transition text-white font-bold pointer-events-none">
-                                        Click to Change Image
-                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={() => setPreviewMenuImage(editedMenu.imageUrl ?? null)}
+                                        className="h-full w-full cursor-zoom-in"
+                                        aria-label="Preview menu image"
+                                    >
+                                        <img src={editedMenu.imageUrl} alt="Menu Preview" className="h-full w-full object-contain rounded-lg" />
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => imageInputRef.current?.click()}
+                                        className="absolute top-3 right-3 px-3 py-1.5 rounded-lg bg-black/80 text-white text-xs font-bold hover:bg-black"
+                                    >
+                                        Change Image
+                                    </button>
                                 </div>
                             ) : (
-                                <div className="flex flex-col items-center py-8">
+                                <button
+                                    type="button"
+                                    onClick={() => imageInputRef.current?.click()}
+                                    className="w-full flex flex-col items-center py-8"
+                                >
                                     <div className="w-12 h-12 bg-white rounded-full flex items-center justify-center shadow-sm mb-3">
                                         <Camera className="w-6 h-6 text-gray-400" />
                                     </div>
                                     <span className="text-sm font-bold text-gray-600">Upload Menu Photo</span>
                                     <span className="text-xs text-gray-400 mt-1">Supports JPG, PNG</span>
-                                </div>
+                                </button>
                             )}
                         </div>
                     </div>
@@ -1473,20 +1573,36 @@ const RecipeEditor: React.FC<{
                 <div className="p-4 border-t bg-gray-50 flex justify-end gap-3">
                     <button onClick={onBack} className="px-6 py-3 font-bold text-gray-500 hover:bg-gray-100 rounded-xl transition">Cancel</button>
                     <button
-                        onClick={() => {
+                        onClick={async () => {
+                            if (savingItem) return;
                             const missing = editedMenu.recipe.filter(r => !localIngredients.find(i => i.id === r.ingredientId));
                             if (missing.length > 0) {
                                 setRecipeError('Some ingredients are missing. Remove and re-add them.');
                                 return;
                             }
-                            onSave(editedMenu);
+                            setRecipeError(null);
+                            setSavingItem(true);
+                            try {
+                                await Promise.resolve(onSave(editedMenu));
+                            } catch (e) {
+                                console.error('Failed to save menu item', e);
+                                setRecipeError('Failed to save item. Please try again.');
+                            } finally {
+                                setSavingItem(false);
+                            }
                         }}
-                        className="bg-black text-white px-8 py-3 rounded-xl font-bold hover:bg-gray-800 shadow-lg flex items-center gap-2"
+                        disabled={savingItem}
+                        className="bg-black text-white px-8 py-3 rounded-xl font-bold hover:bg-gray-800 shadow-lg flex items-center gap-2 disabled:opacity-60"
                     >
-                        <Save className="w-4 h-4" /> Save Item
+                        <Save className="w-4 h-4" /> {savingItem ? 'Saving...' : 'Save Item'}
                     </button>
                 </div>
             </div>
+            <ImageLightbox
+                src={previewMenuImage}
+                alt={`${editedMenu.name || 'Menu'} image`}
+                onClose={() => setPreviewMenuImage(null)}
+            />
         </div>
     );
 };
@@ -1580,6 +1696,7 @@ const EmployeeManager: React.FC<{
     const [editingEmp, setEditingEmp] = useState<Employee | null>(null);
     const [empError, setEmpError] = useState<string | null>(null);
     const [empSaving, setEmpSaving] = useState(false);
+    const [previewImage, setPreviewImage] = useState<{ src: string; alt: string } | null>(null);
 
     const handleSave = async (emp: Employee) => {
         setEmpSaving(true);
@@ -1645,7 +1762,14 @@ const EmployeeManager: React.FC<{
                         <div className="flex items-center gap-4">
                             <div className="w-16 h-16 bg-gray-200 rounded-full overflow-hidden">
                                 {emp.imageUrl ? (
-                                    <img src={emp.imageUrl} className="w-full h-full object-cover" alt="" />
+                                    <button
+                                        type="button"
+                                        onClick={() => setPreviewImage({ src: emp.imageUrl!, alt: `${emp.name} profile photo` })}
+                                        className="w-full h-full cursor-zoom-in"
+                                        aria-label={`Preview photo: ${emp.name}`}
+                                    >
+                                        <img src={emp.imageUrl} className="w-full h-full object-cover" alt={`${emp.name} profile`} />
+                                    </button>
                                 ) : (
                                     <div className="w-full h-full flex items-center justify-center bg-gray-100 text-gray-400">
                                         <UserIcon className="w-8 h-8" />
@@ -1667,6 +1791,11 @@ const EmployeeManager: React.FC<{
                 ))}
             </div>
             {empError && <div className="mt-3 text-sm text-red-600">{empError}</div>}
+            <ImageLightbox
+                src={previewImage?.src ?? null}
+                alt={previewImage?.alt ?? 'Staff image'}
+                onClose={() => setPreviewImage(null)}
+            />
         </div>
     );
 };
@@ -1694,7 +1823,7 @@ const HQStoreDetail: React.FC<{
     onCreateMenu: (menu: Menu) => void;
     onDeleteMenu: (id: string) => void;
     onUpdateEmployees: (storeId: string, employees: Employee[]) => void;
-    onAddIngredient: (ing: Ingredient) => void;
+    onAddIngredient: (ing: Ingredient) => Promise<void> | void;
 }> = ({ store, sales, menus, employees, ingredients, storeStocks, allStores, categories, standardIngredients, currencies, positions, salesLookbackLabel, onLoadMoreSales, onBack, onUpdateStore, onSaveStoreStocks, onMergeStores, onDeleteStore, onUpdateMenu, onCreateMenu, onDeleteMenu, onUpdateEmployees, onAddIngredient }) => {
     const storeMenus = menus.filter(m => m.storeId === store.id);
     const storeEmployees = employees.filter(e => e.storeId === store.id);
@@ -2324,8 +2453,8 @@ const HQStoreDetail: React.FC<{
                   categories={categories}
                   standardIngredients={standardIngredients}
                   onAddIngredient={onAddIngredient}
-                  onSave={(updatedMenu) => {
-                    onUpdateMenu(updatedMenu);
+                  onSave={async (updatedMenu) => {
+                    await Promise.resolve(onUpdateMenu(updatedMenu));
                     setEditingMenu(null);
                   }}
                   onBack={() => setEditingMenu(null)}
@@ -2982,7 +3111,7 @@ const HQDashboard: React.FC<{
   onCreateMenu: (menu: Menu) => void;
   onDeleteMenu: (id: string) => void;
   onUpdateEmployees: (storeId: string, employees: Employee[]) => void;
-  onAddIngredient: (ing: Ingredient) => void;
+  onAddIngredient: (ing: Ingredient) => Promise<void> | void;
 }> = ({ user, onLogout, stores, sales, menus, employees, ingredients, storeStocks, globalConfig, salesLookbackLabel, onLoadMoreSales, onUpdateGlobalConfig, onUpdateStore, onSaveStoreStocks, onDeleteStore, onUpdateMenu, onCreateMenu, onDeleteMenu, onUpdateEmployees, onAddIngredient }) => {
   const [selectedStore, setSelectedStore] = useState<Store | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -3388,7 +3517,7 @@ const StoreDashboard: React.FC<{
   onCreateMenu: (menu: Menu) => void;
   onDeleteMenu: (id: string) => void;
   onUpdateEmployees: (employees: Employee[]) => void;
-  onAddIngredient: (ing: Ingredient) => void;
+  onAddIngredient: (ing: Ingredient) => Promise<void> | void;
 }> = ({ user, store, onLogout, sales, menus, employees, ingredients, globalConfig, onAddSale, onUpdateMenu, onCreateMenu, onDeleteMenu, onUpdateEmployees, onAddIngredient }) => {
     const [view, setView] = useState<'dashboard' | 'report' | 'menu' | 'staff'>('dashboard');
     const [reportDate, setReportDate] = useState<string | null>(null);
@@ -3569,8 +3698,8 @@ const StoreDashboard: React.FC<{
                     categories={globalConfig.categories}
                     standardIngredients={globalConfig.standardIngredients}
                     onAddIngredient={onAddIngredient}
-                    onSave={(updatedMenu) => {
-                        onUpdateMenu(updatedMenu);
+                    onSave={async (updatedMenu) => {
+                        await Promise.resolve(onUpdateMenu(updatedMenu));
                         setEditingMenu(null);
                     }}
                     onBack={() => setEditingMenu(null)}
@@ -4451,6 +4580,7 @@ const App = () => {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'sales' }, () => schedulePartialRefresh(['sales']))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'sale_items' }, () => schedulePartialRefresh(['sales']))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'menus' }, () => schedulePartialRefresh(['menus']))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'menu_recipe_items' }, () => schedulePartialRefresh(['menus']))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'employees' }, () => schedulePartialRefresh(['employees']))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'ingredients' }, () => schedulePartialRefresh(['ingredients']))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'store_ingredient_stock' }, () => schedulePartialRefresh(['storeStocks']))
