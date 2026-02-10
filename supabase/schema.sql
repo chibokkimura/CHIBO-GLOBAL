@@ -77,7 +77,8 @@ create table if not exists public.sales (
   date text not null,
   total_amount numeric not null,
   receipt_image text null,
-  is_closed boolean not null default false
+  is_closed boolean not null default false,
+  closed_reason text null
 );
 
 create table if not exists public.sale_items (
@@ -553,3 +554,50 @@ create index if not exists menu_recipe_items_menu_id_idx on public.menu_recipe_i
 create index if not exists menus_store_id_idx on public.menus (store_id);
 create index if not exists employees_store_id_idx on public.employees (store_id);
 create index if not exists store_ingredient_stock_store_id_idx on public.store_ingredient_stock (store_id);
+
+-- =========================
+-- Sales Receipt Retention
+-- =========================
+
+alter table public.sales
+  add column if not exists closed_reason text null;
+
+create or replace function public.purge_old_receipts(p_days int default 90)
+returns integer
+language plpgsql
+security definer
+set search_path = public, storage
+as $$
+declare
+  v_paths text[];
+  v_deleted int := 0;
+begin
+  select array_agg(receipt_image)
+  into v_paths
+  from public.sales
+  where receipt_image is not null
+    and receipt_image not like 'data:%'
+    and receipt_image not like 'http%'
+    and date ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+    and to_date(date, 'YYYY-MM-DD') < (current_date - p_days);
+
+  if v_paths is null then
+    return 0;
+  end if;
+
+  delete from storage.objects
+  where bucket_id = 'receipts'
+    and name = any(v_paths);
+
+  get diagnostics v_deleted = row_count;
+
+  update public.sales
+  set receipt_image = null
+  where receipt_image = any(v_paths);
+
+  return v_deleted;
+end;
+$$;
+
+revoke all on function public.purge_old_receipts(int) from public;
+grant execute on function public.purge_old_receipts(int) to service_role;
