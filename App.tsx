@@ -39,6 +39,7 @@ type GlobalConfig = {
 };
 
 type GlobalConfigLoadState = 'loading' | 'loaded' | 'error';
+type RefreshScope = 'stores' | 'ingredients' | 'employees' | 'menus' | 'sales' | 'storeStocks' | 'globalConfig';
 
 const DEFAULT_GLOBAL_CONFIG: GlobalConfig = {
   storeNames: ['CHIBO', 'CHIBO Express', 'CHIBO Premium'],
@@ -55,6 +56,19 @@ const DEFAULT_GLOBAL_CONFIG: GlobalConfig = {
     { name: 'Otafuku Sauce', unit: 'ml', par: 0, reorder: 0 },
     { name: 'Noodles', unit: 'g', par: 0, reorder: 0 }
   ]
+};
+
+const SALES_LOOKBACK_DEFAULT_DAYS = 365;
+const SALES_LOOKBACK_STEP_DAYS = 365;
+const RECEIPT_BUCKET = 'receipts';
+const RECEIPT_SIGNED_URL_TTL_SEC = 60 * 60 * 24;
+
+const formatLookbackLabel = (days: number) => {
+  if (days >= 365 && days % 365 === 0) {
+    const years = Math.max(1, Math.round(days / 365));
+    return `최근 ${years}년`;
+  }
+  return `최근 ${days}일`;
 };
 
 async function getMyAppUser(): Promise<AppUserRow | null> {
@@ -255,8 +269,16 @@ async function loadMenus(): Promise<Menu[]> {
   const { data: menusData, error: menusErr } = await supabase.from('menus').select('*').order('id');
   if (menusErr) throw menusErr;
 
-  const { data: recipeData, error: recipeErr } = await supabase.from('menu_recipe_items').select('*');
-  if (recipeErr) throw recipeErr;
+  const menuIds = (menusData ?? []).map((m: any) => m.id);
+  let recipeData: any[] = [];
+  if (menuIds.length > 0) {
+    const { data, error: recipeErr } = await supabase
+      .from('menu_recipe_items')
+      .select('*')
+      .in('menu_id', menuIds);
+    if (recipeErr) throw recipeErr;
+    recipeData = data ?? [];
+  }
 
   const recipeByMenu: Record<string, RecipeItem[]> = {};
   (recipeData ?? []).forEach((r: any) => {
@@ -276,18 +298,32 @@ async function loadMenus(): Promise<Menu[]> {
   }));
 }
 
-async function loadSales(): Promise<Sale[]> {
-  const { data: salesData, error: salesErr } = await supabase
+async function loadSales(daysBack?: number): Promise<Sale[]> {
+  const formatDateOnly = (d: Date) => d.toISOString().split('T')[0];
+  let query = supabase
     .from('sales')
     .select('id,store_id,date,total_amount,is_closed')
     .order('date', { ascending: false });
+  if (daysBack && daysBack > 0) {
+    const since = formatDateOnly(new Date(Date.now() - daysBack * 86400000));
+    query = query.gte('date', since);
+  }
+  const { data: salesData, error: salesErr } = await query;
   if (salesErr) throw salesErr;
 
-  const { data: itemData, error: itemErr } = await supabase.from('sale_items').select('*');
-  if (itemErr) throw itemErr;
+  const saleIds = (salesData ?? []).map((s: any) => s.id);
+  let itemData: any[] = [];
+  if (saleIds.length > 0) {
+    const { data, error: itemErr } = await supabase
+      .from('sale_items')
+      .select('*')
+      .in('sale_id', saleIds);
+    if (itemErr) throw itemErr;
+    itemData = data ?? [];
+  }
 
   const itemsBySale: Record<string, SaleItem[]> = {};
-  (itemData ?? []).forEach((r: any) => {
+  itemData.forEach((r: any) => {
     const arr = itemsBySale[r.sale_id] ?? [];
     arr.push({ menuId: r.menu_id, quantity: Number(r.quantity) });
     itemsBySale[r.sale_id] = arr;
@@ -310,7 +346,10 @@ async function loadReceiptImage(saleId: string): Promise<string | null> {
     .eq('id', saleId)
     .single();
   if (error) throw error;
-  return data?.receipt_image ?? null;
+  const value = data?.receipt_image ?? null;
+  if (!value) return null;
+  if (value.startsWith('data:') || value.startsWith('http')) return value;
+  return await getReceiptSignedUrl(value);
 }
 
 async function saveMenu(menu: Menu) {
@@ -377,13 +416,42 @@ async function addIngredient(ing: Ingredient) {
   if (error) throw error;
 }
 
+async function dataUrlToBlob(dataUrl: string): Promise<Blob> {
+  const res = await fetch(dataUrl);
+  return await res.blob();
+}
+
+async function uploadReceiptImage(storeId: string, saleId: string, dataUrl: string): Promise<string> {
+  const blob = await dataUrlToBlob(dataUrl);
+  const mime = blob.type || 'image/jpeg';
+  const ext = mime === 'image/png' ? 'png' : 'jpg';
+  const path = `${storeId}/${saleId}.${ext}`;
+  const { error } = await supabase.storage
+    .from(RECEIPT_BUCKET)
+    .upload(path, blob, { upsert: true, contentType: mime, cacheControl: '3600' });
+  if (error) throw error;
+  return path;
+}
+
+async function getReceiptSignedUrl(path: string): Promise<string> {
+  const { data, error } = await supabase.storage
+    .from(RECEIPT_BUCKET)
+    .createSignedUrl(path, RECEIPT_SIGNED_URL_TTL_SEC);
+  if (error) throw error;
+  return data.signedUrl;
+}
+
 async function addSale(sale: Sale) {
+  let receiptPath: string | null = null;
+  if (sale.receiptImage && !sale.isClosed) {
+    receiptPath = await uploadReceiptImage(sale.storeId, sale.id, sale.receiptImage);
+  }
   const { error: sErr } = await supabase.from('sales').insert({
     id: sale.id,
     store_id: sale.storeId,
     date: sale.date,
     total_amount: sale.totalAmount,
-    receipt_image: sale.receiptImage ?? null,
+    receipt_image: receiptPath,
     is_closed: sale.isClosed ?? false,
   });
   if (sErr) throw sErr;
@@ -1580,6 +1648,8 @@ const HQStoreDetail: React.FC<{
     standardIngredients: { name: string; unit: string; par?: number; reorder?: number }[];
     currencies: string[];
     positions: string[];
+    salesLookbackLabel: string;
+    onLoadMoreSales: () => void;
     onBack: () => void;
     onUpdateStore: (store: Store) => void;
     onSaveStoreStocks: (storeId: string, rows: { ingredientName: string; unit: string; par: number; reorder: number }[]) => void;
@@ -1590,7 +1660,7 @@ const HQStoreDetail: React.FC<{
     onDeleteMenu: (id: string) => void;
     onUpdateEmployees: (storeId: string, employees: Employee[]) => void;
     onAddIngredient: (ing: Ingredient) => void;
-}> = ({ store, sales, menus, employees, ingredients, storeStocks, allStores, categories, standardIngredients, currencies, positions, onBack, onUpdateStore, onSaveStoreStocks, onMergeStores, onDeleteStore, onUpdateMenu, onCreateMenu, onDeleteMenu, onUpdateEmployees, onAddIngredient }) => {
+}> = ({ store, sales, menus, employees, ingredients, storeStocks, allStores, categories, standardIngredients, currencies, positions, salesLookbackLabel, onLoadMoreSales, onBack, onUpdateStore, onSaveStoreStocks, onMergeStores, onDeleteStore, onUpdateMenu, onCreateMenu, onDeleteMenu, onUpdateEmployees, onAddIngredient }) => {
     const storeMenus = menus.filter(m => m.storeId === store.id);
     const storeEmployees = employees.filter(e => e.storeId === store.id);
     const storeSales = useMemo(() => sales.filter(s => s.storeId === store.id), [sales, store.id]);
@@ -2576,9 +2646,21 @@ const HQStoreDetail: React.FC<{
             </div>
 
             <div className="bg-white p-6 rounded-2xl shadow-sm border mb-8">
-                <h2 className="text-xl font-bold mb-6 flex items-center gap-2">
-                    <ClipboardList className="w-5 h-5"/> Sales History
-                </h2>
+                <div className="flex items-center justify-between mb-6">
+                    <h2 className="text-xl font-bold flex items-center gap-2">
+                        <ClipboardList className="w-5 h-5"/> Sales History
+                    </h2>
+                    <div className="flex items-center gap-3">
+                        <span className="text-xs text-gray-400">{salesLookbackLabel} 데이터</span>
+                        <button
+                            type="button"
+                            onClick={onLoadMoreSales}
+                            className="text-xs font-bold px-3 py-1 rounded-full border border-gray-200 hover:bg-gray-50 transition"
+                        >
+                            더 보기
+                        </button>
+                    </div>
+                </div>
                 <div className="overflow-x-auto">
                     <table className="w-full text-sm text-left">
                         <thead className="bg-gray-50 text-gray-500 font-bold uppercase text-xs">
@@ -2850,6 +2932,8 @@ const HQDashboard: React.FC<{
       categories: string[];
       standardIngredients: { name: string; unit: string; par?: number; reorder?: number }[];
   };
+  salesLookbackLabel: string;
+  onLoadMoreSales: () => void;
   onUpdateGlobalConfig: (key: string, values: any) => void;
   onUpdateStore: (store: Store) => void;
   onSaveStoreStocks: (storeId: string, rows: { ingredientName: string; unit: string; par: number; reorder: number }[]) => void;
@@ -2859,7 +2943,7 @@ const HQDashboard: React.FC<{
   onDeleteMenu: (id: string) => void;
   onUpdateEmployees: (storeId: string, employees: Employee[]) => void;
   onAddIngredient: (ing: Ingredient) => void;
-}> = ({ user, onLogout, stores, sales, menus, employees, ingredients, storeStocks, globalConfig, onUpdateGlobalConfig, onUpdateStore, onSaveStoreStocks, onDeleteStore, onUpdateMenu, onCreateMenu, onDeleteMenu, onUpdateEmployees, onAddIngredient }) => {
+}> = ({ user, onLogout, stores, sales, menus, employees, ingredients, storeStocks, globalConfig, salesLookbackLabel, onLoadMoreSales, onUpdateGlobalConfig, onUpdateStore, onSaveStoreStocks, onDeleteStore, onUpdateMenu, onCreateMenu, onDeleteMenu, onUpdateEmployees, onAddIngredient }) => {
   const [selectedStore, setSelectedStore] = useState<Store | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isSalesAnalyticsOpen, setIsSalesAnalyticsOpen] = useState(false);
@@ -2919,7 +3003,7 @@ const HQDashboard: React.FC<{
       window.history.replaceState({ screen: 'hq', selectedStoreId: null }, '');
       navReadyRef.current = true;
     }
-  }, []);
+  }, [salesLookbackDays]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -2974,6 +3058,8 @@ const HQDashboard: React.FC<{
         standardIngredients={globalConfig.standardIngredients}
         currencies={globalConfig.currencies}
         positions={globalConfig.positions}
+        salesLookbackLabel={salesLookbackLabel}
+        onLoadMoreSales={onLoadMoreSales}
         onBack={() => setSelectedStore(null)}
         onUpdateStore={onUpdateStore}
         onSaveStoreStocks={onSaveStoreStocks}
@@ -4042,16 +4128,24 @@ const App = () => {
 
   const [dataLoading, setDataLoading] = useState<boolean>(false);
   const [dataError, setDataError] = useState<string | null>(null);
+  const [salesLookbackDays, setSalesLookbackDays] = useState<number>(SALES_LOOKBACK_DEFAULT_DAYS);
+  const salesLookbackRef = useRef<number>(SALES_LOOKBACK_DEFAULT_DAYS);
   const [globalConfig, setGlobalConfig] = useState<GlobalConfig>(DEFAULT_GLOBAL_CONFIG);
   const [globalConfigExists, setGlobalConfigExists] = useState<boolean>(false);
   const [globalConfigStatus, setGlobalConfigStatus] = useState<GlobalConfigLoadState>('loading');
   const [globalConfigError, setGlobalConfigError] = useState<string | null>(null);
   const [syncingIngredients, setSyncingIngredients] = useState(false);
 
+  useEffect(() => {
+    salesLookbackRef.current = salesLookbackDays;
+  }, [salesLookbackDays]);
+
 
   const refreshTimerRef = useRef<number | null>(null);
   const refreshInFlightRef = useRef<boolean>(false);
   const refreshQueuedRef = useRef<boolean>(false);
+  const partialTimerRef = useRef<number | null>(null);
+  const partialQueueRef = useRef<Set<RefreshScope>>(new Set());
 
   const refreshAll = useCallback(async () => {
     if (refreshInFlightRef.current) {
@@ -4069,7 +4163,7 @@ const App = () => {
       loadIngredients(),
       loadEmployees(),
       loadMenus(),
-      loadSales(),
+      loadSales(salesLookbackRef.current),
       loadStoreIngredientStocks(),
       loadGlobalConfig(),
     ]);
@@ -4148,6 +4242,96 @@ const App = () => {
     }
   }, []);
 
+  const refreshPartial = useCallback(async (scopes: Set<RefreshScope>) => {
+    if (scopes.size === 0) return;
+    const errors: string[] = [];
+    setDataError(null);
+
+    if (scopes.has('globalConfig')) {
+      setGlobalConfigError(null);
+      setGlobalConfigStatus((prev) => (prev === 'loaded' ? prev : 'loading'));
+    }
+
+    const tasks: Promise<void>[] = [];
+
+    if (scopes.has('stores')) {
+      tasks.push(loadStores().then(setStores).catch(e => errors.push(e?.message ?? 'Failed to load stores')));
+    }
+    if (scopes.has('ingredients')) {
+      tasks.push(loadIngredients().then(setIngredients).catch(e => errors.push(e?.message ?? 'Failed to load ingredients')));
+    }
+    if (scopes.has('employees')) {
+      tasks.push(loadEmployees().then(setEmployees).catch(e => errors.push(e?.message ?? 'Failed to load employees')));
+    }
+    if (scopes.has('menus')) {
+      tasks.push(loadMenus().then(setMenus).catch(e => errors.push(e?.message ?? 'Failed to load menus')));
+    }
+    if (scopes.has('sales')) {
+      tasks.push(loadSales(salesLookbackRef.current).then(setSales).catch(e => errors.push(e?.message ?? 'Failed to load sales')));
+    }
+    if (scopes.has('storeStocks')) {
+      tasks.push(loadStoreIngredientStocks().then(setStoreStocks).catch(e => errors.push(e?.message ?? 'Failed to load store stock')));
+    }
+    if (scopes.has('globalConfig')) {
+      tasks.push(
+        loadGlobalConfig()
+          .then((gc) => {
+            if (gc.exists === null) {
+              setGlobalConfigStatus('error');
+              setGlobalConfigError('Failed to load global settings.');
+            } else {
+              setGlobalConfig(gc.config);
+              setGlobalConfigExists(gc.exists);
+              setGlobalConfigStatus('loaded');
+            }
+          })
+          .catch((e) => {
+            setGlobalConfigStatus('error');
+            setGlobalConfigError(e?.message ?? 'Failed to load global settings.');
+          })
+      );
+    }
+
+    if (tasks.length > 0) {
+      await Promise.allSettled(tasks);
+    }
+
+    if (errors.length > 0) {
+      setDataError(errors[0]);
+    }
+  }, []);
+
+  const drainPartialQueue = useCallback(() => {
+    if (partialQueueRef.current.size === 0) return;
+    if (refreshInFlightRef.current) {
+      partialTimerRef.current = window.setTimeout(drainPartialQueue, 400);
+      return;
+    }
+    const scopes = new Set(partialQueueRef.current);
+    partialQueueRef.current.clear();
+    refreshInFlightRef.current = true;
+    refreshPartial(scopes).finally(() => {
+      refreshInFlightRef.current = false;
+      if (partialQueueRef.current.size > 0) {
+        drainPartialQueue();
+      }
+    });
+  }, [refreshPartial]);
+
+  const schedulePartialRefresh = useCallback((scopes: RefreshScope[]) => {
+    scopes.forEach(s => partialQueueRef.current.add(s));
+    if (partialTimerRef.current !== null) return;
+    partialTimerRef.current = window.setTimeout(() => {
+      partialTimerRef.current = null;
+      drainPartialQueue();
+    }, 600);
+  }, [drainPartialQueue]);
+
+  const salesLookbackLabel = useMemo(() => formatLookbackLabel(salesLookbackDays), [salesLookbackDays]);
+  const handleLoadMoreSales = useCallback(() => {
+    setSalesLookbackDays(prev => prev + SALES_LOOKBACK_STEP_DAYS);
+  }, []);
+
   const ensureStandardIngredients = useCallback(async () => {
     if (user?.role !== UserRole.HQ) return;
     if (globalConfigStatus !== 'loaded') return;
@@ -4204,9 +4388,9 @@ const App = () => {
       await refreshAll();
       throw e;
     } finally {
-      scheduleRefreshAll();
+      schedulePartialRefresh(['employees']);
     }
-  }, [refreshAll, scheduleRefreshAll]);
+  }, [refreshAll, schedulePartialRefresh]);
 
   useEffect(() => {
     if (sessionEmail) {
@@ -4216,17 +4400,22 @@ const App = () => {
 
   useEffect(() => {
     if (!sessionEmail) return;
+    schedulePartialRefresh(['sales']);
+  }, [salesLookbackDays, sessionEmail, schedulePartialRefresh]);
+
+  useEffect(() => {
+    if (!sessionEmail) return;
     const channel = supabase
       .channel('realtime-all')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'stores' }, () => scheduleRefreshAll())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'sales' }, () => scheduleRefreshAll())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'sale_items' }, () => scheduleRefreshAll())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'menus' }, () => scheduleRefreshAll())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'employees' }, () => scheduleRefreshAll())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'ingredients' }, () => scheduleRefreshAll())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'store_ingredient_stock' }, () => scheduleRefreshAll())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'stores' }, () => schedulePartialRefresh(['stores']))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'sales' }, () => schedulePartialRefresh(['sales']))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'sale_items' }, () => schedulePartialRefresh(['sales']))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'menus' }, () => schedulePartialRefresh(['menus']))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'employees' }, () => schedulePartialRefresh(['employees']))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'ingredients' }, () => schedulePartialRefresh(['ingredients']))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'store_ingredient_stock' }, () => schedulePartialRefresh(['storeStocks']))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'app_users' }, () => scheduleRefreshAll())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'global_config' }, () => scheduleRefreshAll())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'global_config' }, () => schedulePartialRefresh(['globalConfig']))
       .subscribe();
 
     return () => {
@@ -4236,7 +4425,7 @@ const App = () => {
         refreshTimerRef.current = null;
       }
     };
-  }, [sessionEmail, scheduleRefreshAll]);
+  }, [sessionEmail, schedulePartialRefresh, scheduleRefreshAll]);
 
   // Fallback polling to keep data fresh even if realtime is unavailable
   useEffect(() => {
@@ -4426,6 +4615,8 @@ if (!resolvedUser) {
               ingredients={ingredients}
               storeStocks={storeStocks}
               globalConfig={globalConfig}
+              salesLookbackLabel={salesLookbackLabel}
+              onLoadMoreSales={handleLoadMoreSales}
               onUpdateGlobalConfig={handleUpdateGlobalConfig}
               onUpdateStore={async (s) => {
                 setStores(prev => prev.map(store => store.id === s.id ? s : store));
@@ -4434,7 +4625,7 @@ if (!resolvedUser) {
                   await refreshAll();
                   throw error;
                 }
-                scheduleRefreshAll();
+                schedulePartialRefresh(['stores']);
               }}
               onSaveStoreStocks={async (storeId, rows) => {
                 setStoreStocks(prev => [
@@ -4447,7 +4638,7 @@ if (!resolvedUser) {
                   await refreshAll();
                   throw e;
                 } finally {
-                  scheduleRefreshAll();
+                  schedulePartialRefresh(['storeStocks']);
                 }
               }}
               onDeleteStore={async (storeId) => {
@@ -4457,7 +4648,7 @@ if (!resolvedUser) {
                   await refreshAll();
                   throw error;
                 }
-                scheduleRefreshAll();
+                schedulePartialRefresh(['stores']);
               }}
               onUpdateMenu={async (m) => {
                 setMenus(prev => {
@@ -4471,7 +4662,7 @@ if (!resolvedUser) {
                   await refreshAll();
                   throw e;
                 } finally {
-                  scheduleRefreshAll();
+                  schedulePartialRefresh(['menus']);
                 }
               }}
               onCreateMenu={async (m) => {
@@ -4486,7 +4677,7 @@ if (!resolvedUser) {
                   await refreshAll();
                   throw e;
                 } finally {
-                  scheduleRefreshAll();
+                  schedulePartialRefresh(['menus']);
                 }
               }}
               onDeleteMenu={async (id) => {
@@ -4497,11 +4688,11 @@ if (!resolvedUser) {
                   await refreshAll();
                   throw e;
                 } finally {
-                  scheduleRefreshAll();
+                  schedulePartialRefresh(['menus']);
                 }
               }}
               onUpdateEmployees={async (storeId, emps) => { await updateEmployeesForStore(storeId, emps); }}
-              onAddIngredient={async (i) => { await addIngredient(i); scheduleRefreshAll(); }}
+              onAddIngredient={async (i) => { await addIngredient(i); schedulePartialRefresh(['ingredients']); }}
           />
       );
   }
@@ -4627,7 +4818,7 @@ if (!myStore) {
                 }
               }
             } finally {
-              scheduleRefreshAll();
+              schedulePartialRefresh(['sales', 'storeStocks']);
             }
           }}
 
@@ -4643,7 +4834,7 @@ if (!myStore) {
               await refreshAll();
               throw e;
             } finally {
-              scheduleRefreshAll();
+              schedulePartialRefresh(['menus']);
             }
           }}
           onCreateMenu={async (m) => {
@@ -4658,7 +4849,7 @@ if (!myStore) {
               await refreshAll();
               throw e;
             } finally {
-              scheduleRefreshAll();
+              schedulePartialRefresh(['menus']);
             }
           }}
           onDeleteMenu={async (id) => {
@@ -4669,11 +4860,11 @@ if (!myStore) {
               await refreshAll();
               throw e;
             } finally {
-              scheduleRefreshAll();
+              schedulePartialRefresh(['menus']);
             }
           }}
           onUpdateEmployees={async (emps) => { await updateEmployeesForStore(myStore.id, emps); }}
-          onAddIngredient={async (i) => { await addIngredient(i); scheduleRefreshAll(); }}
+          onAddIngredient={async (i) => { await addIngredient(i); schedulePartialRefresh(['ingredients']); }}
       />
   );
 }
