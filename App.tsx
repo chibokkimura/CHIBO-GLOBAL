@@ -3003,7 +3003,7 @@ const HQDashboard: React.FC<{
       window.history.replaceState({ screen: 'hq', selectedStoreId: null }, '');
       navReadyRef.current = true;
     }
-  }, [salesLookbackDays]);
+  }, []);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
