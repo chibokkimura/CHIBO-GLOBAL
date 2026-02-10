@@ -4661,23 +4661,44 @@ const HQ_EMAILS = [
 
 const [resolvedUser, setResolvedUser] = useState<User | null>(null);
 const [authLoading, setAuthLoading] = useState<boolean>(true);
+const [authError, setAuthError] = useState<string | null>(null);
+
+const withTimeout = useCallback(async <T,>(task: Promise<T>, ms: number, label: string): Promise<T> => {
+  let timer: number | null = null;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = window.setTimeout(() => reject(new Error(`${label} timed out after ${ms / 1000}s`)), ms);
+  });
+  try {
+    const result = await Promise.race([task, timeoutPromise]);
+    return result as T;
+  } finally {
+    if (timer !== null) {
+      window.clearTimeout(timer);
+    }
+  }
+}, []);
 
 const loadResolvedUser = async () => {
   if (!sessionEmail) {
     setResolvedUser(null);
     setAuthLoading(false);
+    setAuthError(null);
     return;
   }
 
   const email = sessionEmail.toLowerCase();
+  const authTimeoutMs = 12000;
 
   // 1) If HQ email, auto-assign HQ
   if (HQ_EMAILS.includes(email)) {
     try {
       setAuthLoading(true);
-      await upsertMyHqProfile({ name: 'HQ Admin', email });
+      setAuthError(null);
+      await withTimeout(upsertMyHqProfile({ name: 'HQ Admin', email }), authTimeoutMs, 'HQ profile upsert');
     } catch (e) {
       console.error('Failed to upsert HQ profile', e);
+      const message = e instanceof Error ? e.message : 'Failed to verify HQ profile.';
+      setAuthError(message);
     } finally {
       setResolvedUser({
         email,
@@ -4686,14 +4707,15 @@ const loadResolvedUser = async () => {
         storeId: undefined,
       });
       setAuthLoading(false);
-      await refreshAll();
+      void refreshAll();
     }
     return;
   }
 
   try {
     setAuthLoading(true);
-    const row = await getMyAppUser();
+    setAuthError(null);
+    const row = await withTimeout(getMyAppUser(), authTimeoutMs, 'User profile lookup');
     if (row) {
       setResolvedUser({
         email: row.email,
@@ -4707,15 +4729,17 @@ const loadResolvedUser = async () => {
   } catch (e) {
     console.error('Failed to load app user', e);
     setResolvedUser(null);
+    const message = e instanceof Error ? e.message : 'Failed to verify session.';
+    setAuthError(message);
   } finally {
     setAuthLoading(false);
-    await refreshAll();
+    void refreshAll();
   }
 };
 
 useEffect(() => {
   loadResolvedUser();
-}, [sessionEmail]);
+}, [sessionEmail, withTimeout, refreshAll]);
 
 useEffect(() => {
   setUser(resolvedUser);
@@ -4759,7 +4783,10 @@ if (!sessionEmail) return <LoginScreen />;
 if (authLoading) {
   return (
     <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
-      <div className="text-gray-500 text-sm">Checking session...</div>
+      <div className="text-center">
+        <div className="text-gray-500 text-sm">Checking session...</div>
+        {authError && <div className="mt-2 text-xs text-red-600">{authError}</div>}
+      </div>
     </div>
   );
 }
