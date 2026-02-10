@@ -412,23 +412,25 @@ type ImageResizeOptions = {
   mimeType?: string;
 };
 
-const readFileAsDataUrl = (file: File) =>
-  new Promise<string>((resolve, reject) => {
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onloadend = () => resolve(reader.result as string);
     reader.onerror = () => reject(new Error('Failed to read file'));
     reader.readAsDataURL(file);
   });
+}
 
-const loadImage = (src: string) =>
-  new Promise<HTMLImageElement>((resolve, reject) => {
+function loadImage(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => resolve(img);
     img.onerror = () => reject(new Error('Failed to load image'));
     img.src = src;
   });
+}
 
-const resizeImageToDataUrl = async (file: File, opts: ImageResizeOptions) => {
+async function resizeImageToDataUrl(file: File, opts: ImageResizeOptions): Promise<string> {
   const { maxWidth, maxHeight, quality = 0.82, mimeType = 'image/jpeg' } = opts;
   try {
     const original = await readFileAsDataUrl(file);
@@ -447,7 +449,7 @@ const resizeImageToDataUrl = async (file: File, opts: ImageResizeOptions) => {
     console.error('Image resize failed, using original', e);
     return readFileAsDataUrl(file);
   }
-};
+}
 
 const getMissingDates = (sales: Sale[], storeId: string, daysBack = 7) => {
   const dates: string[] = [];
