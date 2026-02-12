@@ -63,6 +63,7 @@ const SALES_LOOKBACK_STEP_DAYS = 90;
 const RECEIPT_BUCKET = 'receipts';
 const RECEIPT_SIGNED_URL_TTL_SEC = 60 * 60 * 24;
 const SALES_FALLBACK_POLL_MS = 180000;
+let salesClosedReasonColumnSupported: boolean | null = null;
 
 const formatLookbackLabel = (days: number) => {
   if (days >= 365 && days % 365 === 0) {
@@ -71,6 +72,13 @@ const formatLookbackLabel = (days: number) => {
   }
   return `Last ${days} days`;
 };
+
+function isMissingClosedReasonColumnError(error: unknown): boolean {
+  const message = typeof error === 'object' && error && 'message' in error
+    ? String((error as any).message)
+    : '';
+  return message.toLowerCase().includes("could not find the 'closed_reason' column");
+}
 
 async function getMyAppUser(): Promise<AppUserRow | null> {
   const { data: authData } = await supabase.auth.getUser();
@@ -307,16 +315,38 @@ async function loadMenus(): Promise<Menu[]> {
 
 async function loadSales(daysBack?: number): Promise<Sale[]> {
   const formatDateOnly = (d: Date) => d.toISOString().split('T')[0];
-  let query = supabase
-    .from('sales')
-    .select('id,store_id,date,total_amount,is_closed,closed_reason')
-    .order('date', { ascending: false });
-  if (daysBack && daysBack > 0) {
-    const since = formatDateOnly(new Date(Date.now() - daysBack * 86400000));
-    query = query.gte('date', since);
+  const since = daysBack && daysBack > 0
+    ? formatDateOnly(new Date(Date.now() - daysBack * 86400000))
+    : null;
+
+  const selectWithClosedReason = 'id,store_id,date,total_amount,is_closed,closed_reason';
+  const selectWithoutClosedReason = 'id,store_id,date,total_amount,is_closed';
+
+  const runSalesQuery = async (includeClosedReason: boolean) => {
+    let query = supabase
+      .from('sales')
+      .select(includeClosedReason ? selectWithClosedReason : selectWithoutClosedReason)
+      .order('date', { ascending: false });
+    if (since) query = query.gte('date', since);
+    return await query;
+  };
+
+  let salesData: any[] = [];
+  const preferClosedReason = salesClosedReasonColumnSupported !== false;
+  const first = await runSalesQuery(preferClosedReason);
+  if (first.error) {
+    if (preferClosedReason && isMissingClosedReasonColumnError(first.error)) {
+      salesClosedReasonColumnSupported = false;
+      const fallback = await runSalesQuery(false);
+      if (fallback.error) throw fallback.error;
+      salesData = fallback.data ?? [];
+    } else {
+      throw first.error;
+    }
+  } else {
+    if (preferClosedReason) salesClosedReasonColumnSupported = true;
+    salesData = first.data ?? [];
   }
-  const { data: salesData, error: salesErr } = await query;
-  if (salesErr) throw salesErr;
 
   const saleIds = (salesData ?? []).map((s: any) => s.id);
   let itemData: any[] = [];
@@ -499,15 +529,32 @@ async function addSale(sale: Sale) {
       receiptPath = null;
     }
   }
-  const { error: sErr } = await supabase.from('sales').insert({
+  const basePayload = {
     id: sale.id,
     store_id: sale.storeId,
     date: sale.date,
     total_amount: sale.totalAmount,
     receipt_image: receiptPath,
     is_closed: sale.isClosed ?? false,
+  };
+  const payloadWithClosedReason = {
+    ...basePayload,
     closed_reason: sale.closedReason ?? null,
-  });
+  };
+  const preferClosedReason = salesClosedReasonColumnSupported !== false;
+  const firstInsert = await supabase
+    .from('sales')
+    .insert(preferClosedReason ? payloadWithClosedReason : basePayload);
+
+  let sErr = firstInsert.error ?? null;
+  if (sErr && preferClosedReason && isMissingClosedReasonColumnError(sErr)) {
+    salesClosedReasonColumnSupported = false;
+    const fallbackInsert = await supabase.from('sales').insert(basePayload);
+    sErr = fallbackInsert.error ?? null;
+  } else if (!sErr && preferClosedReason) {
+    salesClosedReasonColumnSupported = true;
+  }
+
   if (sErr) {
     const message = sErr.message || 'Unknown insert error';
     throw new Error(`Failed to save sales report: ${message}`);
