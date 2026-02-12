@@ -62,7 +62,7 @@ const SALES_LOOKBACK_DEFAULT_DAYS = 90;
 const SALES_LOOKBACK_STEP_DAYS = 90;
 const RECEIPT_BUCKET = 'receipts';
 const RECEIPT_SIGNED_URL_TTL_SEC = 60 * 60 * 24;
-const SALES_FALLBACK_POLL_MS = 60000;
+const SALES_FALLBACK_POLL_MS = 180000;
 
 const formatLookbackLabel = (days: number) => {
   if (days >= 365 && days % 365 === 0) {
@@ -491,7 +491,13 @@ async function getReceiptSignedUrl(path: string): Promise<string> {
 async function addSale(sale: Sale) {
   let receiptPath: string | null = null;
   if (sale.receiptImage && !sale.isClosed) {
-    receiptPath = await uploadReceiptImage(sale.storeId, sale.id, sale.receiptImage);
+    try {
+      receiptPath = await uploadReceiptImage(sale.storeId, sale.id, sale.receiptImage);
+    } catch (e) {
+      // Do not block sales persistence when storage upload is temporarily unavailable.
+      console.error('Receipt upload failed, saving report without image', e);
+      receiptPath = null;
+    }
   }
   const { error: sErr } = await supabase.from('sales').insert({
     id: sale.id,
@@ -502,7 +508,10 @@ async function addSale(sale: Sale) {
     is_closed: sale.isClosed ?? false,
     closed_reason: sale.closedReason ?? null,
   });
-  if (sErr) throw sErr;
+  if (sErr) {
+    const message = sErr.message || 'Unknown insert error';
+    throw new Error(`Failed to save sales report: ${message}`);
+  }
 
   if (sale.items?.length) {
     const rows = sale.items.map(i => ({
@@ -511,7 +520,10 @@ async function addSale(sale: Sale) {
       quantity: i.quantity,
     }));
     const { error } = await supabase.from('sale_items').insert(rows);
-    if (error) throw error;
+    if (error) {
+      const message = error.message || 'Unknown sale items error';
+      throw new Error(`Failed to save sale items: ${message}`);
+    }
   }
 }
 
@@ -989,7 +1001,7 @@ const SalesReporter: React.FC<{
   menus: Menu[];
   categories: string[];
   initialDate: string | null;
-  onSave: (sale: Sale) => void;
+  onSave: (sale: Sale) => Promise<void> | void;
   onCancel: () => void;
 }> = ({ store, sales, menus, categories, initialDate, onSave, onCancel }) => {
   const [date, setDate] = useState(initialDate || formatDate(new Date()));
@@ -999,6 +1011,8 @@ const SalesReporter: React.FC<{
   const [manualRevenue, setManualRevenue] = useState<string>('');
   const [comment, setComment] = useState<string>('');
   const [closedReason, setClosedReason] = useState<string>('');
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     if (initialDate) {
@@ -1068,7 +1082,7 @@ const SalesReporter: React.FC<{
     e.currentTarget.value = '';
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!isClosed && !receiptImage) return;
     const reason = closedReason.trim();
     if (isClosed && !reason) return;
@@ -1083,7 +1097,17 @@ const SalesReporter: React.FC<{
       receiptImage: isClosed ? undefined : receiptImage || undefined,
       closedReason: isClosed ? reason : undefined,
     };
-    onSave(newSale);
+    setSubmitError(null);
+    setSubmitting(true);
+    try {
+      await Promise.resolve(onSave(newSale));
+    } catch (e) {
+      console.error('Failed to submit sales report', e);
+      const message = e instanceof Error ? e.message : 'Failed to submit report.';
+      setSubmitError(message);
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const canSubmit = isClosed ? closedReason.trim().length > 0 : Boolean(receiptImage);
@@ -1218,12 +1242,15 @@ const SalesReporter: React.FC<{
             <button onClick={onCancel} className="flex-1 py-3 font-bold text-gray-500 hover:bg-gray-50 rounded-xl">Cancel</button>
             <button
               onClick={handleSave}
-              disabled={!canSubmit}
-              className={`flex-1 py-3 bg-black text-white font-bold rounded-xl shadow-lg ${canSubmit ? 'hover:bg-gray-800' : 'opacity-50 cursor-not-allowed'}`}
+              disabled={!canSubmit || submitting}
+              className={`flex-1 py-3 bg-black text-white font-bold rounded-xl shadow-lg ${(canSubmit && !submitting) ? 'hover:bg-gray-800' : 'opacity-50 cursor-not-allowed'}`}
             >
-              Submit Report
+              {submitting ? 'Submitting...' : 'Submit Report'}
             </button>
         </div>
+        {submitError && (
+          <div className="text-sm text-red-600 font-semibold">{submitError}</div>
+        )}
       </div>
     </div>
   );
@@ -3539,7 +3566,7 @@ const StoreDashboard: React.FC<{
       standardIngredients: { name: string; unit: string; par?: number; reorder?: number }[];
       positions: string[];
   };
-  onAddSale: (sale: Sale) => void;
+  onAddSale: (sale: Sale) => Promise<void> | void;
   onUpdateMenu: (menu: Menu) => void;
   onCreateMenu: (menu: Menu) => void;
   onDeleteMenu: (id: string) => void;
@@ -3998,8 +4025,8 @@ const StoreDashboard: React.FC<{
   menus={storeMenus}
   categories={globalConfig.categories}
   initialDate={reportDate}
-  onSave={(sale) => {
-    onAddSale(sale);
+  onSave={async (sale) => {
+    await Promise.resolve(onAddSale(sale));
     setReportDate(null);
     setView('dashboard');
   }}
@@ -4342,6 +4369,7 @@ const App = () => {
   const refreshQueuedRef = useRef<boolean>(false);
   const partialTimerRef = useRef<number | null>(null);
   const partialQueueRef = useRef<Set<RefreshScope>>(new Set());
+  const realtimeSubscribedRef = useRef<boolean>(false);
 
   const refreshAll = useCallback(async () => {
     if (refreshInFlightRef.current) {
@@ -4612,10 +4640,14 @@ const App = () => {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'ingredients' }, () => schedulePartialRefresh(['ingredients']))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'store_ingredient_stock' }, () => schedulePartialRefresh(['storeStocks']))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'app_users' }, () => scheduleRefreshAll())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'global_config' }, () => schedulePartialRefresh(['globalConfig']))
-      .subscribe();
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'global_config' }, () => schedulePartialRefresh(['globalConfig']));
+
+    channel.subscribe((status) => {
+      realtimeSubscribedRef.current = status === 'SUBSCRIBED';
+    });
 
     return () => {
+      realtimeSubscribedRef.current = false;
       supabase.removeChannel(channel);
       if (refreshTimerRef.current !== null) {
         window.clearTimeout(refreshTimerRef.current);
@@ -4630,6 +4662,7 @@ const App = () => {
     if (!sessionEmail) return;
     const intervalId = window.setInterval(() => {
       if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      if (realtimeSubscribedRef.current) return;
       schedulePartialRefresh(['sales']);
     }, SALES_FALLBACK_POLL_MS);
     return () => window.clearInterval(intervalId);
@@ -4820,6 +4853,38 @@ if (authLoading) {
 }
 
 if (!resolvedUser) {
+  if (authError) {
+    return (
+      <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
+        <div className="w-full max-w-md bg-white border border-gray-200 rounded-2xl p-6 shadow-sm">
+          <h2 className="text-xl font-bold text-gray-900">Database Connection Error</h2>
+          <p className="mt-2 text-sm text-gray-600">
+            Could not verify your account profile because the database request timed out.
+          </p>
+          <div className="mt-3 text-xs text-red-600 break-words">{authError}</div>
+          <div className="mt-5 flex gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                void refreshAll();
+                void loadResolvedUser();
+              }}
+              className="px-4 py-2 rounded-xl bg-black text-white font-semibold"
+            >
+              Retry
+            </button>
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="px-4 py-2 rounded-xl border border-gray-200 font-semibold"
+            >
+              Sign Out
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
   return (
     <OnboardingScreen
       globalConfig={globalConfig}
@@ -5062,6 +5127,10 @@ if (!myStore) {
                   }
                 }
               }
+            } catch (e) {
+              setSales(prev => prev.filter(row => row.id !== s.id));
+              await refreshAll();
+              throw e;
             } finally {
               schedulePartialRefresh(['sales', 'storeStocks']);
             }
