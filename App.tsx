@@ -58,10 +58,11 @@ const DEFAULT_GLOBAL_CONFIG: GlobalConfig = {
   ]
 };
 
-const SALES_LOOKBACK_DEFAULT_DAYS = 365;
-const SALES_LOOKBACK_STEP_DAYS = 365;
+const SALES_LOOKBACK_DEFAULT_DAYS = 90;
+const SALES_LOOKBACK_STEP_DAYS = 90;
 const RECEIPT_BUCKET = 'receipts';
 const RECEIPT_SIGNED_URL_TTL_SEC = 60 * 60 * 24;
+const SALES_FALLBACK_POLL_MS = 60000;
 
 const formatLookbackLabel = (days: number) => {
   if (days >= 365 && days % 365 === 0) {
@@ -157,7 +158,10 @@ async function saveGlobalConfig(config: GlobalConfig) {
 }
 
 async function loadStores(): Promise<Store[]> {
-  const { data, error } = await supabase.from('stores').select('*').order('id');
+  const { data, error } = await supabase
+    .from('stores')
+    .select('id,name,country,city,owner_email,currency,royalty_percentage')
+    .order('id');
   if (error) throw error;
   return (data ?? []).map((r: any) => ({
     id: r.id,
@@ -171,7 +175,7 @@ async function loadStores(): Promise<Store[]> {
 }
 
 async function loadIngredients(): Promise<Ingredient[]> {
-  const { data, error } = await supabase.from('ingredients').select('*').order('id');
+  const { data, error } = await supabase.from('ingredients').select('id,name,unit').order('id');
   if (error) throw error;
   return (data ?? []).map((r: any) => ({ id: r.id, name: r.name, unit: r.unit }));
 }
@@ -253,7 +257,7 @@ async function unlinkAccountFromStore(email: string, storeId: string) {
 }
 
 async function loadEmployees(): Promise<Employee[]> {
-  const { data, error } = await supabase.from('employees').select('*').order('id');
+  const { data, error } = await supabase.from('employees').select('id,store_id,name,position,age,image_url').order('id');
   if (error) throw error;
   return (data ?? []).map((r: any) => ({
     id: r.id,
@@ -266,7 +270,10 @@ async function loadEmployees(): Promise<Employee[]> {
 }
 
 async function loadMenus(): Promise<Menu[]> {
-  const { data: menusData, error: menusErr } = await supabase.from('menus').select('*').order('id');
+  const { data: menusData, error: menusErr } = await supabase
+    .from('menus')
+    .select('id,store_id,category,name,price,image_url')
+    .order('id');
   if (menusErr) throw menusErr;
 
   const menuIds = (menusData ?? []).map((m: any) => m.id);
@@ -274,7 +281,7 @@ async function loadMenus(): Promise<Menu[]> {
   if (menuIds.length > 0) {
     const { data, error: recipeErr } = await supabase
       .from('menu_recipe_items')
-      .select('*')
+      .select('menu_id,ingredient_id,quantity')
       .in('menu_id', menuIds);
     if (recipeErr) throw recipeErr;
     recipeData = data ?? [];
@@ -316,7 +323,7 @@ async function loadSales(daysBack?: number): Promise<Sale[]> {
   if (saleIds.length > 0) {
     const { data, error: itemErr } = await supabase
       .from('sale_items')
-      .select('*')
+      .select('sale_id,menu_id,quantity')
       .in('sale_id', saleIds);
     if (itemErr) throw itemErr;
     itemData = data ?? [];
@@ -4617,14 +4624,30 @@ const App = () => {
     };
   }, [sessionEmail, schedulePartialRefresh, scheduleRefreshAll]);
 
-  // Fallback polling to keep data fresh even if realtime is unavailable
+  // Fallback polling keeps sales data fresh if realtime delivery is delayed.
+  // Keep this lightweight to avoid continuous full reload pressure on the DB.
   useEffect(() => {
     if (!sessionEmail) return;
     const intervalId = window.setInterval(() => {
-      refreshAll();
-    }, 30000);
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      schedulePartialRefresh(['sales']);
+    }, SALES_FALLBACK_POLL_MS);
     return () => window.clearInterval(intervalId);
-  }, [sessionEmail, refreshAll]);
+  }, [sessionEmail, schedulePartialRefresh]);
+
+  useEffect(() => {
+    if (!sessionEmail) return;
+    const onFocusOrVisible = () => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      schedulePartialRefresh(['sales']);
+    };
+    window.addEventListener('focus', onFocusOrVisible);
+    document.addEventListener('visibilitychange', onFocusOrVisible);
+    return () => {
+      window.removeEventListener('focus', onFocusOrVisible);
+      document.removeEventListener('visibilitychange', onFocusOrVisible);
+    };
+  }, [sessionEmail, schedulePartialRefresh]);
   
 
   // Handlers
@@ -4697,17 +4720,27 @@ const loadResolvedUser = async () => {
       await withTimeout(upsertMyHqProfile({ name: 'HQ Admin', email }), authTimeoutMs, 'HQ profile upsert');
     } catch (e) {
       console.error('Failed to upsert HQ profile', e);
+    }
+    try {
+      const row = await withTimeout(getMyAppUser(), authTimeoutMs, 'HQ profile lookup');
+      if (!row || row.role !== 'HQ') {
+        setResolvedUser(null);
+        setAuthError('HQ profile is not active in database. Check app_users role for this account.');
+      } else {
+        setResolvedUser({
+          email: row.email,
+          name: row.name || 'HQ Admin',
+          role: UserRole.HQ,
+          storeId: undefined,
+        });
+      }
+    } catch (e) {
+      console.error('Failed to verify HQ profile', e);
+      setResolvedUser(null);
       const message = e instanceof Error ? e.message : 'Failed to verify HQ profile.';
       setAuthError(message);
     } finally {
-      setResolvedUser({
-        email,
-        name: 'HQ Admin',
-        role: UserRole.HQ,
-        storeId: undefined,
-      });
       setAuthLoading(false);
-      void refreshAll();
     }
     return;
   }
@@ -4733,13 +4766,12 @@ const loadResolvedUser = async () => {
     setAuthError(message);
   } finally {
     setAuthLoading(false);
-    void refreshAll();
   }
 };
 
 useEffect(() => {
   loadResolvedUser();
-}, [sessionEmail, withTimeout, refreshAll]);
+}, [sessionEmail, withTimeout]);
 
 useEffect(() => {
   setUser(resolvedUser);
@@ -4773,10 +4805,6 @@ const handleUpdateGlobalConfig = async (key: string, values: any) => {
 };
 
 
-
-useEffect(() => {
-  setUser(resolvedUser);
-}, [resolvedUser]);
 
 if (!sessionEmail) return <LoginScreen />;
 
