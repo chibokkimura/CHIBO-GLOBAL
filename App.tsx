@@ -63,6 +63,8 @@ const SALES_LOOKBACK_STEP_DAYS = 90;
 const RECEIPT_BUCKET = 'receipts';
 const RECEIPT_SIGNED_URL_TTL_SEC = 60 * 60 * 24;
 const SALES_FALLBACK_POLL_MS = 180000;
+const OWNER_VIEW_STORAGE_PREFIX = 'chibo:owner:view:';
+const HQ_SELECTED_STORE_STORAGE_KEY = 'chibo:hq:selectedStoreId';
 let salesClosedReasonColumnSupported: boolean | null = null;
 
 const formatLookbackLabel = (days: number) => {
@@ -78,6 +80,15 @@ function isMissingClosedReasonColumnError(error: unknown): boolean {
     ? String((error as any).message)
     : '';
   return message.toLowerCase().includes("could not find the 'closed_reason' column");
+}
+
+function safeParseJson<T>(raw: string | null): T | null {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
 }
 
 async function getMyAppUser(): Promise<AppUserRow | null> {
@@ -349,6 +360,18 @@ async function loadSales(daysBack?: number): Promise<Sale[]> {
   }
 
   const saleIds = (salesData ?? []).map((s: any) => s.id);
+  let receiptIds = new Set<string>();
+  if (saleIds.length > 0) {
+    const { data: receiptRows, error: receiptErr } = await supabase
+      .from('sales')
+      .select('id')
+      .in('id', saleIds)
+      .not('receipt_image', 'is', null)
+      .neq('receipt_image', '');
+    if (receiptErr) throw receiptErr;
+    receiptIds = new Set((receiptRows ?? []).map((r: any) => r.id as string));
+  }
+
   let itemData: any[] = [];
   if (saleIds.length > 0) {
     const { data, error: itemErr } = await supabase
@@ -372,6 +395,7 @@ async function loadSales(daysBack?: number): Promise<Sale[]> {
     date: s.date,
     totalAmount: Number(s.total_amount),
     items: itemsBySale[s.id] ?? [],
+    hasReceipt: receiptIds.has(s.id),
     isClosed: Boolean(s.is_closed),
     closedReason: s.closed_reason ?? undefined,
   }));
@@ -514,19 +538,25 @@ async function getReceiptSignedUrl(path: string): Promise<string> {
   const { data, error } = await supabase.storage
     .from(RECEIPT_BUCKET)
     .createSignedUrl(path, RECEIPT_SIGNED_URL_TTL_SEC);
-  if (error) throw error;
+  if (error) {
+    const { data: publicData } = supabase.storage.from(RECEIPT_BUCKET).getPublicUrl(path);
+    if (publicData?.publicUrl) return publicData.publicUrl;
+    throw error;
+  }
   return data.signedUrl;
 }
 
 async function addSale(sale: Sale) {
   let receiptPath: string | null = null;
+  if (!sale.isClosed && !sale.receiptImage) {
+    throw new Error('Receipt image is required for open days.');
+  }
   if (sale.receiptImage && !sale.isClosed) {
     try {
       receiptPath = await uploadReceiptImage(sale.storeId, sale.id, sale.receiptImage);
     } catch (e) {
-      // Do not block sales persistence when storage upload is temporarily unavailable.
-      console.error('Receipt upload failed, saving report without image', e);
-      receiptPath = null;
+      console.error('Receipt upload failed', e);
+      throw new Error('Failed to upload receipt image. Please retry.');
     }
   }
   const basePayload = {
@@ -1142,6 +1172,7 @@ const SalesReporter: React.FC<{
       items: isClosed ? [] : items,
       isClosed,
       receiptImage: isClosed ? undefined : receiptImage || undefined,
+      hasReceipt: !isClosed && Boolean(receiptImage),
       closedReason: isClosed ? reason : undefined,
     };
     setSubmitError(null);
@@ -2177,6 +2208,7 @@ const HQStoreDetail: React.FC<{
     }, [storeStockRows]);
 
     useEffect(() => {
+        if (showStockEditor) return;
         const next = standardIngredients.map(ing => {
             const key = `${ing.name}::${ing.unit}`;
             const row = storeStockMap[key];
@@ -2188,7 +2220,7 @@ const HQStoreDetail: React.FC<{
             };
         });
         setStockDrafts(next);
-    }, [standardIngredients, storeStockMap]);
+    }, [standardIngredients, storeStockMap, showStockEditor]);
 
     useEffect(() => {
         let cancelled = false;
@@ -2352,13 +2384,14 @@ const HQStoreDetail: React.FC<{
 
     // --- Real-time Inventory Calculation Logic ---
     const inventoryStats = useMemo(() => {
-        const stats: Record<string, { used: number; unit: string; par: number; reorder: number; remaining: number | null }> = {};
+        const stats: Record<string, { used: number; unit: string; par: number; reorder: number; remaining: number | null; configured: boolean }> = {};
         standardIngredients.forEach(ing => {
             const key = `${ing.name}::${ing.unit}`;
             const row = storeStockMap[key];
             const par = row?.par ?? ing.par ?? 0;
             const reorder = row?.reorder ?? ing.reorder ?? 0;
-            stats[ing.name] = { used: 0, unit: ing.unit, par, reorder, remaining: null };
+            const configured = Boolean(row) || Number(ing.par ?? 0) > 0 || Number(ing.reorder ?? 0) > 0;
+            stats[ing.name] = { used: 0, unit: ing.unit, par, reorder, remaining: null, configured };
         });
 
         // 2. Apply Sales Data to calculate total consumption
@@ -2380,8 +2413,8 @@ const HQStoreDetail: React.FC<{
         });
 
         Object.keys(stats).forEach(ingName => {
-            const par = stats[ingName].par;
-            if (par > 0) {
+            if (stats[ingName].configured) {
+                const par = stats[ingName].par;
                 stats[ingName].remaining = Math.max(0, par - stats[ingName].used);
             }
         });
@@ -2861,10 +2894,12 @@ const HQStoreDetail: React.FC<{
                     </div>
                     <div className="space-y-4">
                         {Object.entries(inventoryStats).map(([name, data]) => {
-                            const baseStock = data.par > 0 ? data.par : null;
+                            const hasConfiguredStock = data.configured;
                             const remaining = data.remaining;
-                            const percentUsed = baseStock ? Math.min(100, (data.used / baseStock) * 100) : 0;
-                            const isLow = baseStock
+                            const percentUsed = hasConfiguredStock
+                                ? (data.par > 0 ? Math.min(100, (data.used / data.par) * 100) : (data.used > 0 ? 100 : 0))
+                                : 0;
+                            const isLow = hasConfiguredStock
                                 ? (data.reorder > 0 ? (remaining !== null && remaining <= data.reorder) : percentUsed > 80)
                                 : false;
 
@@ -2881,8 +2916,8 @@ const HQStoreDetail: React.FC<{
                                                 <span className="text-xs font-medium text-gray-400"> {data.unit} used</span>
                                             </div>
                                             <div className="text-xs text-gray-500">
-                                                {baseStock ? (
-                                                    <>Remaining: {remaining?.toLocaleString()} {data.unit}</>
+                                                {hasConfiguredStock ? (
+                                                    <>Remaining: {(remaining ?? 0).toLocaleString()} {data.unit}</>
                                                 ) : (
                                                     <>Set stock in Store Settings</>
                                                 )}
@@ -2962,7 +2997,7 @@ const HQStoreDetail: React.FC<{
                                             </button>
                                         </td>
                                         <td className="p-4 text-center">
-                                            {sale.isClosed ? (
+                                            {sale.isClosed || !sale.hasReceipt ? (
                                                 <span className="text-gray-300 text-xs italic">No Image</span>
                                             ) : (
                                                 <button 
@@ -3218,6 +3253,7 @@ const HQDashboard: React.FC<{
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isSalesAnalyticsOpen, setIsSalesAnalyticsOpen] = useState(false);
   const navReadyRef = useRef(false);
+  const navRestoreRef = useRef(false);
   const popLockRef = useRef(false);
   const { rates: fxRates, status: fxStatus } = useFxRates();
   
@@ -3268,12 +3304,31 @@ const HQDashboard: React.FC<{
   }, [sales, stores, fxRates, storeStocks]);
 
   useEffect(() => {
+    if (typeof window === 'undefined' || navRestoreRef.current) return;
+    const historyState = window.history.state;
+    const historyStoreId = historyState?.screen === 'hq'
+      ? (historyState.selectedStoreId as string | null | undefined) ?? null
+      : null;
+    const persistedStoreId = historyStoreId ?? window.localStorage.getItem(HQ_SELECTED_STORE_STORAGE_KEY);
+    if (persistedStoreId && stores.length === 0) return;
+
+    const restoredStore = persistedStoreId
+      ? stores.find(s => s.id === persistedStoreId) ?? null
+      : null;
+    setSelectedStore(restoredStore);
+    window.history.replaceState({ screen: 'hq', selectedStoreId: restoredStore?.id ?? null }, '');
+    navReadyRef.current = true;
+    navRestoreRef.current = true;
+  }, [stores]);
+
+  useEffect(() => {
     if (typeof window === 'undefined') return;
-    if (!navReadyRef.current) {
-      window.history.replaceState({ screen: 'hq', selectedStoreId: null }, '');
-      navReadyRef.current = true;
+    if (selectedStore?.id) {
+      window.localStorage.setItem(HQ_SELECTED_STORE_STORAGE_KEY, selectedStore.id);
+    } else {
+      window.localStorage.removeItem(HQ_SELECTED_STORE_STORAGE_KEY);
     }
-  }, []);
+  }, [selectedStore]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -3624,7 +3679,9 @@ const StoreDashboard: React.FC<{
     const [reportDate, setReportDate] = useState<string | null>(null);
     const [editingMenu, setEditingMenu] = useState<Menu | null>(null);
     const navReadyRef = useRef(false);
+    const navRestoreRef = useRef(false);
     const popLockRef = useRef(false);
+    const ownerViewStorageKey = `${OWNER_VIEW_STORAGE_PREFIX}${store.id}`;
     const storeMenus = menus.filter(m => m.storeId === store.id);
     const storeEmployees = employees.filter(e => e.storeId === store.id);
     const storeSales = sales.filter(s => s.storeId === store.id);
@@ -3756,12 +3813,32 @@ const StoreDashboard: React.FC<{
     };
 
     useEffect(() => {
+        if (typeof window === 'undefined' || navRestoreRef.current) return;
+        const historyState = window.history.state;
+        const fromHistory = historyState?.screen === 'owner'
+            ? {
+                view: (historyState.view as 'dashboard' | 'report' | 'menu' | 'staff' | undefined) ?? 'dashboard',
+                reportDate: (historyState.reportDate as string | null | undefined) ?? null,
+            }
+            : null;
+        const fromStorage = safeParseJson<{ view?: 'dashboard' | 'report' | 'menu' | 'staff'; reportDate?: string | null }>(
+            window.localStorage.getItem(ownerViewStorageKey)
+        );
+
+        const restoredView = fromHistory?.view ?? fromStorage?.view ?? 'dashboard';
+        const restoredReportDate = fromHistory?.reportDate ?? fromStorage?.reportDate ?? null;
+
+        setView(restoredView);
+        setReportDate(restoredReportDate);
+        window.history.replaceState({ screen: 'owner', view: restoredView, reportDate: restoredReportDate }, '');
+        navReadyRef.current = true;
+        navRestoreRef.current = true;
+    }, [ownerViewStorageKey]);
+
+    useEffect(() => {
         if (typeof window === 'undefined') return;
-        if (!navReadyRef.current) {
-            window.history.replaceState({ screen: 'owner', view: 'dashboard', reportDate: null }, '');
-            navReadyRef.current = true;
-        }
-    }, []);
+        window.localStorage.setItem(ownerViewStorageKey, JSON.stringify({ view, reportDate }));
+    }, [ownerViewStorageKey, view, reportDate]);
 
     useEffect(() => {
         if (typeof window === 'undefined') return;
@@ -5134,12 +5211,31 @@ if (!myStore) {
                     });
                   });
 
-                  const storeStockMap = new Map<string, StoreIngredientStock>();
-                  storeStocks
-                    .filter(row => row.storeId === s.storeId)
-                    .forEach(row => {
-                      storeStockMap.set(`${row.ingredientName}::${row.unit}`, row);
-                    });
+                  const usageIngredientNames = Object.keys(usageByIngredient);
+                  let latestStockRows: Array<{ ingredient_name: string; unit: string; par: number; reorder: number }> = [];
+                  if (usageIngredientNames.length > 0) {
+                    try {
+                      const { data, error } = await supabase
+                        .from('store_ingredient_stock')
+                        .select('ingredient_name,unit,par,reorder')
+                        .eq('store_id', s.storeId)
+                        .in('ingredient_name', usageIngredientNames);
+                      if (error) throw error;
+                      latestStockRows = (data ?? []).map((row: any) => ({
+                        ingredient_name: row.ingredient_name,
+                        unit: row.unit,
+                        par: Number(row.par ?? 0),
+                        reorder: Number(row.reorder ?? 0),
+                      }));
+                    } catch (stockFetchErr) {
+                      console.error('Failed to fetch latest stock before consumption update', stockFetchErr);
+                    }
+                  }
+
+                  const latestStockMap = new Map<string, { par: number; reorder: number }>();
+                  latestStockRows.forEach(row => {
+                    latestStockMap.set(`${row.ingredient_name}::${row.unit}`, { par: row.par, reorder: row.reorder });
+                  });
 
                   const updates = Object.entries(usageByIngredient)
                     .filter(([, used]) => used > 0)
@@ -5148,9 +5244,11 @@ if (!myStore) {
                       if (!standard) return null;
                       const unit = standard.unit;
                       const key = `${ingName}::${unit}`;
-                      const row = storeStockMap.get(key);
-                      const current = row?.par ?? standard.par ?? 0;
-                      const reorder = row?.reorder ?? standard.reorder ?? 0;
+                      const row = latestStockMap.get(key);
+                      // Do not auto-create/overwrite stock for ingredients not configured in store settings.
+                      if (!row) return null;
+                      const current = row.par;
+                      const reorder = row.reorder;
                       const next = Math.max(0, current - used);
                       return {
                         store_id: s.storeId,
