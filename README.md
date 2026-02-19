@@ -19,6 +19,13 @@ View your app in AI Studio: https://ai.studio/apps/drive/1aZGc-xCMJd9uysOkzDj-Hz
 3. Run the app:
    `npm run dev`
 
+## Safe Operations (Use This)
+
+- Workflow: `docs/WORKFLOW.md`
+- Release checks: `docs/RELEASE_CHECKLIST.md`
+- Codex request template: `docs/CODEX_REQUEST_TEMPLATE.md`
+- Supabase migration policy: `supabase/migrations/README.md`
+
 
 ## Google Login (Supabase)
 
