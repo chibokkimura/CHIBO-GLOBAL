@@ -19,6 +19,22 @@ View your app in AI Studio: https://ai.studio/apps/drive/1aZGc-xCMJd9uysOkzDj-Hz
 3. Run the app:
    `npm run dev`
 
+## Automated Validation
+
+This repository now includes CI checks:
+
+- `build`: runs `npm run build`
+- `supabase-smoke`: runs DB/Storage smoke test with service role key
+
+To enable Supabase smoke test in GitHub Actions, add repository secrets:
+
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
+
+GitHub path:
+
+- Repository → `Settings` → `Secrets and variables` → `Actions` → `New repository secret`
+
 ## Safe Operations (Use This)
 
 - Workflow: `docs/WORKFLOW.md`
