@@ -47,4 +47,3 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           SUPABASE_RECEIPT_BUCKET: receipts
         run: npm run test:smoke:supabase
-

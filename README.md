@@ -35,6 +35,13 @@ GitHub path:
 
 - Repository → `Settings` → `Secrets and variables` → `Actions` → `New repository secret`
 
+## Safe Operations (Use This)
+
+- Workflow: `docs/WORKFLOW.md`
+- Release checks: `docs/RELEASE_CHECKLIST.md`
+- Codex request template: `docs/CODEX_REQUEST_TEMPLATE.md`
+- Supabase migration policy: `supabase/migrations/README.md`
+
 
 ## Google Login (Supabase)
 
