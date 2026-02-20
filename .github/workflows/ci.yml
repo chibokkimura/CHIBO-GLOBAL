@@ -28,7 +28,6 @@ jobs:
   supabase-smoke:
     runs-on: ubuntu-latest
     needs: build
-    if: ${{ secrets.SUPABASE_URL != '' && secrets.SUPABASE_SERVICE_ROLE_KEY != '' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -46,4 +45,9 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           SUPABASE_RECEIPT_BUCKET: receipts
-        run: npm run test:smoke:supabase
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_SERVICE_ROLE_KEY" ]; then
+            echo "Supabase secrets not configured; skipping smoke test."
+            exit 0
+          fi
+          npm run test:smoke:supabase
