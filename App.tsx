@@ -67,6 +67,11 @@ const OWNER_VIEW_STORAGE_PREFIX = 'chibo:owner:view:';
 const HQ_SELECTED_STORE_STORAGE_KEY = 'chibo:hq:selectedStoreId';
 let salesClosedReasonColumnSupported: boolean | null = null;
 
+function createLocalEntityId(prefix: string): string {
+  const rand = Math.random().toString(36).slice(2, 10);
+  return `${prefix}_${Date.now()}_${rand}`;
+}
+
 const formatLookbackLabel = (days: number) => {
   if (days >= 365 && days % 365 === 0) {
     const years = Math.max(1, Math.round(days / 365));
@@ -481,30 +486,34 @@ async function deleteMenu(menuId: string) {
   if (error) throw error;
 }
 
-async function saveEmployees(storeId: string, emps: Employee[]) {
-  const rows = emps.map(e => ({
-    id: e.id,
-    store_id: storeId,
-    name: e.name,
-    position: e.position,
-    age: e.age ?? null,
-    image_url: e.imageUrl ?? null,
-  }));
+async function saveEmployees(storeId: string, emps: Employee[], removedIds: string[] = []) {
+  const rows = emps
+    .map(e => ({
+      id: String(e.id ?? '').trim(),
+      store_id: storeId,
+      name: String(e.name ?? '').trim(),
+      position: String(e.position ?? '').trim(),
+      age: e.age ?? null,
+      image_url: e.imageUrl ?? null,
+    }))
+    .filter((r) => r.id && r.name && r.position);
 
-  if (rows.length) {
+  if (rows.length > 0) {
     const { error: upsertErr } = await supabase.from('employees').upsert(rows, { onConflict: 'id' });
     if (upsertErr) throw upsertErr;
+  }
 
-    const idList = rows.map(r => `'${r.id}'`).join(',');
+  const keepIds = new Set(rows.map((r) => r.id));
+  const deleteIds = Array.from(new Set(removedIds.map((id) => String(id ?? '').trim()).filter(Boolean)))
+    .filter((id) => !keepIds.has(id));
+
+  if (deleteIds.length > 0) {
     const { error: deleteErr } = await supabase
       .from('employees')
       .delete()
       .eq('store_id', storeId)
-      .not('id', 'in', `(${idList})`);
+      .in('id', deleteIds);
     if (deleteErr) throw deleteErr;
-  } else {
-    const { error } = await supabase.from('employees').delete().eq('store_id', storeId);
-    if (error) throw error;
   }
 }
 
@@ -1842,7 +1851,8 @@ const EmployeeManager: React.FC<{
             setEditingEmp(null);
         } catch (e) {
             console.error('Failed to save staff', e);
-            setEmpError('Failed to save staff. Please try again.');
+            const message = e instanceof Error ? e.message : 'Please try again.';
+            setEmpError(`Failed to save staff: ${message}`);
         } finally {
             setEmpSaving(false);
         }
@@ -1856,7 +1866,8 @@ const EmployeeManager: React.FC<{
                 await Promise.resolve(onUpdate(employees.filter(e => e.id !== id)));
             } catch (e) {
                 console.error('Failed to delete staff', e);
-                setEmpError('Failed to delete staff. Please try again.');
+                const message = e instanceof Error ? e.message : 'Please try again.';
+                setEmpError(`Failed to delete staff: ${message}`);
             } finally {
                 setEmpSaving(false);
             }
@@ -1877,7 +1888,7 @@ const EmployeeManager: React.FC<{
                 <h2 className="text-2xl font-bold">Staff Management</h2>
                 <button 
                     onClick={() => setEditingEmp({
-                        id: `E_${Date.now()}`,
+                        id: createLocalEntityId('E'),
                         storeId: store.id,
                         name: '',
                         position: positions[0] || '',
@@ -4725,12 +4736,16 @@ const App = () => {
 
   const updateEmployeesForStore = useCallback(async (storeId: string, emps: Employee[]) => {
     const normalized = emps.map(e => ({ ...e, storeId }));
+    const previousForStore = employees.filter((e) => e.storeId === storeId);
+    const removedIds = previousForStore
+      .map((e) => e.id)
+      .filter((id) => !normalized.some((n) => n.id === id));
     setEmployees(prev => [
       ...prev.filter(e => e.storeId !== storeId),
       ...normalized
     ]);
     try {
-      await saveEmployees(storeId, normalized);
+      await saveEmployees(storeId, normalized, removedIds);
     } catch (e) {
       console.error('Failed to save employees', e);
       await refreshAll();
@@ -4738,7 +4753,7 @@ const App = () => {
     } finally {
       schedulePartialRefresh(['employees']);
     }
-  }, [refreshAll, schedulePartialRefresh]);
+  }, [employees, refreshAll, schedulePartialRefresh]);
 
   useEffect(() => {
     if (sessionEmail) {
@@ -4787,7 +4802,7 @@ const App = () => {
     const intervalId = window.setInterval(() => {
       if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
       if (realtimeSubscribedRef.current) return;
-      schedulePartialRefresh(['sales']);
+      schedulePartialRefresh(['sales', 'employees']);
     }, SALES_FALLBACK_POLL_MS);
     return () => window.clearInterval(intervalId);
   }, [sessionEmail, schedulePartialRefresh]);
@@ -4796,7 +4811,7 @@ const App = () => {
     if (!sessionEmail) return;
     const onFocusOrVisible = () => {
       if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
-      schedulePartialRefresh(['sales']);
+      schedulePartialRefresh(['sales', 'employees']);
     };
     window.addEventListener('focus', onFocusOrVisible);
     document.addEventListener('visibilitychange', onFocusOrVisible);
