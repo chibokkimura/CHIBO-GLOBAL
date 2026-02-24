@@ -66,6 +66,7 @@ const SALES_FALLBACK_POLL_MS = 180000;
 const OWNER_VIEW_STORAGE_PREFIX = 'chibo:owner:view:';
 const HQ_SELECTED_STORE_STORAGE_KEY = 'chibo:hq:selectedStoreId';
 let salesClosedReasonColumnSupported: boolean | null = null;
+const SALES_RECEIPT_IMAGE_RESIZE = { maxWidth: 1800, maxHeight: 1800, quality: 0.85 };
 
 function createLocalEntityId(prefix: string): string {
   const rand = Math.random().toString(36).slice(2, 10);
@@ -624,6 +625,7 @@ type ImageResizeOptions = {
   maxHeight: number;
   quality?: number;
   mimeType?: string;
+  fallbackToOriginal?: boolean;
 };
 
 function readFileAsDataUrl(file: File): Promise<string> {
@@ -645,7 +647,7 @@ function loadImage(src: string): Promise<HTMLImageElement> {
 }
 
 async function resizeImageToDataUrl(file: File, opts: ImageResizeOptions): Promise<string> {
-  const { maxWidth, maxHeight, quality = 0.82, mimeType = 'image/jpeg' } = opts;
+  const { maxWidth, maxHeight, quality = 0.82, mimeType = 'image/jpeg', fallbackToOriginal = true } = opts;
   try {
     const original = await readFileAsDataUrl(file);
     const img = await loadImage(original);
@@ -661,7 +663,10 @@ async function resizeImageToDataUrl(file: File, opts: ImageResizeOptions): Promi
     return canvas.toDataURL(mimeType, quality);
   } catch (e) {
     console.error('Image resize failed, using original', e);
-    return readFileAsDataUrl(file);
+    if (fallbackToOriginal) {
+      return readFileAsDataUrl(file);
+    }
+    throw new Error('Image resize failed.');
   }
 }
 
@@ -1163,8 +1168,18 @@ const SalesReporter: React.FC<{
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const resized = await resizeImageToDataUrl(file, { maxWidth: 1800, maxHeight: 1800, quality: 0.85 });
-    setReceiptImage(resized);
+    setSubmitError(null);
+    try {
+      const resized = await resizeImageToDataUrl(file, {
+        ...SALES_RECEIPT_IMAGE_RESIZE,
+        fallbackToOriginal: false,
+      });
+      setReceiptImage(resized);
+    } catch (error) {
+      console.error('Failed to process receipt image', error);
+      setReceiptImage(null);
+      setSubmitError('Failed to process image. Please upload another receipt photo.');
+    }
     e.currentTarget.value = '';
   };
 
