@@ -41,6 +41,20 @@ type GlobalConfig = {
 type GlobalConfigLoadState = 'loading' | 'loaded' | 'error';
 type RefreshScope = 'stores' | 'ingredients' | 'employees' | 'menus' | 'sales' | 'storeStocks' | 'globalConfig';
 
+type ScopeMutationCounter = Record<RefreshScope, number>;
+
+function createInitialScopeMutationCounter(): ScopeMutationCounter {
+  return {
+    stores: 0,
+    ingredients: 0,
+    employees: 0,
+    menus: 0,
+    sales: 0,
+    storeStocks: 0,
+    globalConfig: 0,
+  };
+}
+
 const DEFAULT_GLOBAL_CONFIG: GlobalConfig = {
   storeNames: ['CHIBO', 'CHIBO Express', 'CHIBO Premium'],
   countries: ['South Korea', 'Vietnam', 'Philippines', 'China', 'Taiwan', 'Others'],
@@ -62,15 +76,101 @@ const SALES_LOOKBACK_DEFAULT_DAYS = 90;
 const SALES_LOOKBACK_STEP_DAYS = 90;
 const RECEIPT_BUCKET = 'receipts';
 const RECEIPT_SIGNED_URL_TTL_SEC = 60 * 60 * 24;
-const SALES_FALLBACK_POLL_MS = 180000;
+const SALES_FALLBACK_POLL_MS = 60000;
 const OWNER_VIEW_STORAGE_PREFIX = 'chibo:owner:view:';
 const HQ_SELECTED_STORE_STORAGE_KEY = 'chibo:hq:selectedStoreId';
 let salesClosedReasonColumnSupported: boolean | null = null;
 const SALES_RECEIPT_IMAGE_RESIZE = { maxWidth: 1800, maxHeight: 1800, quality: 0.85 };
+const MENU_IMAGE_RESIZE = { maxWidth: 1400, maxHeight: 1400, quality: 0.82 };
+const STAFF_IMAGE_RESIZE = { maxWidth: 640, maxHeight: 640, quality: 0.82 };
+const IMAGE_SIGNED_URL_CACHE_MS = 6 * 60 * 60 * 1000;
+const LEGACY_MEDIA_MIGRATION_LIMIT = 80;
+const signedImageUrlCache = new Map<string, { url: string; expiresAt: number }>();
 
 function createLocalEntityId(prefix: string): string {
   const rand = Math.random().toString(36).slice(2, 10);
   return `${prefix}_${Date.now()}_${rand}`;
+}
+
+function isDataUrl(value: string): boolean {
+  return value.startsWith('data:');
+}
+
+function isHttpUrl(value: string): boolean {
+  return /^https?:\/\//i.test(value);
+}
+
+function isStoragePath(value: string): boolean {
+  const trimmed = value.trim();
+  return trimmed.length > 0 && !isDataUrl(trimmed) && !isHttpUrl(trimmed);
+}
+
+function normalizePersistedImageRef(imageUrl?: string | null, imagePath?: string | null): string | null {
+  const url = String(imageUrl ?? '').trim();
+  const path = String(imagePath ?? '').trim();
+  if (isDataUrl(url)) return url;
+  if (path && isStoragePath(path) && (!url || isHttpUrl(url) || url === path)) {
+    return path;
+  }
+  if (!url) return null;
+  return url;
+}
+
+async function resolveStoredImage(value?: string | null): Promise<{ displayUrl?: string; imagePath?: string }> {
+  const raw = String(value ?? '').trim();
+  if (!raw) return {};
+  if (isDataUrl(raw) || isHttpUrl(raw)) return { displayUrl: raw };
+  if (!isStoragePath(raw)) return {};
+
+  const cached = signedImageUrlCache.get(raw);
+  if (cached && cached.expiresAt > Date.now()) {
+    return { displayUrl: cached.url, imagePath: raw };
+  }
+
+  try {
+    const { data, error } = await supabase.storage
+      .from(RECEIPT_BUCKET)
+      .createSignedUrl(raw, RECEIPT_SIGNED_URL_TTL_SEC);
+    if (!error && data?.signedUrl) {
+      signedImageUrlCache.set(raw, { url: data.signedUrl, expiresAt: Date.now() + IMAGE_SIGNED_URL_CACHE_MS });
+      return { displayUrl: data.signedUrl, imagePath: raw };
+    }
+    const { data: publicData } = supabase.storage.from(RECEIPT_BUCKET).getPublicUrl(raw);
+    if (publicData?.publicUrl) {
+      signedImageUrlCache.set(raw, { url: publicData.publicUrl, expiresAt: Date.now() + IMAGE_SIGNED_URL_CACHE_MS });
+      return { displayUrl: publicData.publicUrl, imagePath: raw };
+    }
+  } catch (e) {
+    console.error('Failed to resolve storage image', e);
+  }
+
+  return { imagePath: raw };
+}
+
+async function uploadStoreEntityImage(
+  storeId: string,
+  entityType: 'menu' | 'staff',
+  entityId: string,
+  dataUrl: string
+): Promise<string> {
+  const blob = await dataUrlToBlob(dataUrl);
+  const path = `${storeId}/${entityType}/${entityId}.jpg`;
+  const { error } = await supabase.storage
+    .from(RECEIPT_BUCKET)
+    .upload(path, blob, { upsert: true, contentType: 'image/jpeg', cacheControl: '3600' });
+  if (error) throw error;
+  signedImageUrlCache.delete(path);
+  return path;
+}
+
+async function deleteStorageObjectByPath(path?: string | null): Promise<void> {
+  const raw = String(path ?? '').trim();
+  if (!raw || !isStoragePath(raw)) return;
+  const { error } = await supabase.storage.from(RECEIPT_BUCKET).remove([raw]);
+  if (error) {
+    console.warn('Failed to remove storage object', raw, error);
+  }
+  signedImageUrlCache.delete(raw);
 }
 
 const formatLookbackLabel = (days: number) => {
@@ -284,13 +384,18 @@ async function unlinkAccountFromStore(email: string, storeId: string) {
 async function loadEmployees(): Promise<Employee[]> {
   const { data, error } = await supabase.from('employees').select('id,store_id,name,position,age,image_url').order('id');
   if (error) throw error;
-  return (data ?? []).map((r: any) => ({
-    id: r.id,
-    storeId: r.store_id,
-    name: r.name,
-    position: r.position,
-    age: r.age ?? undefined,
-    imageUrl: r.image_url ?? undefined,
+  const rows = data ?? [];
+  return await Promise.all(rows.map(async (r: any) => {
+    const resolved = await resolveStoredImage(r.image_url ?? undefined);
+    return {
+      id: r.id,
+      storeId: r.store_id,
+      name: r.name,
+      position: r.position,
+      age: r.age ?? undefined,
+      imageUrl: resolved.displayUrl,
+      imagePath: resolved.imagePath,
+    };
   }));
 }
 
@@ -319,14 +424,18 @@ async function loadMenus(): Promise<Menu[]> {
     recipeByMenu[r.menu_id] = arr;
   });
 
-  return (menusData ?? []).map((m: any) => ({
-    id: m.id,
-    storeId: m.store_id,
-    category: m.category,
-    name: m.name,
-    price: Number(m.price),
-    imageUrl: m.image_url ?? undefined,
-    recipe: recipeByMenu[m.id] ?? [],
+  return await Promise.all((menusData ?? []).map(async (m: any) => {
+    const resolved = await resolveStoredImage(m.image_url ?? undefined);
+    return {
+      id: m.id,
+      storeId: m.store_id,
+      category: m.category,
+      name: m.name,
+      price: Number(m.price),
+      imageUrl: resolved.displayUrl,
+      imagePath: resolved.imagePath,
+      recipe: recipeByMenu[m.id] ?? [],
+    };
   }));
 }
 
@@ -416,18 +525,24 @@ async function loadReceiptImage(saleId: string): Promise<string | null> {
   if (error) throw error;
   const value = data?.receipt_image ?? null;
   if (!value) return null;
-  if (value.startsWith('data:') || value.startsWith('http')) return value;
-  return await getReceiptSignedUrl(value);
+  const resolved = await resolveStoredImage(value);
+  return resolved.displayUrl ?? null;
 }
 
 async function saveMenu(menu: Menu) {
+  const normalizedImageRef = normalizePersistedImageRef(menu.imageUrl, menu.imagePath);
+  let persistedImageRef: string | null = normalizedImageRef;
+  if (normalizedImageRef && isDataUrl(normalizedImageRef)) {
+    persistedImageRef = await uploadStoreEntityImage(menu.storeId, 'menu', menu.id, normalizedImageRef);
+  }
+
   const { error: mErr } = await supabase.from('menus').upsert({
     id: menu.id,
     store_id: menu.storeId,
     category: menu.category,
     name: menu.name,
     price: menu.price,
-    image_url: menu.imageUrl ?? null,
+    image_url: persistedImageRef ?? null,
   });
   if (mErr) throw mErr;
 
@@ -483,21 +598,46 @@ async function saveMenu(menu: Menu) {
 }
 
 async function deleteMenu(menuId: string) {
+  const { data: existing, error: existingErr } = await supabase
+    .from('menus')
+    .select('image_url')
+    .eq('id', menuId)
+    .maybeSingle();
+  if (existingErr) throw existingErr;
+
   const { error } = await supabase.from('menus').delete().eq('id', menuId);
   if (error) throw error;
+
+  await deleteStorageObjectByPath(existing?.image_url ?? null);
 }
 
 async function saveEmployees(storeId: string, emps: Employee[], removedIds: string[] = []) {
-  const rows = emps
-    .map(e => ({
+  const sourceRows = emps
+    .map((e) => ({
       id: String(e.id ?? '').trim(),
-      store_id: storeId,
       name: String(e.name ?? '').trim(),
       position: String(e.position ?? '').trim(),
       age: e.age ?? null,
-      image_url: e.imageUrl ?? null,
+      imageUrl: e.imageUrl ?? null,
+      imagePath: e.imagePath ?? null,
     }))
     .filter((r) => r.id && r.name && r.position);
+
+  const rows = await Promise.all(sourceRows.map(async (r) => {
+    const normalizedImageRef = normalizePersistedImageRef(r.imageUrl, r.imagePath);
+    let persistedImageRef: string | null = normalizedImageRef;
+    if (normalizedImageRef && isDataUrl(normalizedImageRef)) {
+      persistedImageRef = await uploadStoreEntityImage(storeId, 'staff', r.id, normalizedImageRef);
+    }
+    return {
+      id: r.id,
+      store_id: storeId,
+      name: r.name,
+      position: r.position,
+      age: r.age,
+      image_url: persistedImageRef ?? null,
+    };
+  }));
 
   if (rows.length > 0) {
     const { error: upsertErr } = await supabase.from('employees').upsert(rows, { onConflict: 'id' });
@@ -509,12 +649,26 @@ async function saveEmployees(storeId: string, emps: Employee[], removedIds: stri
     .filter((id) => !keepIds.has(id));
 
   if (deleteIds.length > 0) {
+    const { data: removedRows, error: removedRowsErr } = await supabase
+      .from('employees')
+      .select('id,image_url')
+      .eq('store_id', storeId)
+      .in('id', deleteIds);
+    if (removedRowsErr) throw removedRowsErr;
+
     const { error: deleteErr } = await supabase
       .from('employees')
       .delete()
       .eq('store_id', storeId)
       .in('id', deleteIds);
     if (deleteErr) throw deleteErr;
+
+    const imagePathsToDelete = (removedRows ?? [])
+      .map((row: any) => String(row.image_url ?? '').trim())
+      .filter((path) => path && isStoragePath(path));
+    if (imagePathsToDelete.length > 0) {
+      await Promise.all(imagePathsToDelete.map((path) => deleteStorageObjectByPath(path)));
+    }
   }
 }
 
@@ -542,18 +696,6 @@ async function uploadReceiptImage(storeId: string, saleId: string, dataUrl: stri
     .upload(path, blob, { upsert: true, contentType: mime, cacheControl: '3600' });
   if (error) throw error;
   return path;
-}
-
-async function getReceiptSignedUrl(path: string): Promise<string> {
-  const { data, error } = await supabase.storage
-    .from(RECEIPT_BUCKET)
-    .createSignedUrl(path, RECEIPT_SIGNED_URL_TTL_SEC);
-  if (error) {
-    const { data: publicData } = supabase.storage.from(RECEIPT_BUCKET).getPublicUrl(path);
-    if (publicData?.publicUrl) return publicData.publicUrl;
-    throw error;
-  }
-  return data.signedUrl;
 }
 
 async function addSale(sale: Sale) {
@@ -662,7 +804,7 @@ async function resizeImageToDataUrl(file: File, opts: ImageResizeOptions): Promi
     ctx.drawImage(img, 0, 0, width, height);
     return canvas.toDataURL(mimeType, quality);
   } catch (e) {
-    console.error('Image resize failed, using original', e);
+    console.error('Image resize failed', e);
     if (fallbackToOriginal) {
       return readFileAsDataUrl(file);
     }
@@ -1373,7 +1515,7 @@ const MenuManager: React.FC<{
         <h2 className="text-2xl font-bold">Menu Management</h2>
         <button 
           onClick={() => onCreate({
-            id: `M_${Date.now()}`,
+            id: createLocalEntityId('M'),
             storeId: store.id,
             category: 'Main', // Default will be overwritten by editor
             name: 'New Item',
@@ -1459,8 +1601,14 @@ const RecipeEditor: React.FC<{
     const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (!file) return;
-        const resized = await resizeImageToDataUrl(file, { maxWidth: 1400, maxHeight: 1400, quality: 0.82 });
-        setEditedMenu({ ...editedMenu, imageUrl: resized });
+        setRecipeError(null);
+        try {
+            const resized = await resizeImageToDataUrl(file, { ...MENU_IMAGE_RESIZE, fallbackToOriginal: false });
+            setEditedMenu({ ...editedMenu, imageUrl: resized, imagePath: undefined });
+        } catch (error) {
+            console.error('Failed to process menu image', error);
+            setRecipeError('Failed to process menu image. Please upload another photo.');
+        }
         e.currentTarget.value = '';
     };
 
@@ -1770,12 +1918,19 @@ const StaffEditor: React.FC<{
     onBack: () => void;
 }> = ({ employee, positions, onSave, onBack }) => {
     const [editedEmp, setEditedEmp] = useState(employee);
+    const [imageError, setImageError] = useState<string | null>(null);
     
     const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (!file) return;
-        const resized = await resizeImageToDataUrl(file, { maxWidth: 640, maxHeight: 640, quality: 0.82 });
-        setEditedEmp({ ...editedEmp, imageUrl: resized });
+        setImageError(null);
+        try {
+            const resized = await resizeImageToDataUrl(file, { ...STAFF_IMAGE_RESIZE, fallbackToOriginal: false });
+            setEditedEmp({ ...editedEmp, imageUrl: resized, imagePath: undefined });
+        } catch (error) {
+            console.error('Failed to process staff image', error);
+            setImageError('Failed to process image. Please upload another photo.');
+        }
         e.currentTarget.value = '';
     };
 
@@ -1803,6 +1958,7 @@ const StaffEditor: React.FC<{
                             </div>
                         </div>
                     </div>
+                    {imageError && <div className="text-sm text-red-600 font-semibold text-center">{imageError}</div>}
 
                     <div>
                         <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Full Name</label>
@@ -4520,6 +4676,28 @@ const App = () => {
   const partialTimerRef = useRef<number | null>(null);
   const partialQueueRef = useRef<Set<RefreshScope>>(new Set());
   const realtimeSubscribedRef = useRef<boolean>(false);
+  const legacyMediaMigrationStartedRef = useRef<boolean>(false);
+  const scopeMutationRef = useRef<ScopeMutationCounter>(createInitialScopeMutationCounter());
+
+  const beginScopeMutation = useCallback((scopes: RefreshScope[]) => {
+    scopes.forEach((scope) => {
+      scopeMutationRef.current[scope] += 1;
+    });
+  }, []);
+
+  const endScopeMutation = useCallback((scopes: RefreshScope[]) => {
+    scopes.forEach((scope) => {
+      scopeMutationRef.current[scope] = Math.max(0, scopeMutationRef.current[scope] - 1);
+    });
+  }, []);
+
+  const takeScopeMutationSnapshot = useCallback((): ScopeMutationCounter => {
+    return { ...scopeMutationRef.current };
+  }, []);
+
+  const canApplyScopeResult = useCallback((scope: RefreshScope, snapshot: ScopeMutationCounter): boolean => {
+    return scopeMutationRef.current[scope] === snapshot[scope];
+  }, []);
 
   const refreshAll = useCallback(async () => {
     if (refreshInFlightRef.current) {
@@ -4531,6 +4709,7 @@ const App = () => {
     setDataError(null);
     setGlobalConfigError(null);
     setGlobalConfigStatus((prev) => (prev === 'loaded' ? prev : 'loading'));
+    const scopeSnapshot = takeScopeMutationSnapshot();
 
     const results = await Promise.allSettled([
       loadStores(),
@@ -4545,49 +4724,49 @@ const App = () => {
     const errors: string[] = [];
 
     const stRes = results[0];
-    if (stRes.status === 'fulfilled') {
+    if (stRes.status === 'fulfilled' && canApplyScopeResult('stores', scopeSnapshot)) {
       setStores(stRes.value);
     } else {
       errors.push(stRes.reason?.message ?? 'Failed to load stores');
     }
 
     const ingRes = results[1];
-    if (ingRes.status === 'fulfilled') {
+    if (ingRes.status === 'fulfilled' && canApplyScopeResult('ingredients', scopeSnapshot)) {
       setIngredients(ingRes.value);
     } else {
       errors.push(ingRes.reason?.message ?? 'Failed to load ingredients');
     }
 
     const empRes = results[2];
-    if (empRes.status === 'fulfilled') {
+    if (empRes.status === 'fulfilled' && canApplyScopeResult('employees', scopeSnapshot)) {
       setEmployees(empRes.value);
     } else {
       errors.push(empRes.reason?.message ?? 'Failed to load employees');
     }
 
     const mnRes = results[3];
-    if (mnRes.status === 'fulfilled') {
+    if (mnRes.status === 'fulfilled' && canApplyScopeResult('menus', scopeSnapshot)) {
       setMenus(mnRes.value);
     } else {
       errors.push(mnRes.reason?.message ?? 'Failed to load menus');
     }
 
     const slRes = results[4];
-    if (slRes.status === 'fulfilled') {
+    if (slRes.status === 'fulfilled' && canApplyScopeResult('sales', scopeSnapshot)) {
       setSales(slRes.value);
     } else {
       errors.push(slRes.reason?.message ?? 'Failed to load sales');
     }
 
     const ssRes = results[5];
-    if (ssRes.status === 'fulfilled') {
+    if (ssRes.status === 'fulfilled' && canApplyScopeResult('storeStocks', scopeSnapshot)) {
       setStoreStocks(ssRes.value);
     } else {
       errors.push(ssRes.reason?.message ?? 'Failed to load store stock');
     }
 
     const gcRes = results[6];
-    if (gcRes.status === 'fulfilled') {
+    if (gcRes.status === 'fulfilled' && canApplyScopeResult('globalConfig', scopeSnapshot)) {
       const gc = gcRes.value;
       if (gc.exists === null) {
         setGlobalConfigStatus('error');
@@ -4597,7 +4776,7 @@ const App = () => {
         setGlobalConfigExists(gc.exists);
         setGlobalConfigStatus('loaded');
       }
-    } else {
+    } else if (gcRes.status !== 'fulfilled') {
       setGlobalConfigStatus('error');
       setGlobalConfigError(gcRes.reason?.message ?? 'Failed to load global settings.');
     }
@@ -4614,12 +4793,13 @@ const App = () => {
         refreshAll();
       }, 50);
     }
-  }, []);
+  }, [canApplyScopeResult, takeScopeMutationSnapshot]);
 
   const refreshPartial = useCallback(async (scopes: Set<RefreshScope>) => {
     if (scopes.size === 0) return;
     const errors: string[] = [];
     setDataError(null);
+    const scopeSnapshot = takeScopeMutationSnapshot();
 
     if (scopes.has('globalConfig')) {
       setGlobalConfigError(null);
@@ -4629,27 +4809,28 @@ const App = () => {
     const tasks: Promise<void>[] = [];
 
     if (scopes.has('stores')) {
-      tasks.push(loadStores().then(setStores).catch(e => errors.push(e?.message ?? 'Failed to load stores')));
+      tasks.push(loadStores().then((rows) => { if (canApplyScopeResult('stores', scopeSnapshot)) setStores(rows); }).catch(e => errors.push(e?.message ?? 'Failed to load stores')));
     }
     if (scopes.has('ingredients')) {
-      tasks.push(loadIngredients().then(setIngredients).catch(e => errors.push(e?.message ?? 'Failed to load ingredients')));
+      tasks.push(loadIngredients().then((rows) => { if (canApplyScopeResult('ingredients', scopeSnapshot)) setIngredients(rows); }).catch(e => errors.push(e?.message ?? 'Failed to load ingredients')));
     }
     if (scopes.has('employees')) {
-      tasks.push(loadEmployees().then(setEmployees).catch(e => errors.push(e?.message ?? 'Failed to load employees')));
+      tasks.push(loadEmployees().then((rows) => { if (canApplyScopeResult('employees', scopeSnapshot)) setEmployees(rows); }).catch(e => errors.push(e?.message ?? 'Failed to load employees')));
     }
     if (scopes.has('menus')) {
-      tasks.push(loadMenus().then(setMenus).catch(e => errors.push(e?.message ?? 'Failed to load menus')));
+      tasks.push(loadMenus().then((rows) => { if (canApplyScopeResult('menus', scopeSnapshot)) setMenus(rows); }).catch(e => errors.push(e?.message ?? 'Failed to load menus')));
     }
     if (scopes.has('sales')) {
-      tasks.push(loadSales(salesLookbackRef.current).then(setSales).catch(e => errors.push(e?.message ?? 'Failed to load sales')));
+      tasks.push(loadSales(salesLookbackRef.current).then((rows) => { if (canApplyScopeResult('sales', scopeSnapshot)) setSales(rows); }).catch(e => errors.push(e?.message ?? 'Failed to load sales')));
     }
     if (scopes.has('storeStocks')) {
-      tasks.push(loadStoreIngredientStocks().then(setStoreStocks).catch(e => errors.push(e?.message ?? 'Failed to load store stock')));
+      tasks.push(loadStoreIngredientStocks().then((rows) => { if (canApplyScopeResult('storeStocks', scopeSnapshot)) setStoreStocks(rows); }).catch(e => errors.push(e?.message ?? 'Failed to load store stock')));
     }
     if (scopes.has('globalConfig')) {
       tasks.push(
         loadGlobalConfig()
           .then((gc) => {
+            if (!canApplyScopeResult('globalConfig', scopeSnapshot)) return;
             if (gc.exists === null) {
               setGlobalConfigStatus('error');
               setGlobalConfigError('Failed to load global settings.');
@@ -4673,7 +4854,7 @@ const App = () => {
     if (errors.length > 0) {
       setDataError(errors[0]);
     }
-  }, []);
+  }, [canApplyScopeResult, takeScopeMutationSnapshot]);
 
   const drainPartialQueue = useCallback(() => {
     if (partialQueueRef.current.size === 0) return;
@@ -4698,7 +4879,7 @@ const App = () => {
     partialTimerRef.current = window.setTimeout(() => {
       partialTimerRef.current = null;
       drainPartialQueue();
-    }, 600);
+    }, 350);
   }, [drainPartialQueue]);
 
   const salesLookbackLabel = useMemo(() => formatLookbackLabel(salesLookbackDays), [salesLookbackDays]);
@@ -4739,6 +4920,58 @@ const App = () => {
     }
   }, [user, globalConfigStatus, globalConfig.standardIngredients, ingredients, syncingIngredients, refreshAll]);
 
+  const migrateLegacyBase64MediaOnce = useCallback(async () => {
+    if (legacyMediaMigrationStartedRef.current) return;
+    legacyMediaMigrationStartedRef.current = true;
+
+    const legacyMenus = menus
+      .filter((m) => Boolean(m.imageUrl) && isDataUrl(String(m.imageUrl)))
+      .slice(0, LEGACY_MEDIA_MIGRATION_LIMIT);
+    const legacyEmployees = employees
+      .filter((e) => Boolean(e.imageUrl) && isDataUrl(String(e.imageUrl)))
+      .slice(0, LEGACY_MEDIA_MIGRATION_LIMIT);
+
+    if (legacyMenus.length === 0 && legacyEmployees.length === 0) return;
+
+    let migrated = 0;
+
+    for (const menu of legacyMenus) {
+      try {
+        const imageRef = String(menu.imageUrl ?? '');
+        const path = await uploadStoreEntityImage(menu.storeId, 'menu', menu.id, imageRef);
+        const { error } = await supabase
+          .from('menus')
+          .update({ image_url: path })
+          .eq('id', menu.id)
+          .eq('store_id', menu.storeId);
+        if (error) throw error;
+        migrated += 1;
+      } catch (e) {
+        console.error('Failed to migrate legacy menu image', menu.id, e);
+      }
+    }
+
+    for (const employee of legacyEmployees) {
+      try {
+        const imageRef = String(employee.imageUrl ?? '');
+        const path = await uploadStoreEntityImage(employee.storeId, 'staff', employee.id, imageRef);
+        const { error } = await supabase
+          .from('employees')
+          .update({ image_url: path })
+          .eq('id', employee.id)
+          .eq('store_id', employee.storeId);
+        if (error) throw error;
+        migrated += 1;
+      } catch (e) {
+        console.error('Failed to migrate legacy staff image', employee.id, e);
+      }
+    }
+
+    if (migrated > 0) {
+      schedulePartialRefresh(['menus', 'employees']);
+    }
+  }, [menus, employees, schedulePartialRefresh]);
+
   const scheduleRefreshAll = useCallback(() => {
     if (!sessionEmail) return;
     if (refreshTimerRef.current !== null) {
@@ -4750,6 +4983,7 @@ const App = () => {
   }, [sessionEmail, refreshAll]);
 
   const updateEmployeesForStore = useCallback(async (storeId: string, emps: Employee[]) => {
+    beginScopeMutation(['employees']);
     const normalized = emps.map(e => ({ ...e, storeId }));
     const previousForStore = employees.filter((e) => e.storeId === storeId);
     const removedIds = previousForStore
@@ -4766,15 +5000,26 @@ const App = () => {
       await refreshAll();
       throw e;
     } finally {
+      endScopeMutation(['employees']);
       schedulePartialRefresh(['employees']);
     }
-  }, [employees, refreshAll, schedulePartialRefresh]);
+  }, [beginScopeMutation, employees, endScopeMutation, refreshAll, schedulePartialRefresh]);
 
   useEffect(() => {
     if (sessionEmail) {
       refreshAll();
     }
   }, [sessionEmail, refreshAll]);
+
+  useEffect(() => {
+    if (!sessionEmail) {
+      legacyMediaMigrationStartedRef.current = false;
+      return;
+    }
+    if (dataLoading) return;
+    if (menus.length === 0 && employees.length === 0) return;
+    void migrateLegacyBase64MediaOnce();
+  }, [sessionEmail, dataLoading, menus, employees, migrateLegacyBase64MediaOnce]);
 
   useEffect(() => {
     if (!sessionEmail) return;
@@ -4810,14 +5055,14 @@ const App = () => {
     };
   }, [sessionEmail, schedulePartialRefresh, scheduleRefreshAll]);
 
-  // Fallback polling keeps sales data fresh if realtime delivery is delayed.
+  // Fallback polling keeps critical views fresh if realtime delivery is delayed.
   // Keep this lightweight to avoid continuous full reload pressure on the DB.
   useEffect(() => {
     if (!sessionEmail) return;
     const intervalId = window.setInterval(() => {
       if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
       if (realtimeSubscribedRef.current) return;
-      schedulePartialRefresh(['sales', 'employees']);
+      schedulePartialRefresh(['sales', 'employees', 'menus', 'storeStocks']);
     }, SALES_FALLBACK_POLL_MS);
     return () => window.clearInterval(intervalId);
   }, [sessionEmail, schedulePartialRefresh]);
@@ -4826,7 +5071,7 @@ const App = () => {
     if (!sessionEmail) return;
     const onFocusOrVisible = () => {
       if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
-      schedulePartialRefresh(['sales', 'employees']);
+      schedulePartialRefresh(['sales', 'employees', 'menus', 'storeStocks']);
     };
     window.addEventListener('focus', onFocusOrVisible);
     document.addEventListener('visibilitychange', onFocusOrVisible);
@@ -5092,6 +5337,7 @@ if (!resolvedUser) {
                 schedulePartialRefresh(['stores']);
               }}
               onSaveStoreStocks={async (storeId, rows) => {
+                beginScopeMutation(['storeStocks']);
                 setStoreStocks(prev => [
                   ...prev.filter(r => r.storeId !== storeId),
                   ...rows.map(r => ({ storeId, ingredientName: r.ingredientName, unit: r.unit, par: r.par, reorder: r.reorder }))
@@ -5102,6 +5348,7 @@ if (!resolvedUser) {
                   await refreshAll();
                   throw e;
                 } finally {
+                  endScopeMutation(['storeStocks']);
                   schedulePartialRefresh(['storeStocks']);
                 }
               }}
@@ -5115,6 +5362,7 @@ if (!resolvedUser) {
                 schedulePartialRefresh(['stores']);
               }}
               onUpdateMenu={async (m) => {
+                beginScopeMutation(['menus']);
                 setMenus(prev => {
                   const exists = prev.some(menu => menu.id === m.id);
                   if (exists) return prev.map(menu => menu.id === m.id ? m : menu);
@@ -5126,10 +5374,12 @@ if (!resolvedUser) {
                   await refreshAll();
                   throw e;
                 } finally {
+                  endScopeMutation(['menus']);
                   schedulePartialRefresh(['menus']);
                 }
               }}
               onCreateMenu={async (m) => {
+                beginScopeMutation(['menus']);
                 setMenus(prev => {
                   const exists = prev.some(menu => menu.id === m.id);
                   if (exists) return prev.map(menu => menu.id === m.id ? m : menu);
@@ -5141,10 +5391,12 @@ if (!resolvedUser) {
                   await refreshAll();
                   throw e;
                 } finally {
+                  endScopeMutation(['menus']);
                   schedulePartialRefresh(['menus']);
                 }
               }}
               onDeleteMenu={async (id) => {
+                beginScopeMutation(['menus']);
                 setMenus(prev => prev.filter(menu => menu.id !== id));
                 try {
                   await deleteMenu(id);
@@ -5152,6 +5404,7 @@ if (!resolvedUser) {
                   await refreshAll();
                   throw e;
                 } finally {
+                  endScopeMutation(['menus']);
                   schedulePartialRefresh(['menus']);
                 }
               }}
@@ -5312,6 +5565,7 @@ if (!myStore) {
           }}
 
           onUpdateMenu={async (m) => {
+            beginScopeMutation(['menus']);
             setMenus(prev => {
               const exists = prev.some(menu => menu.id === m.id);
               if (exists) return prev.map(menu => menu.id === m.id ? m : menu);
@@ -5323,10 +5577,12 @@ if (!myStore) {
               await refreshAll();
               throw e;
             } finally {
+              endScopeMutation(['menus']);
               schedulePartialRefresh(['menus']);
             }
           }}
           onCreateMenu={async (m) => {
+            beginScopeMutation(['menus']);
             setMenus(prev => {
               const exists = prev.some(menu => menu.id === m.id);
               if (exists) return prev.map(menu => menu.id === m.id ? m : menu);
@@ -5338,10 +5594,12 @@ if (!myStore) {
               await refreshAll();
               throw e;
             } finally {
+              endScopeMutation(['menus']);
               schedulePartialRefresh(['menus']);
             }
           }}
           onDeleteMenu={async (id) => {
+            beginScopeMutation(['menus']);
             setMenus(prev => prev.filter(menu => menu.id !== id));
             try {
               await deleteMenu(id);
@@ -5349,6 +5607,7 @@ if (!myStore) {
               await refreshAll();
               throw e;
             } finally {
+              endScopeMutation(['menus']);
               schedulePartialRefresh(['menus']);
             }
           }}

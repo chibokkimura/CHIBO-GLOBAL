@@ -28,6 +28,7 @@ export interface Employee {
   position: string;
   age?: number; // Added Age field
   imageUrl?: string; // Added imageUrl for Staff photos
+  imagePath?: string; // Raw storage path persisted in DB
 }
 
 export interface Ingredient {
@@ -48,6 +49,7 @@ export interface Menu {
   name: string;
   price: number;
   imageUrl?: string;
+  imagePath?: string; // Raw storage path persisted in DB
   recipe: RecipeItem[];
 }
 
