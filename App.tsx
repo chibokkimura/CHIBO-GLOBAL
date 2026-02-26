@@ -1192,37 +1192,172 @@ const FinancialsTable: React.FC<{ stores: Store[]; sales: Sale[]; fxRates: Recor
   );
 };
 
-const SupplyChainIntelligence: React.FC<{ stores: Store[]; sales: Sale[]; menus: Menu[]; ingredients: Ingredient[] }> = ({ stores, sales, menus, ingredients }) => {
+const PB_REQUIRED_ITEMS = [
+    { id: 'okonomiyaki_sauce', label: 'Okonomiyaki Sauce', keywords: ['okonomiyakisauce', 'okonomisauce'], defaultUnit: 'ml' },
+    { id: 'okonomiyaki_mix_flour', label: 'Okonomiyaki Mix Flour', keywords: ['okonomiyakimixflour', 'okonomiyakiflour', 'mixflour'], defaultUnit: 'g' },
+    { id: 'shio_dare', label: 'Shio Dare', keywords: ['shiodare', 'siodare', 'siosalt'], defaultUnit: 'ml' },
+    { id: 'shoyu_dare', label: 'Shoyu Dare', keywords: ['shoyudare', 'soyudare', 'shoyusauce', 'soydare'], defaultUnit: 'ml' },
+] as const;
+
+function normalizeToken(value: string): string {
+    return value.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function isPbItemMatch(ingredientName: string, keywords: readonly string[]): boolean {
+    const normalized = normalizeToken(ingredientName);
+    return keywords.some((k) => normalized.includes(k));
+}
+
+const SupplyChainIntelligence: React.FC<{
+    stores: Store[];
+    sales: Sale[];
+    menus: Menu[];
+    storeStocks: StoreIngredientStock[];
+}> = ({ stores, sales, menus, storeStocks }) => {
+    const insight = useMemo(() => {
+        const storeNameMap = new Map(stores.map((s) => [s.id, s.name]));
+        const menuNameMap = new Map(menus.map((m) => [m.id, m.name]));
+
+        const pbRows = PB_REQUIRED_ITEMS.map((pb) => {
+            const matched = storeStocks.filter((row) => isPbItemMatch(row.ingredientName, pb.keywords));
+            const firstPerStore = new Map<string, StoreIngredientStock>();
+            matched.forEach((row) => {
+                if (!firstPerStore.has(row.storeId)) {
+                    firstPerStore.set(row.storeId, row);
+                }
+            });
+            const rows = [...firstPerStore.values()];
+            const lowRows = rows.filter((row) => {
+                const par = Number(row.par ?? 0);
+                const reorder = Number(row.reorder ?? 0);
+                return reorder > 0 ? par <= reorder : par <= 0;
+            });
+            const configuredStores = rows.length;
+            const missingConfigStores = Math.max(0, stores.length - configuredStores);
+            const totalOnHand = rows.reduce((sum, row) => sum + Number(row.par ?? 0), 0);
+            const unit = rows[0]?.unit || pb.defaultUnit;
+            return {
+                id: pb.id,
+                label: pb.label,
+                configuredStores,
+                missingConfigStores,
+                lowCount: lowRows.length,
+                lowStoreIds: lowRows.map((row) => row.storeId),
+                lowStoreNames: lowRows.map((row) => storeNameMap.get(row.storeId) || row.storeId),
+                totalOnHand,
+                unit,
+            };
+        });
+
+        const needContactStoreIds = new Set<string>();
+        pbRows.forEach((pb) => {
+            pb.lowStoreIds.forEach((storeId) => {
+                needContactStoreIds.add(storeId);
+            });
+        });
+        const totalAlerts = pbRows.reduce((sum, pb) => sum + pb.lowCount, 0);
+        const matrixTotal = stores.length * PB_REQUIRED_ITEMS.length;
+        const safeMatrixCount = pbRows.reduce((sum, pb) => sum + Math.max(0, pb.configuredStores - pb.lowCount), 0);
+        const coverageScore = matrixTotal > 0 ? Math.round((safeMatrixCount / matrixTotal) * 100) : 100;
+
+        const today = new Date();
+        const fromDate = new Date(today);
+        fromDate.setDate(today.getDate() - 30);
+        const fromKey = formatDate(fromDate);
+        const itemQtyMap = new Map<string, number>();
+        sales.forEach((sale) => {
+            if (sale.date < fromKey) return;
+            sale.items.forEach((item) => {
+                const label = menuNameMap.get(item.menuId) || item.menuId;
+                itemQtyMap.set(label, (itemQtyMap.get(label) || 0) + item.quantity);
+            });
+        });
+        const topSelling = [...itemQtyMap.entries()].sort((a, b) => b[1] - a[1])[0] ?? null;
+
+        return {
+            pbRows,
+            totalAlerts,
+            needContactStores: needContactStoreIds.size,
+            coverageScore,
+            topSelling,
+        };
+    }, [stores, sales, menus, storeStocks]);
+
     return (
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
             <h3 className="font-bold text-lg mb-6 flex items-center gap-2">
                 <Package className="w-5 h-5"/> Supply Chain Intelligence
             </h3>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                <div className="p-5 bg-orange-50 rounded-xl border border-orange-100 relative overflow-hidden">
+                <div className="p-5 bg-red-50 rounded-xl border border-red-100 relative overflow-hidden">
                     <div className="relative z-10">
-                        <div className="text-orange-800 font-bold text-xs uppercase tracking-wider mb-1">Top Ingredient</div>
-                        <div className="text-2xl font-extrabold text-orange-900">Cabbage</div>
-                        <div className="text-sm font-medium text-orange-700 mt-2">Est. 5,000kg / month</div>
+                        <div className="text-red-800 font-bold text-xs uppercase tracking-wider mb-1">PB Reorder Alerts</div>
+                        <div className="text-2xl font-extrabold text-red-900">{insight.totalAlerts}</div>
+                        <div className="text-sm font-medium text-red-700 mt-2">
+                            {insight.needContactStores} stores need contact
+                        </div>
                     </div>
-                    <UtensilsCrossed className="absolute -right-4 -bottom-4 w-24 h-24 text-orange-200 opacity-50 rotate-12" />
+                    <AlertTriangle className="absolute -right-4 -bottom-4 w-24 h-24 text-red-200 opacity-50 rotate-12" />
                 </div>
-                 <div className="p-5 bg-blue-50 rounded-xl border border-blue-100 relative overflow-hidden">
+                <div className="p-5 bg-blue-50 rounded-xl border border-blue-100 relative overflow-hidden">
                     <div className="relative z-10">
-                        <div className="text-blue-800 font-bold text-xs uppercase tracking-wider mb-1">Top Menu Item</div>
-                        <div className="text-2xl font-extrabold text-blue-900">Okonomiyaki</div>
-                        <div className="text-sm font-medium text-blue-700 mt-2">Global Bestseller</div>
+                        <div className="text-blue-800 font-bold text-xs uppercase tracking-wider mb-1">Top Selling Item (30d)</div>
+                        <div className="text-2xl font-extrabold text-blue-900">
+                            {insight.topSelling ? insight.topSelling[0] : 'No data'}
+                        </div>
+                        <div className="text-sm font-medium text-blue-700 mt-2">
+                            {insight.topSelling ? `${insight.topSelling[1].toLocaleString()} qty` : 'Waiting for sales reports'}
+                        </div>
                     </div>
-                     <TrendingUp className="absolute -right-4 -bottom-4 w-24 h-24 text-blue-200 opacity-50 rotate-12" />
+                    <TrendingUp className="absolute -right-4 -bottom-4 w-24 h-24 text-blue-200 opacity-50 rotate-12" />
                 </div>
-                 <div className="p-5 bg-purple-50 rounded-xl border border-purple-100 relative overflow-hidden">
+                <div className="p-5 bg-purple-50 rounded-xl border border-purple-100 relative overflow-hidden">
                     <div className="relative z-10">
-                        <div className="text-purple-800 font-bold text-xs uppercase tracking-wider mb-1">Cost Efficiency</div>
-                        <div className="text-2xl font-extrabold text-purple-900">92%</div>
-                        <div className="text-sm font-medium text-purple-700 mt-2">Network Average</div>
+                        <div className="text-purple-800 font-bold text-xs uppercase tracking-wider mb-1">PB Coverage Score</div>
+                        <div className="text-2xl font-extrabold text-purple-900">{insight.coverageScore}%</div>
+                        <div className="text-sm font-medium text-purple-700 mt-2">Network stock readiness</div>
                     </div>
-                     <DollarSign className="absolute -right-4 -bottom-4 w-24 h-24 text-purple-200 opacity-50 rotate-12" />
+                    <CheckCircle2 className="absolute -right-4 -bottom-4 w-24 h-24 text-purple-200 opacity-50 rotate-12" />
                 </div>
+            </div>
+
+            <div className="mt-6 overflow-hidden rounded-xl border border-gray-100">
+                <table className="w-full text-sm">
+                    <thead className="bg-gray-50 text-gray-500 uppercase text-xs font-bold">
+                        <tr>
+                            <th className="p-3 text-left">PB Item</th>
+                            <th className="p-3 text-right">Configured Stores</th>
+                            <th className="p-3 text-right">Low Stock</th>
+                            <th className="p-3 text-right">On Hand (Total)</th>
+                            <th className="p-3 text-left">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                        {insight.pbRows.map((row) => (
+                            <tr key={row.id}>
+                                <td className="p-3 font-semibold text-gray-900">{row.label}</td>
+                                <td className="p-3 text-right font-mono text-gray-700">
+                                    {row.configuredStores}/{stores.length}
+                                </td>
+                                <td className="p-3 text-right font-mono">
+                                    <span className={row.lowCount > 0 ? 'text-red-600 font-bold' : 'text-emerald-600 font-bold'}>
+                                        {row.lowCount}
+                                    </span>
+                                </td>
+                                <td className="p-3 text-right font-mono text-gray-700">
+                                    {row.totalOnHand.toLocaleString()} {row.unit}
+                                </td>
+                                <td className="p-3 text-xs text-gray-600">
+                                    {row.lowCount > 0
+                                        ? `Contact: ${row.lowStoreNames.slice(0, 3).join(', ')}${row.lowStoreNames.length > 3 ? '...' : ''}`
+                                        : row.missingConfigStores > 0
+                                            ? `Need stock setup in ${row.missingConfigStores} store(s)`
+                                            : 'No action needed'}
+                                </td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
             </div>
         </div>
     );
@@ -3831,7 +3966,7 @@ const HQDashboard: React.FC<{
            </div>
 
            {/* Global Supply Chain Overview */}
-           <SupplyChainIntelligence stores={stores} sales={sales} menus={menus} ingredients={ingredients} />
+           <SupplyChainIntelligence stores={stores} sales={sales} menus={menus} storeStocks={storeStocks} />
        </div>
     </div>
   );
