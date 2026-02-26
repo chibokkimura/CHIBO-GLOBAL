@@ -762,6 +762,28 @@ async function addSale(sale: Sale) {
 // --- Helper Functions ---
 const formatDate = (date: Date) => date.toISOString().split('T')[0];
 
+const formatMonthKey = (date: Date) => formatDate(date).slice(0, 7);
+
+const formatInvoiceMonthLabel = (monthKey: string) => {
+  const [y, m] = monthKey.split('-').map((v) => Number(v));
+  if (!y || !m) return monthKey;
+  return new Date(y, m - 1, 1).toLocaleDateString(undefined, { month: 'short', year: '2-digit' });
+};
+
+const escapeHtml = (raw: string) =>
+  raw
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
+const parseMoneyInput = (raw: string): number => {
+  const n = Number(raw.replace(/[^\d.-]/g, ''));
+  if (Number.isNaN(n) || !Number.isFinite(n)) return 0;
+  return Math.max(0, Math.round(n));
+};
+
 type ImageResizeOptions = {
   maxWidth: number;
   maxHeight: number;
@@ -2261,6 +2283,8 @@ const HQStoreDetail: React.FC<{
     standardIngredients: { name: string; unit: string; par?: number; reorder?: number }[];
     currencies: string[];
     positions: string[];
+    fxRates: Record<string, number> | null;
+    fxStatus: FxRatesStatus;
     salesLookbackLabel: string;
     onLoadMoreSales: () => void;
     onBack: () => void;
@@ -2273,7 +2297,7 @@ const HQStoreDetail: React.FC<{
     onDeleteMenu: (id: string) => void;
     onUpdateEmployees: (storeId: string, employees: Employee[]) => void;
     onAddIngredient: (ing: Ingredient) => Promise<void> | void;
-}> = ({ store, sales, menus, employees, ingredients, storeStocks, allStores, categories, standardIngredients, currencies, positions, salesLookbackLabel, onLoadMoreSales, onBack, onUpdateStore, onSaveStoreStocks, onMergeStores, onDeleteStore, onUpdateMenu, onCreateMenu, onDeleteMenu, onUpdateEmployees, onAddIngredient }) => {
+}> = ({ store, sales, menus, employees, ingredients, storeStocks, allStores, categories, standardIngredients, currencies, positions, fxRates, fxStatus, salesLookbackLabel, onLoadMoreSales, onBack, onUpdateStore, onSaveStoreStocks, onMergeStores, onDeleteStore, onUpdateMenu, onCreateMenu, onDeleteMenu, onUpdateEmployees, onAddIngredient }) => {
     const storeMenus = menus.filter(m => m.storeId === store.id);
     const storeEmployees = employees.filter(e => e.storeId === store.id);
     const storeSales = useMemo(() => sales.filter(s => s.storeId === store.id), [sales, store.id]);
@@ -2322,6 +2346,11 @@ const HQStoreDetail: React.FC<{
     const [moveError, setMoveError] = useState<string | null>(null);
     const [unlinkBusy, setUnlinkBusy] = useState<string | null>(null);
     const [unlinkError, setUnlinkError] = useState<string | null>(null);
+    const [invoiceMonthKey, setInvoiceMonthKey] = useState<string>(() => formatMonthKey(new Date()));
+    const [invoiceMinimumDraft, setInvoiceMinimumDraft] = useState('0');
+    const [invoiceBankChargeDraft, setInvoiceBankChargeDraft] = useState('0');
+    const [invoiceBankChargeLabel, setInvoiceBankChargeLabel] = useState('Bank charge');
+    const [invoiceError, setInvoiceError] = useState<string | null>(null);
 
     const openReceipt = async (saleId: string) => {
         setReceiptError(null);
@@ -2484,6 +2513,212 @@ const HQStoreDetail: React.FC<{
     const goNextMonth = () => {
         if (!canGoNextMonth) return;
         setCalendarMonth(prev => new Date(prev.getFullYear(), prev.getMonth() + 1, 1));
+    };
+
+    const invoiceMonthOptions = useMemo(() => {
+        const keys = new Set<string>();
+        keys.add(formatMonthKey(new Date()));
+        storeSales.forEach(sale => {
+            if (sale.date?.length >= 7) {
+                keys.add(sale.date.slice(0, 7));
+            }
+        });
+        return [...keys].sort((a, b) => b.localeCompare(a));
+    }, [storeSales]);
+
+    useEffect(() => {
+        if (invoiceMonthOptions.length === 0) return;
+        if (!invoiceMonthOptions.includes(invoiceMonthKey)) {
+            setInvoiceMonthKey(invoiceMonthOptions[0]);
+        }
+    }, [invoiceMonthKey, invoiceMonthOptions]);
+
+    const invoiceSummary = useMemo(() => {
+        const monthSales = storeSales.filter(s => s.date.startsWith(invoiceMonthKey));
+        const localSalesTotal = monthSales.reduce((sum, sale) => sum + (sale.totalAmount || 0), 0);
+        const salesJPY = convertToJPY(localSalesTotal, store.currency, fxRates);
+        const royaltyRate = store.royaltyPercentage || 0;
+        const royaltyFromSales = salesJPY !== null ? Math.round((salesJPY * royaltyRate) / 100) : null;
+        const minimumRoyalty = parseMoneyInput(invoiceMinimumDraft);
+        const bankCharge = parseMoneyInput(invoiceBankChargeDraft);
+        const baseRoyalty = royaltyFromSales === null ? minimumRoyalty : Math.max(royaltyFromSales, minimumRoyalty);
+        const totalDue = baseRoyalty + bankCharge;
+        return {
+            monthSales,
+            localSalesTotal,
+            salesJPY,
+            royaltyRate,
+            royaltyFromSales,
+            minimumRoyalty,
+            bankCharge,
+            baseRoyalty,
+            totalDue,
+        };
+    }, [storeSales, invoiceMonthKey, store.currency, store.royaltyPercentage, fxRates, invoiceMinimumDraft, invoiceBankChargeDraft]);
+
+    const handleGenerateInvoicePdf = () => {
+        setInvoiceError(null);
+        if (!invoiceMonthKey) {
+            setInvoiceError('Select an invoice month first.');
+            return;
+        }
+        if (invoiceSummary.salesJPY === null) {
+            setInvoiceError(`No FX rate available for ${store.currency}.`);
+            return;
+        }
+
+        const [yearRaw, monthRaw] = invoiceMonthKey.split('-').map(Number);
+        const year = Number.isFinite(yearRaw) ? yearRaw : new Date().getFullYear();
+        const month = Number.isFinite(monthRaw) ? monthRaw : new Date().getMonth() + 1;
+        const monthLabel = formatInvoiceMonthLabel(invoiceMonthKey);
+        const issueDate = new Date();
+        const issueDateLabel = issueDate.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: '2-digit' });
+        const invoiceNumber = `CHDR-${invoiceMonthKey.replace('-', '')}-${store.id.replace(/[^a-zA-Z0-9]/g, '').slice(0, 6).toUpperCase() || 'STORE'}`;
+        const monthEndDate = new Date(year, month, 0);
+        const dueDate = new Date(monthEndDate);
+        dueDate.setDate(dueDate.getDate() + 30);
+        const dueDateLabel = dueDate.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: '2-digit' });
+        const localSalesText = `${store.currency} ${invoiceSummary.localSalesTotal.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+        const salesJPYText = `JPY ${invoiceSummary.salesJPY.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+        const royaltyFromSalesText = `JPY ${invoiceSummary.royaltyFromSales?.toLocaleString(undefined, { maximumFractionDigits: 0 }) ?? '0'}`;
+        const minimumRoyaltyText = `JPY ${invoiceSummary.minimumRoyalty.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+        const bankChargeText = `JPY ${invoiceSummary.bankCharge.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+        const totalDueText = `JPY ${invoiceSummary.totalDue.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+        const bankChargeLabel = invoiceBankChargeLabel.trim() || 'Bank charge';
+        const fxBasisText = fxStatus === 'ok' ? 'Live FX rates' : 'Fallback/Cached FX rates';
+
+        const invoiceHtml = `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Invoice ${escapeHtml(invoiceNumber)}</title>
+  <style>
+    @page { size: A4; margin: 16mm; }
+    body { font-family: Arial, sans-serif; color: #111; }
+    .wrap { max-width: 760px; margin: 0 auto; }
+    h1, h2, h3, p { margin: 0; }
+    .title { text-align: center; margin-bottom: 20px; }
+    .title h1 { color: #b91c1c; font-size: 40px; letter-spacing: 2px; margin-bottom: 10px; }
+    .title p { line-height: 1.45; font-size: 14px; }
+    .invoice { font-size: 38px; font-weight: 800; margin-top: 10px; }
+    .meta { display: grid; grid-template-columns: 1fr auto; gap: 12px; margin: 18px 0; font-size: 14px; }
+    .meta .right { text-align: right; }
+    table { width: 100%; border-collapse: collapse; margin-top: 14px; font-size: 13px; }
+    th, td { border: 1px solid #222; padding: 8px 10px; }
+    th { background: #f5f5f5; text-align: center; }
+    td { text-align: right; }
+    td.left { text-align: left; }
+    .summary { border: 1px solid #222; border-top: none; padding: 16px; font-size: 14px; }
+    .summary-row { display: flex; justify-content: space-between; margin: 8px 0; }
+    .summary-row.em { font-weight: 700; }
+    .summary-row.total { font-size: 20px; font-weight: 800; border-top: 1px solid #ddd; margin-top: 14px; padding-top: 12px; }
+    .note { margin-top: 12px; font-size: 12px; color: #666; }
+    .bank { margin-top: 22px; border: 1px solid #222; padding: 14px; font-size: 13px; line-height: 1.55; }
+    .bank h3 { margin-bottom: 8px; font-size: 15px; }
+    .footer { display: flex; justify-content: space-between; margin-top: 26px; font-size: 13px; }
+    .sig { margin-top: 28px; font-family: cursive; font-size: 24px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="title">
+      <h1>CHIBO HOLDINGS CO., LTD.</h1>
+      <p>Ontex Namba Bldg. 7F 2-2-45 Minato Machi<br/>Naniwa-ku Osaka-shi, Osaka, 556-0017, Japan<br/>Phone +81-6-6633-1570</p>
+      <div class="invoice">INVOICE</div>
+    </div>
+
+    <div class="meta">
+      <div>
+        <p><strong>TO:</strong> ${escapeHtml(store.name)}</p>
+        <p style="margin-top: 6px; color:#555;">${escapeHtml(store.city)}, ${escapeHtml(store.country)}</p>
+      </div>
+      <div class="right">
+        <p><strong>INV Number:</strong> ${escapeHtml(invoiceNumber)}</p>
+        <p><strong>Date:</strong> ${escapeHtml(issueDateLabel)}</p>
+        <p><strong>Due Date:</strong> ${escapeHtml(dueDateLabel)}</p>
+      </div>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Location</th>
+          <th>Sales Month</th>
+          <th>Sales (Local)</th>
+          <th>Sales (JPY)</th>
+          <th>Royalty %</th>
+          <th>Royalty From Sales</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="left">${escapeHtml(`${store.name} (${store.city}, ${store.country})`)}</td>
+          <td class="left">${escapeHtml(monthLabel)}</td>
+          <td>${escapeHtml(localSalesText)}</td>
+          <td>${escapeHtml(salesJPYText)}</td>
+          <td>${escapeHtml(`${invoiceSummary.royaltyRate}%`)}</td>
+          <td>${escapeHtml(royaltyFromSalesText)}</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="summary">
+      <div class="summary-row">
+        <span>Minimum Royalty</span>
+        <span>${escapeHtml(minimumRoyaltyText)}</span>
+      </div>
+      <div class="summary-row">
+        <span>${escapeHtml(bankChargeLabel)}</span>
+        <span>${escapeHtml(bankChargeText)}</span>
+      </div>
+      <div class="summary-row em">
+        <span>Royalty Base (max of sales-based and minimum)</span>
+        <span>${escapeHtml(`JPY ${invoiceSummary.baseRoyalty.toLocaleString(undefined, { maximumFractionDigits: 0 })}`)}</span>
+      </div>
+      <div class="summary-row total">
+        <span>Total Amount Due</span>
+        <span>${escapeHtml(totalDueText)}</span>
+      </div>
+      <div class="note">Basis: ${escapeHtml(fxBasisText)} • Generated by CHIBO Global Manager</div>
+    </div>
+
+    <div class="bank">
+      <h3>Please make payment payable to:</h3>
+      <div>Beneficiary Name: CHIBO HOLDINGS CO., LTD.</div>
+      <div>Beneficiary Address: 1-5-5 DOUTONBORI, CHUO-KU, OSAKA, 542-0071 JAPAN</div>
+      <div>Beneficiary Bank Name: RESONA BANK SENBA BRANCH</div>
+      <div>Beneficiary Bank Address: 3-6-1 KITAKYUHOJIMACHI, CHUO-KU, OSAKA-SHI, OSAKA 541-0057, JAPAN</div>
+      <div>Swift Code: DIWAJPJT</div>
+      <div>Beneficiary Account Number: 0323028 JPY</div>
+    </div>
+
+    <div class="footer">
+      <div>
+        <div><strong>Buyer</strong></div>
+        <div>${escapeHtml(store.name)}</div>
+      </div>
+      <div style="text-align: right;">
+        <div><strong>Prepared by</strong></div>
+        <div>CHIBO HOLDINGS CO., LTD.</div>
+        <div class="sig">Kasumi Hemmi</div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>`;
+
+        const popup = window.open('', '_blank', 'noopener,noreferrer');
+        if (!popup) {
+            setInvoiceError('Popup blocked. Allow popups and try again.');
+            return;
+        }
+        popup.document.open();
+        popup.document.write(invoiceHtml);
+        popup.document.close();
+        popup.focus();
+        window.setTimeout(() => {
+            popup.print();
+        }, 350);
     };
 
     const monthlyRevenueData = useMemo(() => {
@@ -2982,6 +3217,77 @@ const HQStoreDetail: React.FC<{
                         <div className="mt-2 text-xs text-red-600 text-right">{royaltyError}</div>
                     )}
                 </div>
+            </div>
+
+            <div className="bg-white p-5 rounded-2xl shadow-sm border mb-8">
+                <div className="flex flex-col lg:flex-row lg:items-end gap-4">
+                    <div className="flex-1">
+                        <div className="text-base font-extrabold text-gray-900">Monthly Invoice</div>
+                        <div className="text-xs text-gray-500 mt-1">
+                            Select month and click to generate printable invoice PDF for this store.
+                        </div>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 w-full lg:w-auto">
+                        <div>
+                            <div className="text-xs font-bold text-gray-500 mb-1">Sales Month</div>
+                            <select
+                                value={invoiceMonthKey}
+                                onChange={(e) => setInvoiceMonthKey(e.target.value)}
+                                className="w-full px-3 py-2 rounded-lg border border-gray-200 bg-white text-sm font-semibold"
+                            >
+                                {invoiceMonthOptions.map((key) => (
+                                    <option key={key} value={key}>
+                                        {formatInvoiceMonthLabel(key)}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+                        <div>
+                            <div className="text-xs font-bold text-gray-500 mb-1">Minimum Royalty (JPY)</div>
+                            <input
+                                value={invoiceMinimumDraft}
+                                onChange={(e) => setInvoiceMinimumDraft(e.target.value.replace(/[^\d]/g, ''))}
+                                placeholder="150000"
+                                className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm"
+                            />
+                        </div>
+                        <div>
+                            <div className="text-xs font-bold text-gray-500 mb-1">Bank Charge (JPY)</div>
+                            <input
+                                value={invoiceBankChargeDraft}
+                                onChange={(e) => setInvoiceBankChargeDraft(e.target.value.replace(/[^\d]/g, ''))}
+                                placeholder="4000"
+                                className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm"
+                            />
+                        </div>
+                        <div>
+                            <div className="text-xs font-bold text-gray-500 mb-1">Bank Charge Label</div>
+                            <input
+                                value={invoiceBankChargeLabel}
+                                onChange={(e) => setInvoiceBankChargeLabel(e.target.value)}
+                                placeholder="Bank charge of Jan & Feb"
+                                className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm"
+                            />
+                        </div>
+                    </div>
+                </div>
+                <div className="mt-4 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                    <div className="text-xs text-gray-600">
+                        <div>Local Sales: <span className="font-bold">{store.currency} {invoiceSummary.localSalesTotal.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span></div>
+                        <div>Sales JPY: <span className="font-bold">{invoiceSummary.salesJPY === null ? 'N/A' : `JPY ${invoiceSummary.salesJPY.toLocaleString(undefined, { maximumFractionDigits: 0 })}`}</span> ({fxStatus === 'ok' ? 'Live FX' : 'Approx FX'})</div>
+                        <div>Total Due: <span className="font-bold">JPY {invoiceSummary.totalDue.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span></div>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={handleGenerateInvoicePdf}
+                        className="px-4 py-2 rounded-xl bg-black text-white text-sm font-bold hover:bg-gray-800"
+                    >
+                        Generate Invoice PDF
+                    </button>
+                </div>
+                {invoiceError && (
+                    <div className="mt-3 text-xs text-red-600">{invoiceError}</div>
+                )}
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
@@ -3700,6 +4006,8 @@ const HQDashboard: React.FC<{
         standardIngredients={globalConfig.standardIngredients}
         currencies={globalConfig.currencies}
         positions={globalConfig.positions}
+        fxRates={fxRates}
+        fxStatus={fxStatus}
         salesLookbackLabel={salesLookbackLabel}
         onLoadMoreSales={onLoadMoreSales}
         onBack={() => setSelectedStore(null)}
