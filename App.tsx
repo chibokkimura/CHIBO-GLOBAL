@@ -4370,13 +4370,23 @@ const StoreDashboard: React.FC<{
 
 const LoginScreen: React.FC = () => {
     const [loginError, setLoginError] = useState<string | null>(null);
+
+    const CompanyLogo = () => (
+        <div
+            className="relative w-52 h-36 bg-black rounded-xl mb-6 flex flex-col items-center justify-center select-none"
+            aria-label="CHIBO logo"
+        >
+            <span className="text-white text-6xl font-black leading-none tracking-tight">千房</span>
+            <div className="text-white text-2xl font-black leading-none mt-1 tracking-wider">CHIBO</div>
+            <div className="text-white text-sm font-bold leading-none tracking-[0.22em] mt-1">OKONOMIYAKI</div>
+        </div>
+    );
+
     return (
         <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
             <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md">
                 <div className="flex flex-col items-center text-center">
-                    <div className="w-16 h-16 bg-black rounded-2xl flex items-center justify-center mb-6">
-                        <span className="text-white font-black text-2xl">CH</span>
-                    </div>
+                    <CompanyLogo />
                     <h1 className="text-2xl font-extrabold text-gray-900 mb-2">CHIBO</h1>
                     <p className="text-gray-500 mb-8">Global Franchise Manager</p>
 
