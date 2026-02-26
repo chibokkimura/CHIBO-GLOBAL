@@ -3871,6 +3871,30 @@ const StoreDashboard: React.FC<{
     const missingDatesAll = useMemo(() => getMissingDates(sales, store.id, 120), [sales, store.id]);
     const missingDateSet = useMemo(() => new Set(missingDatesAll), [missingDatesAll]);
     const submittedDateSet = useMemo(() => new Set(storeSales.map(s => s.date)), [storeSales]);
+    const performance = useMemo(() => {
+        const lookbackDays = 7;
+        const today = new Date();
+        const recentDates: string[] = [];
+        for (let i = 0; i < lookbackDays; i++) {
+            const d = new Date(today);
+            d.setDate(today.getDate() - i);
+            recentDates.push(formatDate(d));
+        }
+
+        const submittedRecent = recentDates.filter((d) => submittedDateSet.has(d)).length;
+        const reportScore = Math.round((submittedRecent / lookbackDays) * 70);
+        const menuScore = storeMenus.length > 0 ? 15 : 0;
+        const staffScore = storeEmployees.length > 0 ? 15 : 0;
+        const score = Math.max(0, Math.min(100, reportScore + menuScore + staffScore));
+
+        return {
+            score,
+            submittedRecent,
+            lookbackDays,
+            hasMenu: storeMenus.length > 0,
+            hasStaff: storeEmployees.length > 0,
+        };
+    }, [submittedDateSet, storeMenus.length, storeEmployees.length]);
     const [showMissingCalendar, setShowMissingCalendar] = useState(false);
     const [calendarMonth, setCalendarMonth] = useState(() => {
         const d = new Date();
@@ -4190,8 +4214,15 @@ const StoreDashboard: React.FC<{
                     </div>
                     <div className="mt-auto p-4 bg-gray-50 rounded-xl">
                         <div className="text-xs font-bold text-gray-500 mb-2 uppercase">Your Performance</div>
-                        <div className="text-2xl font-extrabold text-gray-900">94%</div>
-                        <div className="text-xs text-gray-400 mt-1">Operational Score</div>
+                        <div className="text-2xl font-extrabold text-gray-900">{performance.score}%</div>
+                        <div className="text-xs text-gray-500 mt-1">Operational Score (Auto)</div>
+                        <div className="text-[11px] text-gray-400 mt-2 leading-relaxed">
+                            Reports {performance.submittedRecent}/{performance.lookbackDays} days
+                            {' · '}
+                            Menu {performance.hasMenu ? 'OK' : 'Missing'}
+                            {' · '}
+                            Staff {performance.hasStaff ? 'OK' : 'Missing'}
+                        </div>
                     </div>
                 </div>
 
