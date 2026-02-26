@@ -4403,13 +4403,14 @@ const LoginScreen: React.FC = () => {
     const [loginError, setLoginError] = useState<string | null>(null);
 
     const CompanyLogo = () => (
-        <div
-            className="relative w-52 h-36 bg-black rounded-xl mb-6 flex flex-col items-center justify-center select-none"
-            aria-label="CHIBO logo"
-        >
-            <span className="text-white text-6xl font-black leading-none tracking-tight">千房</span>
-            <div className="text-white text-2xl font-black leading-none mt-1 tracking-wider">CHIBO</div>
-            <div className="text-white text-sm font-bold leading-none tracking-[0.22em] mt-1">OKONOMIYAKI</div>
+        <div className="w-56 h-40 mb-6 flex items-center justify-center">
+            <img
+                src="/chibo-logo.png"
+                alt="CHIBO logo"
+                className="w-full h-full object-contain"
+                loading="eager"
+                decoding="async"
+            />
         </div>
     );
 
