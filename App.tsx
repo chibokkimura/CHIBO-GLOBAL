@@ -769,8 +769,19 @@ const formatInvoiceMonthLabel = (monthKey: string) => {
   return new Date(y, m - 1, 1).toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
 };
 
-const formatInvoiceDate = (date: Date) =>
-  date.toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' });
+const formatInvoiceMonthCell = (monthKey: string) => {
+  const [y, m] = monthKey.split('-').map((v) => Number(v));
+  if (!y || !m) return monthKey;
+  const month = new Date(y, m - 1, 1).toLocaleDateString('en-US', { month: 'short' });
+  return `${month}-${String(y).slice(-2)}`;
+};
+
+const formatInvoiceDateDot = (date: Date) => {
+  const month = date.toLocaleDateString('en-US', { month: 'short' });
+  const day = String(date.getDate()).padStart(2, '0');
+  const year = date.getFullYear();
+  return `${month}.${day}.${year}`;
+};
 
 const escapeHtml = (raw: string) =>
   raw
@@ -2364,7 +2375,7 @@ const HQStoreDetail: React.FC<{
     const [unlinkError, setUnlinkError] = useState<string | null>(null);
     const [invoiceMonthKey, setInvoiceMonthKey] = useState<string>(() => formatMonthKey(new Date()));
     const [invoiceCurrency, setInvoiceCurrency] = useState<'JPY' | 'USD'>('JPY');
-    const [invoiceNumberSuffix, setInvoiceNumberSuffix] = useState<string>('001');
+    const [invoiceNumber, setInvoiceNumber] = useState<string>('CHDR-001');
     const [invoiceMinimumDraft, setInvoiceMinimumDraft] = useState<string>('0');
     const [invoiceBankChargeDraft, setInvoiceBankChargeDraft] = useState<string>('0');
     const [invoiceBankChargeLabel, setInvoiceBankChargeLabel] = useState<string>('Bank Charge');
@@ -2583,22 +2594,26 @@ const HQStoreDetail: React.FC<{
             return;
         }
 
-        const [yearRaw, monthRaw] = invoiceMonthKey.split('-').map(Number);
-        const year = Number.isFinite(yearRaw) ? yearRaw : new Date().getFullYear();
-        const month = Number.isFinite(monthRaw) ? monthRaw : new Date().getMonth() + 1;
         const issueDate = new Date();
-        const invoiceNoSuffix = invoiceNumberSuffix.trim().replace(/[^\dA-Za-z-]/g, '') || '001';
-        const invoiceNo = `CHDR-${invoiceNoSuffix}`;
-        const monthLabel = formatInvoiceMonthLabel(invoiceMonthKey);
+        const invoiceNo = invoiceNumber.trim() || 'CHDR-001';
+        const monthLabel = formatInvoiceMonthCell(invoiceMonthKey);
         const locationText = `${store.country} / ${store.name}`;
         const amountSymbol = invoiceCurrency === 'JPY' ? '¥' : '$';
         const salesCurrencyLabel = invoiceCurrency === 'JPY' ? 'Sales JPY' : 'Sales USD';
         const formatAmount = (value: number) => `${amountSymbol}${value.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
         const bankChargeTitle = invoiceBankChargeLabel.trim() || 'Bank Charge';
-        const monthDate = new Date(year, month - 1, 1);
-        const salesMonthText = monthDate.toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
-        const fxBasis = fxStatus === 'ok' ? 'Live FX' : 'Fallback/Cached FX';
+        const salesMonthText = monthLabel;
         const rowAmount = invoiceSummary.salesRoyalty;
+        const salesLocalText = `${store.currency} ${invoiceSummary.localSalesTotal.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+        const fxSalesText = formatAmount(invoiceSummary.convertedSales);
+        const royaltyRateText = `${invoiceSummary.royaltyRate}%`;
+        const minimumText = formatAmount(invoiceSummary.minimumRoyalty);
+        const totalText = formatAmount(invoiceSummary.totalDue);
+        const bankChargeText = formatAmount(invoiceSummary.bankCharge);
+        const buyerText = store.name;
+        const invoiceDateText = formatInvoiceDateDot(issueDate);
+        const templateUrl = `${window.location.origin}/invoice-template-kr2may144.png`;
+        const signatureUrl = `${window.location.origin}/invoice-signature-kasumi.png`;
 
         const invoiceHtml = `<!doctype html>
 <html>
@@ -2606,108 +2621,125 @@ const HQStoreDetail: React.FC<{
   <meta charset="utf-8" />
   <title>Invoice ${escapeHtml(invoiceNo)}</title>
   <style>
-    @page { size: A4; margin: 14mm; }
-    body { margin: 0; color: #111; font-family: Arial, sans-serif; }
-    .page { width: 100%; max-width: 830px; margin: 0 auto; }
-    .center { text-align: center; }
-    .company { color: #b91c1c; font-weight: 800; font-size: 48px; letter-spacing: 2px; margin-top: 6px; }
-    .address { line-height: 1.45; font-size: 18px; margin-top: 8px; }
-    .invoice-title { font-size: 46px; font-weight: 800; margin: 16px 0 26px; }
-    .meta { display: flex; justify-content: space-between; font-size: 28px; margin: 22px 0; }
-    .meta strong { font-weight: 800; }
-    table { width: 100%; border-collapse: collapse; font-size: 22px; margin-top: 18px; }
-    th, td { border: 1px solid #222; padding: 10px 12px; }
-    th { background: #f3f4f6; text-align: center; font-weight: 800; }
-    td { text-align: right; }
-    td.left { text-align: left; }
-    .calc { border: 1px solid #222; border-top: none; min-height: 260px; padding: 20px; }
-    .line { display: flex; justify-content: space-between; margin: 12px 0; font-size: 30px; }
-    .line.red { color: #dc2626; font-weight: 700; }
-    .line.total { font-size: 40px; font-weight: 800; margin-top: 18px; }
-    .paybox { border: 1px solid #222; margin-top: 20px; padding: 18px; font-size: 23px; line-height: 1.7; }
-    .paytitle { font-size: 34px; font-weight: 800; margin-bottom: 10px; }
-    .footer { display: flex; justify-content: space-between; margin-top: 28px; font-size: 25px; }
-    .sig { font-family: cursive; font-size: 58px; line-height: 1; margin-top: 8px; }
-    .small { color: #555; font-size: 18px; margin-top: 6px; }
+    @page { size: A4; margin: 0; }
+    :root { --paper: #f2f2f2; }
+    body { margin: 0; color: #111; font-family: Arial, sans-serif; background: #e5e7eb; }
+    .toolbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      padding: 10px 14px;
+      background: rgba(255, 255, 255, 0.95);
+      border-bottom: 1px solid #ddd;
+    }
+    .toolbar button {
+      border: 1px solid #111;
+      background: #fff;
+      color: #111;
+      padding: 7px 12px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .toolbar button.primary {
+      background: #111;
+      color: #fff;
+    }
+    .sheet-wrap {
+      width: min(94vw, 980px);
+      margin: 14px auto 24px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+      border: 1px solid #ddd;
+      background: var(--paper);
+    }
+    .sheet {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 1414 / 2000;
+      background: var(--paper);
+      overflow: hidden;
+    }
+    .template {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      z-index: 1;
+      user-select: none;
+      pointer-events: none;
+    }
+    .field {
+      position: absolute;
+      z-index: 3;
+      background: var(--paper);
+      color: #111;
+      font-weight: 700;
+      padding: 0 4px;
+      line-height: 1.2;
+      white-space: nowrap;
+    }
+    .field.norm { font-weight: 600; }
+    .field.red { color: #c1121f; }
+    .signature {
+      position: absolute;
+      z-index: 4;
+      width: 22%;
+      left: 69.7%;
+      top: 74.8%;
+      background: transparent;
+      opacity: 0.98;
+      mix-blend-mode: multiply;
+    }
+    @media print {
+      body { background: #fff; }
+      .toolbar { display: none; }
+      .sheet-wrap {
+        width: 210mm;
+        margin: 0;
+        box-shadow: none;
+        border: none;
+      }
+      .sheet {
+        width: 210mm;
+        height: 297mm;
+      }
+    }
   </style>
 </head>
 <body>
-  <div class="page">
-    <div class="center">
-      <div class="company">CHIBO HOLDINGS CO., LTD.</div>
-      <div class="address">
-        Ontex Namba Bldg. 7F 2-2-45 Minato Machi,<br/>
-        Naniwa-ku Osaka-shi, Osaka, 556-0017, Japan<br/>
-        Phone +81-6-6633-1570<br/>
-        FAX +81-6-6633-2191
-      </div>
-      <div class="invoice-title">INVOICE</div>
-    </div>
+  <div class="toolbar">
+    <button class="primary" onclick="window.print()">Save as PDF</button>
+    <button onclick="window.close()">Close</button>
+  </div>
+  <div class="sheet-wrap">
+    <div class="sheet">
+      <img class="template" src="${escapeHtml(templateUrl)}" alt="Invoice Template" />
 
-    <div class="meta">
-      <div><strong>TO :</strong> ${escapeHtml(store.name)}</div>
-      <div>
-        <div><strong>INV Number:</strong> ${escapeHtml(invoiceNo)}</div>
-        <div><strong>DATE:</strong> ${escapeHtml(formatInvoiceDate(issueDate))}</div>
-      </div>
-    </div>
+      <div class="field norm" style="left:11.8%; top:20.0%; font-size:1.08vw; min-font-size:14px;">${escapeHtml(buyerText)}</div>
+      <div class="field" style="left:78.5%; top:20.0%; font-size:0.95vw;">${escapeHtml(invoiceNo)}</div>
+      <div class="field" style="left:78.5%; top:21.55%; font-size:0.95vw;">${escapeHtml(invoiceDateText)}</div>
 
-    <table>
-      <thead>
-        <tr>
-          <th>Location</th>
-          <th>Sales month</th>
-          <th>Sales (Local Currency)</th>
-          <th>${escapeHtml(salesCurrencyLabel)}</th>
-          <th>Royalty %</th>
-          <th>Amount</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td class="left">${escapeHtml(locationText)}</td>
-          <td class="left">${escapeHtml(salesMonthText)}</td>
-          <td>${escapeHtml(`${store.currency} ${invoiceSummary.localSalesTotal.toLocaleString(undefined, { maximumFractionDigits: 0 })}`)}</td>
-          <td>${escapeHtml(formatAmount(invoiceSummary.convertedSales))}</td>
-          <td>${escapeHtml(`${invoiceSummary.royaltyRate}%`)}</td>
-          <td>${escapeHtml(formatAmount(rowAmount))}</td>
-        </tr>
-      </tbody>
-    </table>
+      <div class="field norm" style="left:8.3%; top:33.35%; width:15.4%; font-size:0.86vw;">${escapeHtml(locationText)}</div>
+      <div class="field norm" style="left:23.9%; top:33.35%; width:7.7%; font-size:0.86vw; text-align:center;">${escapeHtml(salesMonthText)}</div>
+      <div class="field norm" style="left:32.2%; top:33.35%; width:16.8%; font-size:0.86vw; text-align:right;">${escapeHtml(salesLocalText)}</div>
+      <div class="field norm" style="left:50.2%; top:33.35%; width:12.0%; font-size:0.86vw; text-align:right;">${escapeHtml(fxSalesText)}</div>
+      <div class="field norm" style="left:62.7%; top:33.35%; width:6.8%; font-size:0.86vw; text-align:center;">${escapeHtml(royaltyRateText)}</div>
+      <div class="field norm" style="left:70.0%; top:33.35%; width:13.8%; font-size:0.86vw; text-align:right;">${escapeHtml(formatAmount(rowAmount))}</div>
+      <div class="field" style="left:50.5%; top:31.2%; width:11.4%; font-size:0.78vw; text-align:center;">${escapeHtml(salesCurrencyLabel)}</div>
 
-    <div class="calc">
-      <div class="line">
-        <span>"Minimum Royalty"</span>
-        <span>${escapeHtml(formatAmount(invoiceSummary.minimumRoyalty))}</span>
-      </div>
-      ${invoiceSummary.bankCharge > 0 ? `<div class="line red"><span>${escapeHtml(bankChargeTitle)}</span><span>${escapeHtml(formatAmount(invoiceSummary.bankCharge))}</span></div>` : ''}
-      <div class="line total">
-        <span>Royalty Amount</span>
-        <span>${escapeHtml(formatAmount(invoiceSummary.totalDue))}</span>
-      </div>
-      <div class="small">Basis: ${escapeHtml(fxBasis)} • Auto generated from owner submitted sales (${escapeHtml(monthLabel)})</div>
-    </div>
+      <div class="field" style="left:77.4%; top:45.2%; width:10.5%; font-size:1.0vw; text-align:right;">${escapeHtml(minimumText)}</div>
+      ${invoiceSummary.bankCharge > 0 ? `<div class="field red" style="left:38.0%; top:49.0%; width:33.0%; font-size:1.0vw;">${escapeHtml(bankChargeTitle)}</div><div class="field red" style="left:77.4%; top:49.0%; width:10.5%; font-size:1.0vw; text-align:right;">${escapeHtml(bankChargeText)}</div>` : ''}
+      <div class="field" style="left:77.4%; top:54.4%; width:10.5%; font-size:1.2vw; text-align:right;">${escapeHtml(totalText)}</div>
 
-    <div class="paybox">
-      <div class="paytitle">Please make payment payable to:</div>
-      <div>Beneficiary Name：CHIBO HOLDINGS CO., LTD.</div>
-      <div>Beneficiary Address：1-5-5 DOUTONNBORI, CHUO-KU, OSAKA, 542-0071 JAPAN</div>
-      <div>Beneficiary Bank Name：RESONA BANK SENBA BRANCH</div>
-      <div>Beneficiary Bank Address：3-6-1 KITAKYUHOJIMACHI, CYUO-KU, OSAKA-SHI, OSAKA 541-0057, JAPAN</div>
-      <div>Swift Code：DIWAJPJT</div>
-      <div>Beneficiary Account Number：0323028 ${escapeHtml(invoiceCurrency)}</div>
-    </div>
+      <div class="field red" style="left:48.7%; top:69.55%; width:4.8%; font-size:1.0vw;">${escapeHtml(invoiceCurrency)}</div>
+      <div class="field norm" style="left:11.6%; top:75.9%; width:22.5%; font-size:0.92vw;">${escapeHtml(buyerText)}</div>
 
-    <div class="footer">
-      <div>
-        <div><strong>Buyer:</strong></div>
-        <div>${escapeHtml(store.name)}</div>
-      </div>
-      <div style="text-align:right;">
-        <div><strong>Prepared by</strong></div>
-        <div><strong>CHIBO HOLDINGS CO., LTD.</strong></div>
-        <div class="sig">Kasumi Hemmi</div>
-      </div>
+      <img class="signature" src="${escapeHtml(signatureUrl)}" alt="Signature" />
     </div>
   </div>
 </body>
@@ -3270,15 +3302,12 @@ const HQStoreDetail: React.FC<{
                         </div>
                         <div>
                             <div className="text-[11px] font-bold text-gray-500 mb-1">INV Number</div>
-                            <div className="flex items-center gap-1">
-                                <span className="text-xs font-bold text-gray-500">CHDR-</span>
-                                <input
-                                    value={invoiceNumberSuffix}
-                                    onChange={(e) => setInvoiceNumberSuffix(e.target.value.replace(/[^\dA-Za-z-]/g, ''))}
-                                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
-                                    placeholder="144"
-                                />
-                            </div>
+                            <input
+                                value={invoiceNumber}
+                                onChange={(e) => setInvoiceNumber(e.target.value.replace(/[^\dA-Za-z-]/g, ''))}
+                                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                                placeholder="CHDR-144"
+                            />
                         </div>
                         <div>
                             <div className="text-[11px] font-bold text-gray-500 mb-1">Minimum Royalty</div>
