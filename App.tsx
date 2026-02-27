@@ -761,14 +761,16 @@ async function addSale(sale: Sale) {
 
 // --- Helper Functions ---
 const formatDate = (date: Date) => date.toISOString().split('T')[0];
-
 const formatMonthKey = (date: Date) => formatDate(date).slice(0, 7);
 
 const formatInvoiceMonthLabel = (monthKey: string) => {
   const [y, m] = monthKey.split('-').map((v) => Number(v));
   if (!y || !m) return monthKey;
-  return new Date(y, m - 1, 1).toLocaleDateString(undefined, { month: 'short', year: '2-digit' });
+  return new Date(y, m - 1, 1).toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
 };
+
+const formatInvoiceDate = (date: Date) =>
+  date.toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' });
 
 const escapeHtml = (raw: string) =>
   raw
@@ -782,6 +784,20 @@ const parseMoneyInput = (raw: string): number => {
   const n = Number(raw.replace(/[^\d.-]/g, ''));
   if (Number.isNaN(n) || !Number.isFinite(n)) return 0;
   return Math.max(0, Math.round(n));
+};
+
+const convertAmountByUsdRates = (
+  amount: number,
+  fromCurrency: string,
+  toCurrency: string,
+  rates: Record<string, number> | null
+) => {
+  if (fromCurrency === toCurrency) return amount;
+  const table = rates ?? FALLBACK_USD_RATES;
+  const fromRate = table[fromCurrency];
+  const toRate = table[toCurrency];
+  if (!fromRate || !toRate) return null;
+  return (amount / fromRate) * toRate;
 };
 
 type ImageResizeOptions = {
@@ -2347,9 +2363,11 @@ const HQStoreDetail: React.FC<{
     const [unlinkBusy, setUnlinkBusy] = useState<string | null>(null);
     const [unlinkError, setUnlinkError] = useState<string | null>(null);
     const [invoiceMonthKey, setInvoiceMonthKey] = useState<string>(() => formatMonthKey(new Date()));
-    const [invoiceMinimumDraft, setInvoiceMinimumDraft] = useState('0');
-    const [invoiceBankChargeDraft, setInvoiceBankChargeDraft] = useState('0');
-    const [invoiceBankChargeLabel, setInvoiceBankChargeLabel] = useState('Bank charge');
+    const [invoiceCurrency, setInvoiceCurrency] = useState<'JPY' | 'USD'>('JPY');
+    const [invoiceNumberSuffix, setInvoiceNumberSuffix] = useState<string>('001');
+    const [invoiceMinimumDraft, setInvoiceMinimumDraft] = useState<string>('0');
+    const [invoiceBankChargeDraft, setInvoiceBankChargeDraft] = useState<string>('0');
+    const [invoiceBankChargeLabel, setInvoiceBankChargeLabel] = useState<string>('Bank Charge');
     const [invoiceError, setInvoiceError] = useState<string | null>(null);
 
     const openReceipt = async (saleId: string) => {
@@ -2519,9 +2537,7 @@ const HQStoreDetail: React.FC<{
         const keys = new Set<string>();
         keys.add(formatMonthKey(new Date()));
         storeSales.forEach(sale => {
-            if (sale.date?.length >= 7) {
-                keys.add(sale.date.slice(0, 7));
-            }
+            if (sale.date?.length >= 7) keys.add(sale.date.slice(0, 7));
         });
         return [...keys].sort((a, b) => b.localeCompare(a));
     }, [storeSales]);
@@ -2536,106 +2552,103 @@ const HQStoreDetail: React.FC<{
     const invoiceSummary = useMemo(() => {
         const monthSales = storeSales.filter(s => s.date.startsWith(invoiceMonthKey));
         const localSalesTotal = monthSales.reduce((sum, sale) => sum + (sale.totalAmount || 0), 0);
-        const salesJPY = convertToJPY(localSalesTotal, store.currency, fxRates);
+        const convertedSales = convertAmountByUsdRates(localSalesTotal, store.currency, invoiceCurrency, fxRates);
         const royaltyRate = store.royaltyPercentage || 0;
-        const royaltyFromSales = salesJPY !== null ? Math.round((salesJPY * royaltyRate) / 100) : null;
+        const salesRoyalty = convertedSales === null ? null : Math.round((convertedSales * royaltyRate) / 100);
         const minimumRoyalty = parseMoneyInput(invoiceMinimumDraft);
         const bankCharge = parseMoneyInput(invoiceBankChargeDraft);
-        const baseRoyalty = royaltyFromSales === null ? minimumRoyalty : Math.max(royaltyFromSales, minimumRoyalty);
-        const totalDue = baseRoyalty + bankCharge;
+        const royaltyBase = salesRoyalty === null ? 0 : Math.max(salesRoyalty, minimumRoyalty);
+        const totalDue = royaltyBase + bankCharge;
         return {
             monthSales,
             localSalesTotal,
-            salesJPY,
+            convertedSales,
             royaltyRate,
-            royaltyFromSales,
+            salesRoyalty,
             minimumRoyalty,
             bankCharge,
-            baseRoyalty,
+            royaltyBase,
             totalDue,
         };
-    }, [storeSales, invoiceMonthKey, store.currency, store.royaltyPercentage, fxRates, invoiceMinimumDraft, invoiceBankChargeDraft]);
+    }, [storeSales, invoiceMonthKey, store.currency, invoiceCurrency, fxRates, store.royaltyPercentage, invoiceMinimumDraft, invoiceBankChargeDraft]);
 
     const handleGenerateInvoicePdf = () => {
         setInvoiceError(null);
         if (!invoiceMonthKey) {
-            setInvoiceError('Select an invoice month first.');
+            setInvoiceError('Select invoice month.');
             return;
         }
-        if (invoiceSummary.salesJPY === null) {
-            setInvoiceError(`No FX rate available for ${store.currency}.`);
+        if (invoiceSummary.convertedSales === null || invoiceSummary.salesRoyalty === null) {
+            setInvoiceError(`FX rate not available for ${store.currency} -> ${invoiceCurrency}.`);
             return;
         }
 
         const [yearRaw, monthRaw] = invoiceMonthKey.split('-').map(Number);
         const year = Number.isFinite(yearRaw) ? yearRaw : new Date().getFullYear();
         const month = Number.isFinite(monthRaw) ? monthRaw : new Date().getMonth() + 1;
-        const monthLabel = formatInvoiceMonthLabel(invoiceMonthKey);
         const issueDate = new Date();
-        const issueDateLabel = issueDate.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: '2-digit' });
-        const invoiceNumber = `CHDR-${invoiceMonthKey.replace('-', '')}-${store.id.replace(/[^a-zA-Z0-9]/g, '').slice(0, 6).toUpperCase() || 'STORE'}`;
-        const monthEndDate = new Date(year, month, 0);
-        const dueDate = new Date(monthEndDate);
-        dueDate.setDate(dueDate.getDate() + 30);
-        const dueDateLabel = dueDate.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: '2-digit' });
-        const localSalesText = `${store.currency} ${invoiceSummary.localSalesTotal.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
-        const salesJPYText = `JPY ${invoiceSummary.salesJPY.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
-        const royaltyFromSalesText = `JPY ${invoiceSummary.royaltyFromSales?.toLocaleString(undefined, { maximumFractionDigits: 0 }) ?? '0'}`;
-        const minimumRoyaltyText = `JPY ${invoiceSummary.minimumRoyalty.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
-        const bankChargeText = `JPY ${invoiceSummary.bankCharge.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
-        const totalDueText = `JPY ${invoiceSummary.totalDue.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
-        const bankChargeLabel = invoiceBankChargeLabel.trim() || 'Bank charge';
-        const fxBasisText = fxStatus === 'ok' ? 'Live FX rates' : 'Fallback/Cached FX rates';
+        const invoiceNoSuffix = invoiceNumberSuffix.trim().replace(/[^\dA-Za-z-]/g, '') || '001';
+        const invoiceNo = `CHDR-${invoiceNoSuffix}`;
+        const monthLabel = formatInvoiceMonthLabel(invoiceMonthKey);
+        const locationText = `${store.country} / ${store.name}`;
+        const amountSymbol = invoiceCurrency === 'JPY' ? '¥' : '$';
+        const salesCurrencyLabel = invoiceCurrency === 'JPY' ? 'Sales JPY' : 'Sales USD';
+        const formatAmount = (value: number) => `${amountSymbol}${value.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+        const bankChargeTitle = invoiceBankChargeLabel.trim() || 'Bank Charge';
+        const monthDate = new Date(year, month - 1, 1);
+        const salesMonthText = monthDate.toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
+        const fxBasis = fxStatus === 'ok' ? 'Live FX' : 'Fallback/Cached FX';
+        const rowAmount = invoiceSummary.salesRoyalty;
 
         const invoiceHtml = `<!doctype html>
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Invoice ${escapeHtml(invoiceNumber)}</title>
+  <title>Invoice ${escapeHtml(invoiceNo)}</title>
   <style>
-    @page { size: A4; margin: 16mm; }
-    body { font-family: Arial, sans-serif; color: #111; }
-    .wrap { max-width: 760px; margin: 0 auto; }
-    h1, h2, h3, p { margin: 0; }
-    .title { text-align: center; margin-bottom: 20px; }
-    .title h1 { color: #b91c1c; font-size: 40px; letter-spacing: 2px; margin-bottom: 10px; }
-    .title p { line-height: 1.45; font-size: 14px; }
-    .invoice { font-size: 38px; font-weight: 800; margin-top: 10px; }
-    .meta { display: grid; grid-template-columns: 1fr auto; gap: 12px; margin: 18px 0; font-size: 14px; }
-    .meta .right { text-align: right; }
-    table { width: 100%; border-collapse: collapse; margin-top: 14px; font-size: 13px; }
-    th, td { border: 1px solid #222; padding: 8px 10px; }
-    th { background: #f5f5f5; text-align: center; }
+    @page { size: A4; margin: 14mm; }
+    body { margin: 0; color: #111; font-family: Arial, sans-serif; }
+    .page { width: 100%; max-width: 830px; margin: 0 auto; }
+    .center { text-align: center; }
+    .company { color: #b91c1c; font-weight: 800; font-size: 48px; letter-spacing: 2px; margin-top: 6px; }
+    .address { line-height: 1.45; font-size: 18px; margin-top: 8px; }
+    .invoice-title { font-size: 46px; font-weight: 800; margin: 16px 0 26px; }
+    .meta { display: flex; justify-content: space-between; font-size: 28px; margin: 22px 0; }
+    .meta strong { font-weight: 800; }
+    table { width: 100%; border-collapse: collapse; font-size: 22px; margin-top: 18px; }
+    th, td { border: 1px solid #222; padding: 10px 12px; }
+    th { background: #f3f4f6; text-align: center; font-weight: 800; }
     td { text-align: right; }
     td.left { text-align: left; }
-    .summary { border: 1px solid #222; border-top: none; padding: 16px; font-size: 14px; }
-    .summary-row { display: flex; justify-content: space-between; margin: 8px 0; }
-    .summary-row.em { font-weight: 700; }
-    .summary-row.total { font-size: 20px; font-weight: 800; border-top: 1px solid #ddd; margin-top: 14px; padding-top: 12px; }
-    .note { margin-top: 12px; font-size: 12px; color: #666; }
-    .bank { margin-top: 22px; border: 1px solid #222; padding: 14px; font-size: 13px; line-height: 1.55; }
-    .bank h3 { margin-bottom: 8px; font-size: 15px; }
-    .footer { display: flex; justify-content: space-between; margin-top: 26px; font-size: 13px; }
-    .sig { margin-top: 28px; font-family: cursive; font-size: 24px; }
+    .calc { border: 1px solid #222; border-top: none; min-height: 260px; padding: 20px; }
+    .line { display: flex; justify-content: space-between; margin: 12px 0; font-size: 30px; }
+    .line.red { color: #dc2626; font-weight: 700; }
+    .line.total { font-size: 40px; font-weight: 800; margin-top: 18px; }
+    .paybox { border: 1px solid #222; margin-top: 20px; padding: 18px; font-size: 23px; line-height: 1.7; }
+    .paytitle { font-size: 34px; font-weight: 800; margin-bottom: 10px; }
+    .footer { display: flex; justify-content: space-between; margin-top: 28px; font-size: 25px; }
+    .sig { font-family: cursive; font-size: 58px; line-height: 1; margin-top: 8px; }
+    .small { color: #555; font-size: 18px; margin-top: 6px; }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <div class="title">
-      <h1>CHIBO HOLDINGS CO., LTD.</h1>
-      <p>Ontex Namba Bldg. 7F 2-2-45 Minato Machi<br/>Naniwa-ku Osaka-shi, Osaka, 556-0017, Japan<br/>Phone +81-6-6633-1570</p>
-      <div class="invoice">INVOICE</div>
+  <div class="page">
+    <div class="center">
+      <div class="company">CHIBO HOLDINGS CO., LTD.</div>
+      <div class="address">
+        Ontex Namba Bldg. 7F 2-2-45 Minato Machi,<br/>
+        Naniwa-ku Osaka-shi, Osaka, 556-0017, Japan<br/>
+        Phone +81-6-6633-1570<br/>
+        FAX +81-6-6633-2191
+      </div>
+      <div class="invoice-title">INVOICE</div>
     </div>
 
     <div class="meta">
+      <div><strong>TO :</strong> ${escapeHtml(store.name)}</div>
       <div>
-        <p><strong>TO:</strong> ${escapeHtml(store.name)}</p>
-        <p style="margin-top: 6px; color:#555;">${escapeHtml(store.city)}, ${escapeHtml(store.country)}</p>
-      </div>
-      <div class="right">
-        <p><strong>INV Number:</strong> ${escapeHtml(invoiceNumber)}</p>
-        <p><strong>Date:</strong> ${escapeHtml(issueDateLabel)}</p>
-        <p><strong>Due Date:</strong> ${escapeHtml(dueDateLabel)}</p>
+        <div><strong>INV Number:</strong> ${escapeHtml(invoiceNo)}</div>
+        <div><strong>DATE:</strong> ${escapeHtml(formatInvoiceDate(issueDate))}</div>
       </div>
     </div>
 
@@ -2643,63 +2656,56 @@ const HQStoreDetail: React.FC<{
       <thead>
         <tr>
           <th>Location</th>
-          <th>Sales Month</th>
-          <th>Sales (Local)</th>
-          <th>Sales (JPY)</th>
+          <th>Sales month</th>
+          <th>Sales (Local Currency)</th>
+          <th>${escapeHtml(salesCurrencyLabel)}</th>
           <th>Royalty %</th>
-          <th>Royalty From Sales</th>
+          <th>Amount</th>
         </tr>
       </thead>
       <tbody>
         <tr>
-          <td class="left">${escapeHtml(`${store.name} (${store.city}, ${store.country})`)}</td>
-          <td class="left">${escapeHtml(monthLabel)}</td>
-          <td>${escapeHtml(localSalesText)}</td>
-          <td>${escapeHtml(salesJPYText)}</td>
+          <td class="left">${escapeHtml(locationText)}</td>
+          <td class="left">${escapeHtml(salesMonthText)}</td>
+          <td>${escapeHtml(`${store.currency} ${invoiceSummary.localSalesTotal.toLocaleString(undefined, { maximumFractionDigits: 0 })}`)}</td>
+          <td>${escapeHtml(formatAmount(invoiceSummary.convertedSales))}</td>
           <td>${escapeHtml(`${invoiceSummary.royaltyRate}%`)}</td>
-          <td>${escapeHtml(royaltyFromSalesText)}</td>
+          <td>${escapeHtml(formatAmount(rowAmount))}</td>
         </tr>
       </tbody>
     </table>
 
-    <div class="summary">
-      <div class="summary-row">
-        <span>Minimum Royalty</span>
-        <span>${escapeHtml(minimumRoyaltyText)}</span>
+    <div class="calc">
+      <div class="line">
+        <span>"Minimum Royalty"</span>
+        <span>${escapeHtml(formatAmount(invoiceSummary.minimumRoyalty))}</span>
       </div>
-      <div class="summary-row">
-        <span>${escapeHtml(bankChargeLabel)}</span>
-        <span>${escapeHtml(bankChargeText)}</span>
+      ${invoiceSummary.bankCharge > 0 ? `<div class="line red"><span>${escapeHtml(bankChargeTitle)}</span><span>${escapeHtml(formatAmount(invoiceSummary.bankCharge))}</span></div>` : ''}
+      <div class="line total">
+        <span>Royalty Amount</span>
+        <span>${escapeHtml(formatAmount(invoiceSummary.totalDue))}</span>
       </div>
-      <div class="summary-row em">
-        <span>Royalty Base (max of sales-based and minimum)</span>
-        <span>${escapeHtml(`JPY ${invoiceSummary.baseRoyalty.toLocaleString(undefined, { maximumFractionDigits: 0 })}`)}</span>
-      </div>
-      <div class="summary-row total">
-        <span>Total Amount Due</span>
-        <span>${escapeHtml(totalDueText)}</span>
-      </div>
-      <div class="note">Basis: ${escapeHtml(fxBasisText)} • Generated by CHIBO Global Manager</div>
+      <div class="small">Basis: ${escapeHtml(fxBasis)} • Auto generated from owner submitted sales (${escapeHtml(monthLabel)})</div>
     </div>
 
-    <div class="bank">
-      <h3>Please make payment payable to:</h3>
-      <div>Beneficiary Name: CHIBO HOLDINGS CO., LTD.</div>
-      <div>Beneficiary Address: 1-5-5 DOUTONBORI, CHUO-KU, OSAKA, 542-0071 JAPAN</div>
-      <div>Beneficiary Bank Name: RESONA BANK SENBA BRANCH</div>
-      <div>Beneficiary Bank Address: 3-6-1 KITAKYUHOJIMACHI, CHUO-KU, OSAKA-SHI, OSAKA 541-0057, JAPAN</div>
-      <div>Swift Code: DIWAJPJT</div>
-      <div>Beneficiary Account Number: 0323028 JPY</div>
+    <div class="paybox">
+      <div class="paytitle">Please make payment payable to:</div>
+      <div>Beneficiary Name：CHIBO HOLDINGS CO., LTD.</div>
+      <div>Beneficiary Address：1-5-5 DOUTONNBORI, CHUO-KU, OSAKA, 542-0071 JAPAN</div>
+      <div>Beneficiary Bank Name：RESONA BANK SENBA BRANCH</div>
+      <div>Beneficiary Bank Address：3-6-1 KITAKYUHOJIMACHI, CYUO-KU, OSAKA-SHI, OSAKA 541-0057, JAPAN</div>
+      <div>Swift Code：DIWAJPJT</div>
+      <div>Beneficiary Account Number：0323028 ${escapeHtml(invoiceCurrency)}</div>
     </div>
 
     <div class="footer">
       <div>
-        <div><strong>Buyer</strong></div>
+        <div><strong>Buyer:</strong></div>
         <div>${escapeHtml(store.name)}</div>
       </div>
-      <div style="text-align: right;">
+      <div style="text-align:right;">
         <div><strong>Prepared by</strong></div>
-        <div>CHIBO HOLDINGS CO., LTD.</div>
+        <div><strong>CHIBO HOLDINGS CO., LTD.</strong></div>
         <div class="sig">Kasumi Hemmi</div>
       </div>
     </div>
@@ -2709,7 +2715,7 @@ const HQStoreDetail: React.FC<{
 
         const popup = window.open('', '_blank', 'noopener,noreferrer');
         if (!popup) {
-            setInvoiceError('Popup blocked. Allow popups and try again.');
+            setInvoiceError('Popup blocked. Allow popups and retry.');
             return;
         }
         popup.document.open();
@@ -3220,20 +3226,27 @@ const HQStoreDetail: React.FC<{
             </div>
 
             <div className="bg-white p-5 rounded-2xl shadow-sm border mb-8">
-                <div className="flex flex-col lg:flex-row lg:items-end gap-4">
-                    <div className="flex-1">
-                        <div className="text-base font-extrabold text-gray-900">Monthly Invoice</div>
-                        <div className="text-xs text-gray-500 mt-1">
-                            Select month and click to generate printable invoice PDF for this store.
-                        </div>
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 w-full lg:w-auto">
+                <div className="flex flex-col gap-4">
+                    <div className="flex items-center justify-between gap-2">
                         <div>
-                            <div className="text-xs font-bold text-gray-500 mb-1">Sales Month</div>
+                            <div className="text-lg font-extrabold">Invoice Generator</div>
+                            <div className="text-xs text-gray-500">Auto-calculated from owner submitted monthly sales.</div>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={handleGenerateInvoicePdf}
+                            className="px-4 py-2 rounded-xl bg-black text-white text-sm font-bold hover:bg-gray-800"
+                        >
+                            Generate Invoice PDF
+                        </button>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-6 gap-3">
+                        <div>
+                            <div className="text-[11px] font-bold text-gray-500 mb-1">Invoice Month</div>
                             <select
                                 value={invoiceMonthKey}
                                 onChange={(e) => setInvoiceMonthKey(e.target.value)}
-                                className="w-full px-3 py-2 rounded-lg border border-gray-200 bg-white text-sm font-semibold"
+                                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
                             >
                                 {invoiceMonthOptions.map((key) => (
                                     <option key={key} value={key}>
@@ -3243,51 +3256,69 @@ const HQStoreDetail: React.FC<{
                             </select>
                         </div>
                         <div>
-                            <div className="text-xs font-bold text-gray-500 mb-1">Minimum Royalty (JPY)</div>
+                            <div className="text-[11px] font-bold text-gray-500 mb-1">Invoice Currency</div>
+                            <select
+                                value={invoiceCurrency}
+                                onChange={(e) => setInvoiceCurrency(e.target.value as 'JPY' | 'USD')}
+                                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                            >
+                                <option value="JPY">JPY</option>
+                                <option value="USD">USD</option>
+                            </select>
+                        </div>
+                        <div>
+                            <div className="text-[11px] font-bold text-gray-500 mb-1">INV Number</div>
+                            <div className="flex items-center gap-1">
+                                <span className="text-xs font-bold text-gray-500">CHDR-</span>
+                                <input
+                                    value={invoiceNumberSuffix}
+                                    onChange={(e) => setInvoiceNumberSuffix(e.target.value.replace(/[^\dA-Za-z-]/g, ''))}
+                                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                                    placeholder="144"
+                                />
+                            </div>
+                        </div>
+                        <div>
+                            <div className="text-[11px] font-bold text-gray-500 mb-1">Minimum Royalty</div>
                             <input
                                 value={invoiceMinimumDraft}
                                 onChange={(e) => setInvoiceMinimumDraft(e.target.value.replace(/[^\d]/g, ''))}
+                                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
                                 placeholder="150000"
-                                className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm"
                             />
                         </div>
                         <div>
-                            <div className="text-xs font-bold text-gray-500 mb-1">Bank Charge (JPY)</div>
+                            <div className="text-[11px] font-bold text-gray-500 mb-1">Bank Charge</div>
                             <input
                                 value={invoiceBankChargeDraft}
                                 onChange={(e) => setInvoiceBankChargeDraft(e.target.value.replace(/[^\d]/g, ''))}
+                                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
                                 placeholder="4000"
-                                className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm"
                             />
                         </div>
                         <div>
-                            <div className="text-xs font-bold text-gray-500 mb-1">Bank Charge Label</div>
+                            <div className="text-[11px] font-bold text-gray-500 mb-1">Charge Label</div>
                             <input
                                 value={invoiceBankChargeLabel}
                                 onChange={(e) => setInvoiceBankChargeLabel(e.target.value)}
-                                placeholder="Bank charge of Jan & Feb"
-                                className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm"
+                                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                                placeholder="Bank Charge of Jan & Feb"
                             />
                         </div>
                     </div>
-                </div>
-                <div className="mt-4 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-                    <div className="text-xs text-gray-600">
-                        <div>Local Sales: <span className="font-bold">{store.currency} {invoiceSummary.localSalesTotal.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span></div>
-                        <div>Sales JPY: <span className="font-bold">{invoiceSummary.salesJPY === null ? 'N/A' : `JPY ${invoiceSummary.salesJPY.toLocaleString(undefined, { maximumFractionDigits: 0 })}`}</span> ({fxStatus === 'ok' ? 'Live FX' : 'Approx FX'})</div>
-                        <div>Total Due: <span className="font-bold">JPY {invoiceSummary.totalDue.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span></div>
+                    <div className="text-xs text-gray-600 grid sm:grid-cols-3 gap-2">
+                        <div>
+                            Local Sales: <span className="font-bold">{store.currency} {invoiceSummary.localSalesTotal.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                        </div>
+                        <div>
+                            Sales ({invoiceCurrency}): <span className="font-bold">{invoiceSummary.convertedSales === null ? 'N/A' : invoiceSummary.convertedSales.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                        </div>
+                        <div>
+                            Royalty Amount: <span className="font-bold">{invoiceCurrency} {invoiceSummary.totalDue.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                        </div>
                     </div>
-                    <button
-                        type="button"
-                        onClick={handleGenerateInvoicePdf}
-                        className="px-4 py-2 rounded-xl bg-black text-white text-sm font-bold hover:bg-gray-800"
-                    >
-                        Generate Invoice PDF
-                    </button>
+                    {invoiceError && <div className="text-xs text-red-600">{invoiceError}</div>}
                 </div>
-                {invoiceError && (
-                    <div className="mt-3 text-xs text-red-600">{invoiceError}</div>
-                )}
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
