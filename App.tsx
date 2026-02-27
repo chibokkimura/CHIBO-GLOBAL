@@ -2713,18 +2713,20 @@ const HQStoreDetail: React.FC<{
 </body>
 </html>`;
 
-        const popup = window.open('', '_blank', 'noopener,noreferrer');
+        const popup = window.open('', '_blank');
         if (!popup) {
             setInvoiceError('Popup blocked. Allow popups and retry.');
             return;
         }
-        popup.document.open();
-        popup.document.write(invoiceHtml);
-        popup.document.close();
-        popup.focus();
-        window.setTimeout(() => {
-            popup.print();
-        }, 350);
+        try {
+            popup.document.open();
+            popup.document.write(invoiceHtml);
+            popup.document.close();
+            popup.focus();
+        } catch (e) {
+            console.error('Failed to render invoice window', e);
+            setInvoiceError('Failed to render invoice page. Please retry.');
+        }
     };
 
     const monthlyRevenueData = useMemo(() => {
