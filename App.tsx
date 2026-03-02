@@ -2612,7 +2612,6 @@ const HQStoreDetail: React.FC<{
         const bankChargeText = formatAmount(invoiceSummary.bankCharge);
         const buyerText = store.name;
         const invoiceDateText = formatInvoiceDateDot(issueDate);
-        const templateUrl = `${window.location.origin}/invoice-template-kr2may144.png`;
         const signatureUrl = `${window.location.origin}/invoice-signature-kasumi.png`;
 
         const invoiceHtml = `<!doctype html>
@@ -2622,7 +2621,6 @@ const HQStoreDetail: React.FC<{
   <title>Invoice ${escapeHtml(invoiceNo)}</title>
   <style>
     @page { size: A4; margin: 0; }
-    :root { --paper: #f2f2f2; }
     body { margin: 0; color: #111; font-family: Arial, sans-serif; background: #e5e7eb; }
     .toolbar {
       position: sticky;
@@ -2650,50 +2648,121 @@ const HQStoreDetail: React.FC<{
       color: #fff;
     }
     .sheet-wrap {
-      width: min(94vw, 980px);
+      width: min(94vw, 900px);
       margin: 14px auto 24px;
       box-shadow: 0 8px 24px rgba(0,0,0,0.12);
       border: 1px solid #ddd;
-      background: var(--paper);
+      background: #f7f7f7;
     }
     .sheet {
       position: relative;
-      width: 100%;
-      aspect-ratio: 1414 / 2000;
-      background: var(--paper);
-      overflow: hidden;
+      width: 210mm;
+      height: 297mm;
+      margin: 0 auto;
+      background: #f7f7f7;
+      box-sizing: border-box;
+      padding: 16mm 14mm 12mm 14mm;
     }
-    .template {
-      position: absolute;
-      inset: 0;
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-      z-index: 1;
-      user-select: none;
-      pointer-events: none;
-    }
-    .field {
-      position: absolute;
-      z-index: 3;
-      background: var(--paper);
-      color: #111;
+    .center { text-align: center; }
+    .head-company {
+      color: #c31717;
       font-weight: 700;
-      padding: 0 4px;
-      line-height: 1.2;
-      white-space: nowrap;
+      font-size: 14pt;
+      letter-spacing: 0.3px;
+      margin-top: 0;
     }
-    .field.norm { font-weight: 600; }
-    .field.red { color: #c1121f; }
-    .signature {
-      position: absolute;
-      z-index: 4;
-      width: 22%;
-      left: 69.7%;
-      top: 74.8%;
-      background: transparent;
-      opacity: 0.98;
+    .head-address {
+      font-size: 8.2pt;
+      line-height: 1.35;
+      margin-top: 4px;
+    }
+    .head-invoice {
+      margin-top: 10px;
+      font-size: 17pt;
+      font-weight: 800;
+      letter-spacing: 0.3px;
+    }
+    .meta-row {
+      margin-top: 18mm;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      font-size: 9.4pt;
+      font-weight: 700;
+    }
+    .meta-right div { margin-bottom: 2px; }
+    table.main {
+      width: 100%;
+      margin-top: 18mm;
+      border-collapse: collapse;
+      table-layout: fixed;
+      font-size: 8.2pt;
+    }
+    table.main th, table.main td {
+      border: 1px solid #333;
+      padding: 4px 5px;
+      line-height: 1.15;
+    }
+    table.main th { text-align: center; font-weight: 700; }
+    table.main td { text-align: right; font-weight: 700; }
+    table.main td.left { text-align: left; }
+    .summary-box {
+      border: 1px solid #333;
+      border-top: none;
+      height: 58mm;
+      padding: 14mm 12mm 8mm 12mm;
+      box-sizing: border-box;
+      position: relative;
+    }
+    .summary-line {
+      display: flex;
+      justify-content: space-between;
+      font-size: 11pt;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+    .summary-line.red { color: #d11a1a; }
+    .summary-line.total {
+      font-size: 20pt;
+      margin-top: 8px;
+      margin-bottom: 0;
+    }
+    .paybox {
+      border: 1px solid #333;
+      margin-top: 0;
+      padding: 10mm 10mm 8mm 10mm;
+      font-size: 9pt;
+      line-height: 1.55;
+    }
+    .pay-title {
+      font-size: 12pt;
+      font-weight: 700;
+      margin-bottom: 7px;
+    }
+    .paybox .currency-red { color: #d11a1a; font-weight: 700; }
+    .footer {
+      margin-top: 15mm;
+      display: flex;
+      justify-content: space-between;
+      font-size: 9.3pt;
+      font-weight: 700;
+    }
+    .signature-wrap {
+      margin-top: 8px;
+      display: inline-block;
+      width: 66mm;
+    }
+    .signature-wrap img {
+      display: block;
+      width: 100%;
+      height: auto;
       mix-blend-mode: multiply;
+    }
+    .sig-line {
+      margin-top: 2px;
+      border-top: 1px solid #333;
+      padding-top: 3px;
+      font-size: 7.8pt;
     }
     @media print {
       body { background: #fff; }
@@ -2703,10 +2772,6 @@ const HQStoreDetail: React.FC<{
         margin: 0;
         box-shadow: none;
         border: none;
-      }
-      .sheet {
-        width: 210mm;
-        height: 297mm;
       }
     }
   </style>
@@ -2718,28 +2783,93 @@ const HQStoreDetail: React.FC<{
   </div>
   <div class="sheet-wrap">
     <div class="sheet">
-      <img class="template" src="${escapeHtml(templateUrl)}" alt="Invoice Template" />
+      <div class="center">
+        <div class="head-company">CHIBO HOLDINGS CO., LTD.</div>
+        <div class="head-address">
+          Ontex Namba Bldg. 7F 2-2-45 Minato Machi,<br/>
+          Naniwa-ku Osaka-shi, Osaka, 556-0017,Japan<br/>
+          Phone +81-6-6633-1570<br/>
+          FAX&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;+81-6-6633-2191
+        </div>
+        <div class="head-invoice">INVOICE</div>
+      </div>
 
-      <div class="field norm" style="left:11.8%; top:20.0%; font-size:1.08vw; min-font-size:14px;">${escapeHtml(buyerText)}</div>
-      <div class="field" style="left:78.5%; top:20.0%; font-size:0.95vw;">${escapeHtml(invoiceNo)}</div>
-      <div class="field" style="left:78.5%; top:21.55%; font-size:0.95vw;">${escapeHtml(invoiceDateText)}</div>
+      <div class="meta-row">
+        <div><span style="margin-right:8px;">TO :</span> ${escapeHtml(buyerText)}</div>
+        <div class="meta-right">
+          <div><span style="display:inline-block; width:82px;">INV Number:</span> ${escapeHtml(invoiceNo)}</div>
+          <div><span style="display:inline-block; width:82px;">DATE:</span> ${escapeHtml(invoiceDateText)}</div>
+        </div>
+      </div>
 
-      <div class="field norm" style="left:8.3%; top:33.35%; width:15.4%; font-size:0.86vw;">${escapeHtml(locationText)}</div>
-      <div class="field norm" style="left:23.9%; top:33.35%; width:7.7%; font-size:0.86vw; text-align:center;">${escapeHtml(salesMonthText)}</div>
-      <div class="field norm" style="left:32.2%; top:33.35%; width:16.8%; font-size:0.86vw; text-align:right;">${escapeHtml(salesLocalText)}</div>
-      <div class="field norm" style="left:50.2%; top:33.35%; width:12.0%; font-size:0.86vw; text-align:right;">${escapeHtml(fxSalesText)}</div>
-      <div class="field norm" style="left:62.7%; top:33.35%; width:6.8%; font-size:0.86vw; text-align:center;">${escapeHtml(royaltyRateText)}</div>
-      <div class="field norm" style="left:70.0%; top:33.35%; width:13.8%; font-size:0.86vw; text-align:right;">${escapeHtml(formatAmount(rowAmount))}</div>
-      <div class="field" style="left:50.5%; top:31.2%; width:11.4%; font-size:0.78vw; text-align:center;">${escapeHtml(salesCurrencyLabel)}</div>
+      <table class="main">
+        <colgroup>
+          <col style="width:23.2%">
+          <col style="width:14.2%">
+          <col style="width:21.6%">
+          <col style="width:14.6%">
+          <col style="width:10.5%">
+          <col style="width:15.9%">
+        </colgroup>
+        <thead>
+          <tr>
+            <th>Location</th>
+            <th>Sales month</th>
+            <th>Sales (Local Currency)</th>
+            <th>${escapeHtml(salesCurrencyLabel)}</th>
+            <th>Royalty %</th>
+            <th>Amount</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="left">${escapeHtml(locationText)}</td>
+            <td style="text-align:center">${escapeHtml(salesMonthText)}</td>
+            <td>${escapeHtml(salesLocalText)}</td>
+            <td>${escapeHtml(fxSalesText)}</td>
+            <td style="text-align:center">${escapeHtml(royaltyRateText)}</td>
+            <td>${escapeHtml(formatAmount(rowAmount))}</td>
+          </tr>
+        </tbody>
+      </table>
 
-      <div class="field" style="left:77.4%; top:45.2%; width:10.5%; font-size:1.0vw; text-align:right;">${escapeHtml(minimumText)}</div>
-      ${invoiceSummary.bankCharge > 0 ? `<div class="field red" style="left:38.0%; top:49.0%; width:33.0%; font-size:1.0vw;">${escapeHtml(bankChargeTitle)}</div><div class="field red" style="left:77.4%; top:49.0%; width:10.5%; font-size:1.0vw; text-align:right;">${escapeHtml(bankChargeText)}</div>` : ''}
-      <div class="field" style="left:77.4%; top:54.4%; width:10.5%; font-size:1.2vw; text-align:right;">${escapeHtml(totalText)}</div>
+      <div class="summary-box">
+        <div class="summary-line">
+          <span>"Minimum Royalty"</span>
+          <span>${escapeHtml(minimumText)}</span>
+        </div>
+        ${invoiceSummary.bankCharge > 0 ? `<div class="summary-line red"><span>${escapeHtml(bankChargeTitle)}</span><span>${escapeHtml(bankChargeText)}</span></div>` : ''}
+        <div class="summary-line total">
+          <span>Royalty Amount</span>
+          <span>${escapeHtml(totalText)}</span>
+        </div>
+      </div>
 
-      <div class="field red" style="left:48.7%; top:69.55%; width:4.8%; font-size:1.0vw;">${escapeHtml(invoiceCurrency)}</div>
-      <div class="field norm" style="left:11.6%; top:75.9%; width:22.5%; font-size:0.92vw;">${escapeHtml(buyerText)}</div>
+      <div class="paybox">
+        <div class="pay-title">Please make payment payable to:</div>
+        <div>Beneficiary Name : CHIBO HOLDINGS CO., LTD.</div>
+        <div>Beneficiary Address : 1-5-5 DOUTONNBORI, CHUO-KU, OSAKA, 542-0071 JAPAN</div>
+        <div>Beneficiary Bank Name : RESONA BANK&nbsp;&nbsp;SENBA BRANCH</div>
+        <div>Beneficiary Bank Address : 3-6-1 KITAKYUHOJIMACHI, CYUO-KU, OSAKA-SHI,OSAKA 541-0057, JAPAN</div>
+        <div>Swift Code : DIWAJPJT</div>
+        <div>Beneficiary Account Number : 0323028&nbsp;&nbsp;<span class="currency-red">${escapeHtml(invoiceCurrency)}</span></div>
+      </div>
 
-      <img class="signature" src="${escapeHtml(signatureUrl)}" alt="Signature" />
+      <div class="footer">
+        <div>
+          <div>Buyer:</div>
+          <div>${escapeHtml(buyerText)}</div>
+          <div style="width:66mm; border-top:1px solid #333; margin-top:36px;"></div>
+        </div>
+        <div style="text-align:left;">
+          <div>Prepared by</div>
+          <div>CHIBO HOLDINGS CO.,LTD.</div>
+          <div class="signature-wrap">
+            <img src="${escapeHtml(signatureUrl)}" alt="Signature" />
+            <div class="sig-line">Kasumi Hemmi</div>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </body>
