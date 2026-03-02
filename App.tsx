@@ -2379,6 +2379,7 @@ const HQStoreDetail: React.FC<{
     const [invoiceMinimumDraft, setInvoiceMinimumDraft] = useState<string>('0');
     const [invoiceBankChargeDraft, setInvoiceBankChargeDraft] = useState<string>('0');
     const [invoiceBankChargeLabel, setInvoiceBankChargeLabel] = useState<string>('Bank Charge');
+    const [invoiceSpecialNote, setInvoiceSpecialNote] = useState<string>('');
     const [invoiceError, setInvoiceError] = useState<string | null>(null);
 
     const openReceipt = async (saleId: string) => {
@@ -2613,6 +2614,7 @@ const HQStoreDetail: React.FC<{
         const buyerText = store.name;
         const invoiceDateText = formatInvoiceDateDot(issueDate);
         const signatureUrl = `${window.location.origin}/invoice-signature-kasumi.png`;
+        const specialNoteHtml = escapeHtml(invoiceSpecialNote.trim()).replace(/\n/g, '<br/>');
 
         const invoiceHtml = `<!doctype html>
 <html>
@@ -2710,22 +2712,56 @@ const HQStoreDetail: React.FC<{
       border: 1px solid #333;
       border-top: none;
       height: 58mm;
-      padding: 14mm 12mm 8mm 12mm;
+      padding: 15mm 12mm 8mm 12mm;
       box-sizing: border-box;
-      position: relative;
+    }
+    .summary-minimum {
+      display: grid;
+      grid-template-columns: 1.05fr 1.8fr auto;
+      column-gap: 8mm;
+      align-items: end;
+      margin-top: 8mm;
+    }
+    .summary-minimum .label {
+      justify-self: center;
+      font-size: 10.5pt;
+      font-weight: 700;
+    }
+    .summary-minimum .note {
+      font-size: 10.5pt;
+      font-weight: 700;
+      line-height: 1.35;
+      color: #111;
+      min-height: 14pt;
+    }
+    .summary-minimum .amount {
+      justify-self: end;
+      font-size: 10.5pt;
+      font-weight: 700;
     }
     .summary-line {
       display: flex;
       justify-content: space-between;
-      font-size: 11pt;
+      align-items: end;
+      font-size: 10.5pt;
       font-weight: 700;
-      margin-bottom: 8px;
+      margin-top: 6mm;
     }
     .summary-line.red { color: #d11a1a; }
     .summary-line.total {
-      font-size: 20pt;
-      margin-top: 8px;
-      margin-bottom: 0;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      align-items: end;
+      padding-left: 56%;
+      margin-top: 12mm;
+    }
+    .summary-line.total .label {
+      font-size: 11.5pt;
+      font-weight: 700;
+    }
+    .summary-line.total .amount {
+      font-size: 14pt;
+      font-weight: 700;
     }
     .paybox {
       border: 1px solid #333;
@@ -2834,14 +2870,15 @@ const HQStoreDetail: React.FC<{
       </table>
 
       <div class="summary-box">
-        <div class="summary-line">
-          <span>"Minimum Royalty"</span>
-          <span>${escapeHtml(minimumText)}</span>
+        <div class="summary-minimum">
+          <span class="label">"Minimum Royalty"</span>
+          <span class="note">${specialNoteHtml || '&nbsp;'}</span>
+          <span class="amount">${escapeHtml(minimumText)}</span>
         </div>
         ${invoiceSummary.bankCharge > 0 ? `<div class="summary-line red"><span>${escapeHtml(bankChargeTitle)}</span><span>${escapeHtml(bankChargeText)}</span></div>` : ''}
         <div class="summary-line total">
-          <span>Royalty Amount</span>
-          <span>${escapeHtml(totalText)}</span>
+          <span class="label">Royalty Amount</span>
+          <span class="amount">${escapeHtml(totalText)}</span>
         </div>
       </div>
 
@@ -3466,6 +3503,15 @@ const HQStoreDetail: React.FC<{
                                 placeholder="Bank Charge of Jan & Feb"
                             />
                         </div>
+                    </div>
+                    <div>
+                        <div className="text-[11px] font-bold text-gray-500 mb-1">Special Note</div>
+                        <textarea
+                            value={invoiceSpecialNote}
+                            onChange={(e) => setInvoiceSpecialNote(e.target.value)}
+                            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm min-h-[72px] resize-y"
+                            placeholder={`Optional note for the invoice body.\nExample: smaller than 100 m2`}
+                        />
                     </div>
                     <div className="text-xs text-gray-600 grid sm:grid-cols-3 gap-2">
                         <div>
