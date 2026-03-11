@@ -8,7 +8,7 @@ import {
   AlertTriangle, Plus, Trash2, ChevronRight, FileText, Camera, Save, ArrowLeft, BarChart3, Package, MapPin, CheckCircle2, XCircle, TrendingUp, TrendingDown, Minus, DollarSign, Clock, Image as ImageIcon, Layers, UploadCloud, Settings, X, Search, Info, Grid, Briefcase, User as UserIcon, AlertCircle, Mail, ArrowRight, UserPlus, AlertOctagon, ArrowUpRight, ArrowDownRight, CalendarX
 } from 'lucide-react';
 import { supabase } from './supabaseClient';
-import { signInWithGoogle, signOut } from './auth';
+import { signInWithEmailPassword, signInWithGoogle, signOut, signUpWithEmailPassword } from './auth';
 
 
 // --- Supabase Data Layer ---
@@ -5092,6 +5092,11 @@ const StoreDashboard: React.FC<{
 
 const LoginScreen: React.FC = () => {
     const [loginError, setLoginError] = useState<string | null>(null);
+    const [loginInfo, setLoginInfo] = useState<string | null>(null);
+    const [loginBusy, setLoginBusy] = useState(false);
+    const [email, setEmail] = useState('');
+    const [password, setPassword] = useState('');
+    const [authMode, setAuthMode] = useState<'signin' | 'signup'>('signin');
     const isEmbeddedBrowser = useMemo(() => {
         if (typeof navigator === 'undefined') return false;
         const ua = navigator.userAgent || '';
@@ -5118,7 +5123,7 @@ const LoginScreen: React.FC = () => {
                 <div className="flex flex-col items-center text-center">
                     <CompanyLogo />
                     <h1 className="text-2xl font-extrabold text-gray-900 mb-2">CHIBO</h1>
-                    <p className="text-gray-500 mb-8">Global Franchise Manager</p>
+                    <p className="text-gray-500 mb-6">Global Franchise Manager</p>
 
                     {isEmbeddedBrowser && (
                         <div className="w-full mb-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-left">
@@ -5134,6 +5139,7 @@ const LoginScreen: React.FC = () => {
                         onClick={async () => {
                             try {
                                 setLoginError(null);
+                                setLoginInfo(null);
                                 await signInWithGoogle();
                             } catch (e: any) {
                                 console.error('Login failed', e);
@@ -5147,6 +5153,68 @@ const LoginScreen: React.FC = () => {
                         Continue with Google
                     </button>
 
+                    <div className="w-full my-4 flex items-center gap-3">
+                        <div className="h-px bg-gray-200 flex-1" />
+                        <span className="text-[11px] font-bold text-gray-400">OR EMAIL</span>
+                        <div className="h-px bg-gray-200 flex-1" />
+                    </div>
+
+                    <div className="w-full text-left space-y-2">
+                        <input
+                            type="email"
+                            value={email}
+                            onChange={(e) => setEmail(e.target.value)}
+                            autoComplete="email"
+                            placeholder="Email (qq.com / 163.com / etc.)"
+                            className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm"
+                        />
+                        <input
+                            type="password"
+                            value={password}
+                            onChange={(e) => setPassword(e.target.value)}
+                            autoComplete={authMode === 'signin' ? 'current-password' : 'new-password'}
+                            placeholder="Password"
+                            className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm"
+                        />
+                        <button
+                            type="button"
+                            disabled={loginBusy || !email.trim() || !password}
+                            onClick={async () => {
+                                try {
+                                    setLoginBusy(true);
+                                    setLoginError(null);
+                                    setLoginInfo(null);
+                                    if (authMode === 'signin') {
+                                        await signInWithEmailPassword(email, password);
+                                    } else {
+                                        await signUpWithEmailPassword(email, password);
+                                        setLoginInfo('Account created. If email confirmation is enabled, verify email first, then sign in.');
+                                        setAuthMode('signin');
+                                    }
+                                } catch (e: any) {
+                                    console.error('Email auth failed', e);
+                                    setLoginError(e?.message ?? 'Email login failed.');
+                                } finally {
+                                    setLoginBusy(false);
+                                }
+                            }}
+                            className="w-full inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-black text-white font-semibold disabled:opacity-50"
+                        >
+                            {loginBusy ? 'Processing...' : authMode === 'signin' ? 'Sign in with Email' : 'Create Account'}
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => {
+                                setAuthMode((prev) => (prev === 'signin' ? 'signup' : 'signin'));
+                                setLoginError(null);
+                                setLoginInfo(null);
+                            }}
+                            className="w-full text-xs font-semibold text-gray-600 hover:text-black"
+                        >
+                            {authMode === 'signin' ? 'Need account? Create one' : 'Already have account? Sign in'}
+                        </button>
+                    </div>
+
                     {isEmbeddedBrowser && (
                         <button
                             type="button"
@@ -5159,12 +5227,16 @@ const LoginScreen: React.FC = () => {
                         </button>
                     )}
 
+                    {loginInfo && (
+                        <div className="mt-4 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-xl p-2 w-full text-left">{loginInfo}</div>
+                    )}
+
                     {loginError && (
-                        <div className="mt-4 text-xs text-red-600">{loginError}</div>
+                        <div className="mt-4 text-xs text-red-600 w-full text-left">{loginError}</div>
                     )}
 
                     <p className="text-xs text-gray-400 mt-6 leading-relaxed">
-                        Access is restricted for unauthorized accounts after login.
+                        Access is restricted for unauthorized accounts after login. For OWNER access, HQ must assign your email in account mapping.
                     </p>
                 </div>
             </div>
