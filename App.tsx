@@ -5092,6 +5092,13 @@ const StoreDashboard: React.FC<{
 
 const LoginScreen: React.FC = () => {
     const [loginError, setLoginError] = useState<string | null>(null);
+    const isEmbeddedBrowser = useMemo(() => {
+        if (typeof navigator === 'undefined') return false;
+        const ua = navigator.userAgent || '';
+        const hasKnownInAppToken = /(Line|KAKAOTALK|FBAN|FBAV|Instagram|wv)/i.test(ua);
+        const iOSWebView = /(iPhone|iPad|iPod)/i.test(ua) && /AppleWebKit/i.test(ua) && !/Safari/i.test(ua);
+        return hasKnownInAppToken || iOSWebView;
+    }, []);
 
     const CompanyLogo = () => (
         <div className="w-56 h-40 mb-6 flex items-center justify-center">
@@ -5113,6 +5120,16 @@ const LoginScreen: React.FC = () => {
                     <h1 className="text-2xl font-extrabold text-gray-900 mb-2">CHIBO</h1>
                     <p className="text-gray-500 mb-8">Global Franchise Manager</p>
 
+                    {isEmbeddedBrowser && (
+                        <div className="w-full mb-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-left">
+                            <div className="text-xs font-bold text-amber-900 mb-1">Unsupported in-app browser</div>
+                            <div className="text-xs text-amber-800 leading-relaxed">
+                                Google login is blocked in embedded browsers (error 403: disallowed_useragent).
+                                Open this page in Safari/Chrome and sign in there.
+                            </div>
+                        </div>
+                    )}
+
                     <button
                         onClick={async () => {
                             try {
@@ -5123,11 +5140,24 @@ const LoginScreen: React.FC = () => {
                                 setLoginError(e?.message ?? 'Login failed. Check OAuth settings.');
                             }
                         }}
-                        className="w-full inline-flex items-center justify-center gap-3 px-4 py-3 rounded-xl border border-gray-200 hover:border-gray-300 hover:bg-gray-50 transition font-semibold"
+                        disabled={isEmbeddedBrowser}
+                        className="w-full inline-flex items-center justify-center gap-3 px-4 py-3 rounded-xl border border-gray-200 hover:border-gray-300 hover:bg-gray-50 transition font-semibold disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-white disabled:hover:border-gray-200"
                     >
                         <span className="text-lg">G</span>
                         Continue with Google
                     </button>
+
+                    {isEmbeddedBrowser && (
+                        <button
+                            type="button"
+                            onClick={() => {
+                                window.open(window.location.href, '_blank', 'noopener,noreferrer');
+                            }}
+                            className="w-full mt-3 inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-black text-white font-semibold"
+                        >
+                            Open in External Browser
+                        </button>
+                    )}
 
                     {loginError && (
                         <div className="mt-4 text-xs text-red-600">{loginError}</div>
