@@ -5305,6 +5305,8 @@ const LoginScreen: React.FC = () => {
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [authMode, setAuthMode] = useState<'signin' | 'signup'>('signin');
+    const normalizedEmail = email.trim().toLowerCase();
+    const isHqGoogleOnlyEmail = normalizedEmail === 'chibo.k.kimura@gmail.com' || normalizedEmail === 'chibo.global.mgsystem@gmail.com';
     const isEmbeddedBrowser = useMemo(() => {
         if (typeof navigator === 'undefined') return false;
         const ua = navigator.userAgent || '';
@@ -5386,12 +5388,16 @@ const LoginScreen: React.FC = () => {
                         />
                         <button
                             type="button"
-                            disabled={loginBusy || !email.trim() || !password}
+                            disabled={loginBusy || !email.trim() || !password || (authMode === 'signin' && isHqGoogleOnlyEmail)}
                             onClick={async () => {
                                 try {
                                     setLoginBusy(true);
                                     setLoginError(null);
                                     setLoginInfo(null);
+                                    if (authMode === 'signin' && isHqGoogleOnlyEmail) {
+                                        setLoginInfo('This HQ account uses Google sign-in. Use Continue with Google.');
+                                        return;
+                                    }
                                     if (authMode === 'signin') {
                                         await signInWithEmailPassword(email, password);
                                     } else {
@@ -5408,8 +5414,13 @@ const LoginScreen: React.FC = () => {
                             }}
                             className="w-full inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-black text-white font-semibold disabled:opacity-50"
                         >
-                            {loginBusy ? 'Processing...' : authMode === 'signin' ? 'Sign in with Email' : 'Create Account'}
+                            {loginBusy ? 'Processing...' : authMode === 'signin' && isHqGoogleOnlyEmail ? 'Use Continue with Google' : authMode === 'signin' ? 'Sign in with Email' : 'Create Account'}
                         </button>
+                        {authMode === 'signin' && isHqGoogleOnlyEmail && (
+                            <div className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs leading-relaxed text-blue-800">
+                                This HQ address is registered through Google sign-in. The email/password form will not work for this account.
+                            </div>
+                        )}
                         <button
                             type="button"
                             onClick={() => {
