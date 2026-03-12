@@ -5315,6 +5315,20 @@ const LoginScreen: React.FC = () => {
         return hasKnownInAppToken || iOSWebView;
     }, []);
 
+    const toFriendlyAuthError = useCallback((message?: string) => {
+        const raw = String(message ?? '').toLowerCase();
+        if (raw.includes('invalid login credentials')) {
+            return 'Email or password is incorrect. If this is an HQ Google account, use Continue with Google.';
+        }
+        if (raw.includes('email not confirmed')) {
+            return 'This email is not confirmed yet. If email confirmation is disabled in Supabase, check Auth settings.';
+        }
+        if (raw.includes('too many requests')) {
+            return 'Too many attempts. Please wait a minute and try again.';
+        }
+        return message || 'Sign-in failed. Please try again.';
+    }, []);
+
     const CompanyLogo = () => (
         <div className="w-56 h-40 mb-6 flex items-center justify-center">
             <img
@@ -5407,7 +5421,7 @@ const LoginScreen: React.FC = () => {
                                     }
                                 } catch (e: any) {
                                     console.error('Email auth failed', e);
-                                    setLoginError(e?.message ?? 'Email login failed.');
+                                    setLoginError(toFriendlyAuthError(e?.message));
                                 } finally {
                                     setLoginBusy(false);
                                 }
@@ -5432,6 +5446,9 @@ const LoginScreen: React.FC = () => {
                         >
                             {authMode === 'signin' ? 'Need account? Create one' : 'Already have account? Sign in'}
                         </button>
+                        <div className="text-[11px] text-gray-500 leading-relaxed">
+                            Password reset is handled by HQ admin in this pilot phase.
+                        </div>
                     </div>
 
                     {isEmbeddedBrowser && (
