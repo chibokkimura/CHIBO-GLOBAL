@@ -5348,6 +5348,10 @@ const LoginScreen: React.FC = () => {
                     <CompanyLogo />
                     <h1 className="text-2xl font-extrabold text-gray-900 mb-2">CHIBO</h1>
                     <p className="text-gray-500 mb-6">Global Franchise Manager</p>
+                    <div className="w-full mb-4 rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-left">
+                        <div className="text-[11px] font-bold text-gray-700 mb-1">Sign-in Guide</div>
+                        <div className="text-[11px] text-gray-600 leading-relaxed">HQ Admin: use Google sign-in. Owners/Managers: use email and password.</div>
+                    </div>
 
                     {isEmbeddedBrowser && (
                         <div className="w-full mb-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-left">
@@ -5374,7 +5378,7 @@ const LoginScreen: React.FC = () => {
                         className="w-full inline-flex items-center justify-center gap-3 px-4 py-3 rounded-xl border border-gray-200 hover:border-gray-300 hover:bg-gray-50 transition font-semibold disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-white disabled:hover:border-gray-200"
                     >
                         <span className="text-lg">G</span>
-                        Continue with Google
+                        Sign in with Google (HQ)
                     </button>
 
                     <div className="w-full my-4 flex items-center gap-3">
@@ -5428,7 +5432,7 @@ const LoginScreen: React.FC = () => {
                             }}
                             className="w-full inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-black text-white font-semibold disabled:opacity-50"
                         >
-                            {loginBusy ? 'Processing...' : authMode === 'signin' && isHqGoogleOnlyEmail ? 'Use Continue with Google' : authMode === 'signin' ? 'Sign in with Email' : 'Create Account'}
+                            {loginBusy ? 'Processing...' : authMode === 'signin' && isHqGoogleOnlyEmail ? 'Use Google Sign-in' : authMode === 'signin' ? 'Sign in with Email (Owner/Manager)' : 'Create Owner Account'}
                         </button>
                         {authMode === 'signin' && isHqGoogleOnlyEmail && (
                             <div className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs leading-relaxed text-blue-800">
@@ -5472,7 +5476,7 @@ const LoginScreen: React.FC = () => {
                     )}
 
                     <p className="text-xs text-gray-400 mt-6 leading-relaxed">
-                        Access is restricted for unauthorized accounts after login. For OWNER access, HQ must assign your email in account mapping.
+                        Access is restricted after sign-in. For owner access, HQ must map your email to a store account.
                     </p>
                 </div>
             </div>
