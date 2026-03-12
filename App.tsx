@@ -2363,6 +2363,10 @@ const HQStoreDetail: React.FC<{
     const [currencySaving, setCurrencySaving] = useState(false);
     const [currencyError, setCurrencyError] = useState<string | null>(null);
     const [emailInfo, setEmailInfo] = useState<string | null>(null);
+    const [showReminderComposer, setShowReminderComposer] = useState(false);
+    const [reminderDate, setReminderDate] = useState<string | null>(null);
+    const [selectedReminderEmails, setSelectedReminderEmails] = useState<string[]>([]);
+    const [reminderError, setReminderError] = useState<string | null>(null);
     const [expandedSales, setExpandedSales] = useState<Set<string>>(new Set());
     const [showStockEditor, setShowStockEditor] = useState(false);
     const [stockDrafts, setStockDrafts] = useState<{ ingredientName: string; unit: string; par: number; reorder: number }[]>([]);
@@ -2508,19 +2512,100 @@ const HQStoreDetail: React.FC<{
         }
     };
 
-    const openEmailReminder = (date: string) => {
+    const reminderRecipients = useMemo(() => {
+        const seen = new Set<string>();
+        const rows: { email: string; name: string; label: string }[] = [];
+
+        const pushRecipient = (email: string | null | undefined, name?: string | null, isPrimary?: boolean) => {
+            const normalized = (email ?? '').trim();
+            if (!normalized) return;
+            const key = normalized.toLowerCase();
+            if (seen.has(key)) return;
+            seen.add(key);
+            const displayName = (name ?? '').trim();
+            const label = displayName
+                ? `${displayName} (${normalized})${isPrimary ? ' - Primary' : ''}`
+                : `${normalized}${isPrimary ? ' - Primary' : ''}`;
+            rows.push({ email: normalized, name: displayName, label });
+        };
+
+        const primaryOwner = owners.find((owner) => owner.email.toLowerCase() === store.ownerEmail.toLowerCase());
+        pushRecipient(store.ownerEmail, primaryOwner?.name ?? null, true);
+        owners.forEach((owner) => pushRecipient(owner.email, owner.name, false));
+
+        return rows;
+    }, [owners, store.ownerEmail]);
+
+    const buildReminderEmailPayload = (date: string) => {
         const subject = encodeURIComponent(`Missing Daily Report: ${store.name} (${date})`);
         const body = encodeURIComponent(
             `Hello,\n\nPlease submit the daily sales report for ${date}.\n\nStore: ${store.name}\nLocation: ${store.city}, ${store.country}\n\nThank you.`
         );
-        const gmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(store.ownerEmail)}&su=${subject}&body=${body}`;
-        const mailtoUrl = `mailto:${store.ownerEmail}?subject=${subject}&body=${body}`;
-        const win = window.open(gmailUrl, '_blank', 'noopener,noreferrer');
-        if (!win) {
+        return { subject, body };
+    };
+
+    const openEmailReminder = (date: string) => {
+        const defaults = reminderRecipients.map((recipient) => recipient.email);
+        if (defaults.length === 0) {
+            setEmailInfo('No linked email addresses found for this store.');
+            window.setTimeout(() => setEmailInfo(null), 3000);
+            return;
+        }
+        setReminderDate(date);
+        setSelectedReminderEmails(defaults);
+        setReminderError(null);
+        setShowReminderComposer(true);
+    };
+
+    const toggleReminderRecipient = (email: string) => {
+        setSelectedReminderEmails((prev) => (
+            prev.includes(email)
+                ? prev.filter((item) => item !== email)
+                : [...prev, email]
+        ));
+    };
+
+    const closeReminderComposer = () => {
+        setShowReminderComposer(false);
+        setReminderDate(null);
+        setSelectedReminderEmails([]);
+        setReminderError(null);
+    };
+
+    const openReminderDraft = (mode: 'gmail' | 'mailto') => {
+        if (!reminderDate) return;
+        if (selectedReminderEmails.length === 0) {
+            setReminderError('Select at least one email address.');
+            return;
+        }
+        const recipients = selectedReminderEmails.join(',');
+        const { subject, body } = buildReminderEmailPayload(reminderDate);
+        const gmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(recipients)}&su=${subject}&body=${body}`;
+        const mailtoUrl = `mailto:${recipients}?subject=${subject}&body=${body}`;
+        const targetUrl = mode === 'gmail' ? gmailUrl : mailtoUrl;
+        const win = window.open(targetUrl, '_blank', 'noopener,noreferrer');
+        if (!win && mode === 'gmail') {
             window.location.href = mailtoUrl;
         }
-        setEmailInfo(`Email draft opened for ${store.ownerEmail} (${date}).`);
+        setEmailInfo(`Email draft opened for ${selectedReminderEmails.join(', ')} (${reminderDate}).`);
         window.setTimeout(() => setEmailInfo(null), 3000);
+        closeReminderComposer();
+    };
+
+    const copyReminderEmails = async () => {
+        if (selectedReminderEmails.length === 0) {
+            setReminderError('Select at least one email address.');
+            return;
+        }
+        try {
+            await navigator.clipboard.writeText(selectedReminderEmails.join(', '));
+            setEmailInfo(`Recipient list copied: ${selectedReminderEmails.join(', ')}`);
+            window.setTimeout(() => setEmailInfo(null), 3000);
+            setReminderError(null);
+        } catch (e) {
+            console.error('Failed to copy recipient list', e);
+            setReminderError('Failed to copy recipient list.');
+        }
     };
 
     const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -3193,6 +3278,114 @@ const HQStoreDetail: React.FC<{
 
     return (
         <div className="p-8 max-w-7xl mx-auto w-full relative">
+            {showReminderComposer && reminderDate && (
+                <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
+                    <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl">
+                        <div className="flex items-center justify-between px-6 pt-5">
+                            <div>
+                                <div className="font-extrabold text-lg">Send Reminder</div>
+                                <div className="text-xs text-gray-500 mt-1">
+                                    Select one or more linked email addresses for the missing report on {reminderDate}.
+                                </div>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={closeReminderComposer}
+                                className="p-2 rounded-full hover:bg-gray-100 transition"
+                            >
+                                <X className="w-5 h-5 text-gray-500" />
+                            </button>
+                        </div>
+                        <div className="px-6 py-4">
+                            <div className="flex items-center justify-between gap-3 mb-3">
+                                <div className="text-sm font-bold text-gray-900">
+                                    Recipients ({selectedReminderEmails.length}/{reminderRecipients.length})
+                                </div>
+                                <div className="flex items-center gap-2">
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setSelectedReminderEmails(reminderRecipients.map((recipient) => recipient.email));
+                                            setReminderError(null);
+                                        }}
+                                        className="px-3 py-1 rounded-lg border border-gray-200 text-xs font-semibold hover:bg-gray-50"
+                                    >
+                                        Select All
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => setSelectedReminderEmails([])}
+                                        className="px-3 py-1 rounded-lg border border-gray-200 text-xs font-semibold hover:bg-gray-50"
+                                    >
+                                        Clear
+                                    </button>
+                                </div>
+                            </div>
+                            <div className="space-y-2 max-h-[38vh] overflow-y-auto border border-gray-100 rounded-xl p-3">
+                                {reminderRecipients.map((recipient) => (
+                                    <label
+                                        key={recipient.email}
+                                        className="flex items-start gap-3 rounded-xl border border-gray-100 px-3 py-3 hover:bg-gray-50 cursor-pointer"
+                                    >
+                                        <input
+                                            type="checkbox"
+                                            checked={selectedReminderEmails.includes(recipient.email)}
+                                            onChange={() => toggleReminderRecipient(recipient.email)}
+                                            className="mt-1 h-4 w-4 rounded border-gray-300 text-black focus:ring-black"
+                                        />
+                                        <div className="min-w-0">
+                                            <div className="text-sm font-semibold text-gray-900 break-all">
+                                                {recipient.label}
+                                            </div>
+                                            <div className="text-xs text-gray-500 break-all">
+                                                {recipient.email}
+                                            </div>
+                                        </div>
+                                    </label>
+                                ))}
+                            </div>
+                            <div className="mt-3 rounded-xl bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800">
+                                The sender account is chosen by Gmail or your default mail app. This website can choose recipients, subject, and body only.
+                            </div>
+                            {reminderError && (
+                                <div className="mt-3 text-sm text-red-600">{reminderError}</div>
+                            )}
+                        </div>
+                        <div className="px-6 pb-6 flex flex-wrap justify-between gap-3">
+                            <button
+                                type="button"
+                                onClick={copyReminderEmails}
+                                className="px-4 py-2 rounded-xl border border-gray-200 text-sm font-semibold hover:bg-gray-50"
+                            >
+                                Copy Recipient List
+                            </button>
+                            <div className="flex flex-wrap gap-3">
+                                <button
+                                    type="button"
+                                    onClick={closeReminderComposer}
+                                    className="px-4 py-2 rounded-xl border border-gray-200 text-sm font-semibold hover:bg-gray-50"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => openReminderDraft('mailto')}
+                                    className="px-4 py-2 rounded-xl border border-gray-200 text-sm font-semibold hover:bg-gray-50"
+                                >
+                                    Open Mail App
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => openReminderDraft('gmail')}
+                                    className="px-4 py-2 rounded-xl bg-black text-white text-sm font-bold hover:bg-gray-800"
+                                >
+                                    Open Gmail Draft
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
             {showMissingCalendar && (
                 <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
                     <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg">
@@ -3580,7 +3773,7 @@ const HQStoreDetail: React.FC<{
                                                 </button>
                                             </div>
                                             <div className="mt-2 text-xs text-red-500">
-                                                Tip: Click a date to open an email reminder to the owner.
+                                                Tip: Click a date to choose recipients and open an email draft.
                                             </div>
                                             {emailInfo && (
                                                 <div className="mt-2 text-xs text-emerald-600">{emailInfo}</div>
@@ -3849,7 +4042,22 @@ const HQStoreDetail: React.FC<{
                                     <tr className="hover:bg-gray-50 transition">
                                         <td className="p-4 font-medium">{sale.date}</td>
                                         <td className="p-4 text-right font-bold font-mono">
-                                            {sale.isClosed ? '-' : `${store.currency} ${sale.totalAmount.toLocaleString()}`}
+                                            {sale.isClosed ? (
+                                                '-'
+                                            ) : (
+                                                <div className="space-y-1">
+                                                    <div>{`${store.currency} ${sale.totalAmount.toLocaleString()}`}</div>
+                                                    {store.currency !== 'JPY' && (() => {
+                                                        const amountJPY = convertToJPY(sale.totalAmount, store.currency, fxRates);
+                                                        if (amountJPY === null) return null;
+                                                        return (
+                                                            <div className="text-[11px] font-semibold text-gray-500">
+                                                                {`¥ ${Math.round(amountJPY).toLocaleString()}`}
+                                                            </div>
+                                                        );
+                                                    })()}
+                                                </div>
+                                            )}
                                         </td>
                                         <td className="p-4 text-center">
                                             {sale.isClosed ? (
