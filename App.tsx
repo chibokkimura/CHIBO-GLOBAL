@@ -5515,7 +5515,7 @@ const LoginScreen: React.FC = () => {
     const [loginError, setLoginError] = useState<string | null>(null);
     const [loginInfo, setLoginInfo] = useState<string | null>(null);
     const [loginBusy, setLoginBusy] = useState(false);
-    const [loginChannel, setLoginChannel] = useState<'hq' | 'owner'>('hq');
+    const [loginChannel, setLoginChannel] = useState<'google' | 'email'>('google');
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [authMode, setAuthMode] = useState<'signin' | 'signup'>('signin');
@@ -5532,7 +5532,7 @@ const LoginScreen: React.FC = () => {
     const toFriendlyAuthError = useCallback((message?: string) => {
         const raw = String(message ?? '').toLowerCase();
         if (raw.includes('invalid login credentials')) {
-            return 'Email or password is incorrect.';
+            return 'Email or password is incorrect. If you normally use Google, use Continue with Google.';
         }
         if (raw.includes('email not confirmed')) {
             return 'Email is not confirmed yet. Check your inbox or ask HQ admin.';
@@ -5581,32 +5581,32 @@ const LoginScreen: React.FC = () => {
                         <button
                             type="button"
                             onClick={() => {
-                                setLoginChannel('hq');
+                                setLoginChannel('google');
                                 setLoginError(null);
                                 setLoginInfo(null);
                             }}
                             className={`rounded-lg px-3 py-2 text-xs font-bold transition ${
-                                loginChannel === 'hq' ? 'bg-black text-white' : 'text-gray-600 hover:bg-white'
+                                loginChannel === 'google' ? 'bg-black text-white' : 'text-gray-600 hover:bg-white'
                             }`}
                         >
-                            HQ Admin (Google)
+                            Google (Recommended)
                         </button>
                         <button
                             type="button"
                             onClick={() => {
-                                setLoginChannel('owner');
+                                setLoginChannel('email');
                                 setLoginError(null);
                                 setLoginInfo(null);
                             }}
                             className={`rounded-lg px-3 py-2 text-xs font-bold transition ${
-                                loginChannel === 'owner' ? 'bg-black text-white' : 'text-gray-600 hover:bg-white'
+                                loginChannel === 'email' ? 'bg-black text-white' : 'text-gray-600 hover:bg-white'
                             }`}
                         >
-                            Owner / Manager (Email)
+                            Email (China Only)
                         </button>
                     </div>
 
-                    {loginChannel === 'hq' ? (
+                    {loginChannel === 'google' ? (
                         <div className="w-full text-left space-y-3">
                             {isEmbeddedBrowser && (
                                 <div className="w-full rounded-xl border border-amber-200 bg-amber-50 p-3 text-left">
@@ -5635,7 +5635,7 @@ const LoginScreen: React.FC = () => {
                                 Continue with Google
                             </button>
                             <div className="text-[11px] text-gray-500 leading-relaxed">
-                                Use this only for HQ admin accounts.
+                                Recommended for HQ and non-China owners/managers.
                             </div>
                             {isEmbeddedBrowser && (
                                 <button
@@ -5697,6 +5697,9 @@ const LoginScreen: React.FC = () => {
                             >
                                 {loginBusy ? 'Processing...' : authMode === 'signin' ? 'Sign in with Email' : 'Create Owner Account'}
                             </button>
+                            <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800">
+                                Use email sign-in only if Google sign-in is not available in your region (e.g. China).
+                            </div>
                             {authMode === 'signin' && isHqGoogleOnlyEmail && (
                                 <div className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs leading-relaxed text-blue-800">
                                     This email is mapped to HQ Google sign-in and cannot use email/password.
