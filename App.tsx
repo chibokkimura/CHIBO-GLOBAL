@@ -801,6 +801,371 @@ const escapeHtml = (raw: string) =>
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
 
+type InvoiceHtmlParams = {
+  invoiceNo: string;
+  invoiceDateText: string;
+  buyerText: string;
+  salesCurrencyLabel: string;
+  locationText: string;
+  salesMonthText: string;
+  salesLocalText: string;
+  fxSalesText: string;
+  royaltyRateText: string;
+  rowAmountText: string;
+  minimumText: string;
+  bankChargeTitle: string;
+  bankChargeText: string;
+  showBankCharge: boolean;
+  totalText: string;
+  invoiceCurrency: string;
+  signatureUrl: string;
+  specialNoteHtml: string;
+};
+
+const INVOICE_ISSUER = {
+  companyName: 'CHIBO HOLDINGS CO., LTD.',
+  addressLine1: 'Ontex Namba Bldg. 7F 2-2-45 Minato Machi,',
+  addressLine2: 'Naniwa-ku Osaka-shi, Osaka, 556-0017,Japan',
+  phone: '+81-6-6633-1570',
+  fax: '+81-6-6633-2191',
+  beneficiaryName: 'CHIBO HOLDINGS CO., LTD.',
+  beneficiaryAddress: '1-5-5 DOUTONNBORI, CHUO-KU, OSAKA, 542-0071 JAPAN',
+  bankName: 'RESONA BANK  SENBA BRANCH',
+  bankAddress: '3-6-1 KITAKYUHOJIMACHI, CYUO-KU, OSAKA-SHI,OSAKA 541-0057, JAPAN',
+  swiftCode: 'DIWAJPJT',
+  accountNumber: '0323028',
+  preparedByCompany: 'CHIBO HOLDINGS CO.,LTD.',
+  preparedByName: 'Kasumi Hemmi',
+} as const;
+
+function buildInvoiceHtml(params: InvoiceHtmlParams): string {
+  const {
+    invoiceNo,
+    invoiceDateText,
+    buyerText,
+    salesCurrencyLabel,
+    locationText,
+    salesMonthText,
+    salesLocalText,
+    fxSalesText,
+    royaltyRateText,
+    rowAmountText,
+    minimumText,
+    bankChargeTitle,
+    bankChargeText,
+    showBankCharge,
+    totalText,
+    invoiceCurrency,
+    signatureUrl,
+    specialNoteHtml,
+  } = params;
+  const headerLine1 = escapeHtml(INVOICE_ISSUER.addressLine1);
+  const headerLine2 = escapeHtml(INVOICE_ISSUER.addressLine2);
+  const phone = escapeHtml(INVOICE_ISSUER.phone);
+  const fax = escapeHtml(INVOICE_ISSUER.fax);
+  const paymentLinesHtml = [
+    `Beneficiary Name : ${escapeHtml(INVOICE_ISSUER.beneficiaryName)}`,
+    `Beneficiary Address : ${escapeHtml(INVOICE_ISSUER.beneficiaryAddress)}`,
+    `Beneficiary Bank Name : ${escapeHtml(INVOICE_ISSUER.bankName)}`,
+    `Beneficiary Bank Address : ${escapeHtml(INVOICE_ISSUER.bankAddress)}`,
+    `Swift Code : ${escapeHtml(INVOICE_ISSUER.swiftCode)}`,
+    `Beneficiary Account Number : ${escapeHtml(INVOICE_ISSUER.accountNumber)}&nbsp;&nbsp;<span class="currency-red">${escapeHtml(invoiceCurrency)}</span>`,
+  ]
+    .map((line) => `<div>${line}</div>`)
+    .join('');
+
+  return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Invoice ${escapeHtml(invoiceNo)}</title>
+  <style>
+    @page { size: A4; margin: 0; }
+    body { margin: 0; color: #111; font-family: Arial, sans-serif; background: #e5e7eb; }
+    .toolbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      padding: 10px 14px;
+      background: rgba(255, 255, 255, 0.95);
+      border-bottom: 1px solid #ddd;
+    }
+    .toolbar button {
+      border: 1px solid #111;
+      background: #fff;
+      color: #111;
+      padding: 7px 12px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .toolbar button.primary {
+      background: #111;
+      color: #fff;
+    }
+    .sheet-wrap {
+      width: min(94vw, 900px);
+      margin: 14px auto 24px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+      border: 1px solid #ddd;
+      background: #f7f7f7;
+    }
+    .sheet {
+      position: relative;
+      width: 210mm;
+      height: 297mm;
+      margin: 0 auto;
+      background: #f7f7f7;
+      box-sizing: border-box;
+      padding: 16mm 14mm 12mm 14mm;
+    }
+    .center { text-align: center; }
+    .head-company {
+      color: #c31717;
+      font-weight: 700;
+      font-size: 14pt;
+      letter-spacing: 0.3px;
+      margin-top: 0;
+    }
+    .head-address {
+      font-size: 8.2pt;
+      line-height: 1.35;
+      margin-top: 4px;
+    }
+    .head-invoice {
+      margin-top: 10px;
+      font-size: 17pt;
+      font-weight: 800;
+      letter-spacing: 0.3px;
+    }
+    .meta-row {
+      margin-top: 18mm;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      font-size: 9.4pt;
+      font-weight: 700;
+    }
+    .meta-right div { margin-bottom: 2px; }
+    table.main {
+      width: 100%;
+      margin-top: 18mm;
+      border-collapse: collapse;
+      table-layout: fixed;
+      font-size: 8.2pt;
+    }
+    table.main th, table.main td {
+      border: 1px solid #333;
+      padding: 4px 5px;
+      line-height: 1.15;
+    }
+    table.main th { text-align: center; font-weight: 700; }
+    table.main td { text-align: right; font-weight: 700; }
+    table.main td.left { text-align: left; }
+    .summary-box {
+      border: 1px solid #333;
+      border-top: none;
+      height: 58mm;
+      padding: 15mm 12mm 8mm 12mm;
+      box-sizing: border-box;
+    }
+    .summary-minimum {
+      display: grid;
+      grid-template-columns: 1.05fr 1.8fr auto;
+      column-gap: 8mm;
+      align-items: end;
+      margin-top: 8mm;
+    }
+    .summary-minimum .label {
+      justify-self: center;
+      font-size: 10.5pt;
+      font-weight: 700;
+    }
+    .summary-minimum .note {
+      font-size: 10.5pt;
+      font-weight: 700;
+      line-height: 1.35;
+      color: #111;
+      min-height: 14pt;
+    }
+    .summary-minimum .amount {
+      justify-self: end;
+      font-size: 10.5pt;
+      font-weight: 700;
+    }
+    .summary-line {
+      display: flex;
+      justify-content: space-between;
+      align-items: end;
+      font-size: 10.5pt;
+      font-weight: 700;
+      margin-top: 6mm;
+    }
+    .summary-line.red { color: #d11a1a; }
+    .summary-line.total {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      align-items: end;
+      padding-left: 56%;
+      margin-top: 12mm;
+    }
+    .summary-line.total .label {
+      font-size: 11.5pt;
+      font-weight: 700;
+    }
+    .summary-line.total .amount {
+      font-size: 14pt;
+      font-weight: 700;
+    }
+    .paybox {
+      border: 1px solid #333;
+      margin-top: 0;
+      padding: 10mm 10mm 8mm 10mm;
+      font-size: 9pt;
+      line-height: 1.55;
+    }
+    .pay-title {
+      font-size: 12pt;
+      font-weight: 700;
+      margin-bottom: 7px;
+    }
+    .paybox .currency-red { color: #d11a1a; font-weight: 700; }
+    .footer {
+      margin-top: 15mm;
+      display: flex;
+      justify-content: space-between;
+      font-size: 9.3pt;
+      font-weight: 700;
+    }
+    .signature-wrap {
+      margin-top: 8px;
+      display: inline-block;
+      width: 66mm;
+    }
+    .signature-wrap img {
+      display: block;
+      width: 100%;
+      height: auto;
+      mix-blend-mode: multiply;
+    }
+    .sig-line {
+      margin-top: 2px;
+      border-top: 1px solid #333;
+      padding-top: 3px;
+      font-size: 7.8pt;
+    }
+    @media print {
+      body { background: #fff; }
+      .toolbar { display: none; }
+      .sheet-wrap {
+        width: 210mm;
+        margin: 0;
+        box-shadow: none;
+        border: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <button class="primary" onclick="window.print()">Save as PDF</button>
+    <button onclick="window.close()">Close</button>
+  </div>
+  <div class="sheet-wrap">
+    <div class="sheet">
+      <div class="center">
+        <div class="head-company">${escapeHtml(INVOICE_ISSUER.companyName)}</div>
+        <div class="head-address">
+          ${headerLine1}<br/>
+          ${headerLine2}<br/>
+          Phone ${phone}<br/>
+          FAX&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;${fax}
+        </div>
+        <div class="head-invoice">INVOICE</div>
+      </div>
+
+      <div class="meta-row">
+        <div><span style="margin-right:8px;">TO :</span> ${escapeHtml(buyerText)}</div>
+        <div class="meta-right">
+          <div><span style="display:inline-block; width:82px;">INV Number:</span> ${escapeHtml(invoiceNo)}</div>
+          <div><span style="display:inline-block; width:82px;">DATE:</span> ${escapeHtml(invoiceDateText)}</div>
+        </div>
+      </div>
+
+      <table class="main">
+        <colgroup>
+          <col style="width:23.2%">
+          <col style="width:14.2%">
+          <col style="width:21.6%">
+          <col style="width:14.6%">
+          <col style="width:10.5%">
+          <col style="width:15.9%">
+        </colgroup>
+        <thead>
+          <tr>
+            <th>Location</th>
+            <th>Sales month</th>
+            <th>Sales (Local Currency)</th>
+            <th>${escapeHtml(salesCurrencyLabel)}</th>
+            <th>Royalty %</th>
+            <th>Amount</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="left">${escapeHtml(locationText)}</td>
+            <td style="text-align:center">${escapeHtml(salesMonthText)}</td>
+            <td>${escapeHtml(salesLocalText)}</td>
+            <td>${escapeHtml(fxSalesText)}</td>
+            <td style="text-align:center">${escapeHtml(royaltyRateText)}</td>
+            <td>${escapeHtml(rowAmountText)}</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="summary-box">
+        <div class="summary-minimum">
+          <span class="label">"Minimum Royalty"</span>
+          <span class="note">${specialNoteHtml || '&nbsp;'}</span>
+          <span class="amount">${escapeHtml(minimumText)}</span>
+        </div>
+        ${showBankCharge ? `<div class="summary-line red"><span>${escapeHtml(bankChargeTitle)}</span><span>${escapeHtml(bankChargeText)}</span></div>` : ''}
+        <div class="summary-line total">
+          <span class="label">Royalty Amount</span>
+          <span class="amount">${escapeHtml(totalText)}</span>
+        </div>
+      </div>
+
+      <div class="paybox">
+        <div class="pay-title">Please make payment payable to:</div>
+        ${paymentLinesHtml}
+      </div>
+
+      <div class="footer">
+        <div>
+          <div>Buyer:</div>
+          <div>${escapeHtml(buyerText)}</div>
+          <div style="width:66mm; border-top:1px solid #333; margin-top:36px;"></div>
+        </div>
+        <div style="text-align:left;">
+          <div>Prepared by</div>
+          <div>${escapeHtml(INVOICE_ISSUER.preparedByCompany)}</div>
+          <div class="signature-wrap">
+            <img src="${escapeHtml(signatureUrl)}" alt="Signature" />
+            <div class="sig-line">${escapeHtml(INVOICE_ISSUER.preparedByName)}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
 const parseMoneyInput = (raw: string): number => {
   const n = Number(raw.replace(/[^\d.-]/g, ''));
   if (Number.isNaN(n) || !Number.isFinite(n)) return 0;
@@ -2710,302 +3075,26 @@ const HQStoreDetail: React.FC<{
         const invoiceDateText = formatInvoiceDateDot(issueDate);
         const signatureUrl = `${window.location.origin}/invoice-signature-kasumi.png`;
         const specialNoteHtml = escapeHtml(invoiceSpecialNote.trim()).replace(/\n/g, '<br/>');
-
-        const invoiceHtml = `<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <title>Invoice ${escapeHtml(invoiceNo)}</title>
-  <style>
-    @page { size: A4; margin: 0; }
-    body { margin: 0; color: #111; font-family: Arial, sans-serif; background: #e5e7eb; }
-    .toolbar {
-      position: sticky;
-      top: 0;
-      z-index: 20;
-      display: flex;
-      justify-content: flex-end;
-      gap: 8px;
-      padding: 10px 14px;
-      background: rgba(255, 255, 255, 0.95);
-      border-bottom: 1px solid #ddd;
-    }
-    .toolbar button {
-      border: 1px solid #111;
-      background: #fff;
-      color: #111;
-      padding: 7px 12px;
-      border-radius: 8px;
-      font-size: 12px;
-      font-weight: 700;
-      cursor: pointer;
-    }
-    .toolbar button.primary {
-      background: #111;
-      color: #fff;
-    }
-    .sheet-wrap {
-      width: min(94vw, 900px);
-      margin: 14px auto 24px;
-      box-shadow: 0 8px 24px rgba(0,0,0,0.12);
-      border: 1px solid #ddd;
-      background: #f7f7f7;
-    }
-    .sheet {
-      position: relative;
-      width: 210mm;
-      height: 297mm;
-      margin: 0 auto;
-      background: #f7f7f7;
-      box-sizing: border-box;
-      padding: 16mm 14mm 12mm 14mm;
-    }
-    .center { text-align: center; }
-    .head-company {
-      color: #c31717;
-      font-weight: 700;
-      font-size: 14pt;
-      letter-spacing: 0.3px;
-      margin-top: 0;
-    }
-    .head-address {
-      font-size: 8.2pt;
-      line-height: 1.35;
-      margin-top: 4px;
-    }
-    .head-invoice {
-      margin-top: 10px;
-      font-size: 17pt;
-      font-weight: 800;
-      letter-spacing: 0.3px;
-    }
-    .meta-row {
-      margin-top: 18mm;
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-start;
-      font-size: 9.4pt;
-      font-weight: 700;
-    }
-    .meta-right div { margin-bottom: 2px; }
-    table.main {
-      width: 100%;
-      margin-top: 18mm;
-      border-collapse: collapse;
-      table-layout: fixed;
-      font-size: 8.2pt;
-    }
-    table.main th, table.main td {
-      border: 1px solid #333;
-      padding: 4px 5px;
-      line-height: 1.15;
-    }
-    table.main th { text-align: center; font-weight: 700; }
-    table.main td { text-align: right; font-weight: 700; }
-    table.main td.left { text-align: left; }
-    .summary-box {
-      border: 1px solid #333;
-      border-top: none;
-      height: 58mm;
-      padding: 15mm 12mm 8mm 12mm;
-      box-sizing: border-box;
-    }
-    .summary-minimum {
-      display: grid;
-      grid-template-columns: 1.05fr 1.8fr auto;
-      column-gap: 8mm;
-      align-items: end;
-      margin-top: 8mm;
-    }
-    .summary-minimum .label {
-      justify-self: center;
-      font-size: 10.5pt;
-      font-weight: 700;
-    }
-    .summary-minimum .note {
-      font-size: 10.5pt;
-      font-weight: 700;
-      line-height: 1.35;
-      color: #111;
-      min-height: 14pt;
-    }
-    .summary-minimum .amount {
-      justify-self: end;
-      font-size: 10.5pt;
-      font-weight: 700;
-    }
-    .summary-line {
-      display: flex;
-      justify-content: space-between;
-      align-items: end;
-      font-size: 10.5pt;
-      font-weight: 700;
-      margin-top: 6mm;
-    }
-    .summary-line.red { color: #d11a1a; }
-    .summary-line.total {
-      display: grid;
-      grid-template-columns: 1fr auto;
-      align-items: end;
-      padding-left: 56%;
-      margin-top: 12mm;
-    }
-    .summary-line.total .label {
-      font-size: 11.5pt;
-      font-weight: 700;
-    }
-    .summary-line.total .amount {
-      font-size: 14pt;
-      font-weight: 700;
-    }
-    .paybox {
-      border: 1px solid #333;
-      margin-top: 0;
-      padding: 10mm 10mm 8mm 10mm;
-      font-size: 9pt;
-      line-height: 1.55;
-    }
-    .pay-title {
-      font-size: 12pt;
-      font-weight: 700;
-      margin-bottom: 7px;
-    }
-    .paybox .currency-red { color: #d11a1a; font-weight: 700; }
-    .footer {
-      margin-top: 15mm;
-      display: flex;
-      justify-content: space-between;
-      font-size: 9.3pt;
-      font-weight: 700;
-    }
-    .signature-wrap {
-      margin-top: 8px;
-      display: inline-block;
-      width: 66mm;
-    }
-    .signature-wrap img {
-      display: block;
-      width: 100%;
-      height: auto;
-      mix-blend-mode: multiply;
-    }
-    .sig-line {
-      margin-top: 2px;
-      border-top: 1px solid #333;
-      padding-top: 3px;
-      font-size: 7.8pt;
-    }
-    @media print {
-      body { background: #fff; }
-      .toolbar { display: none; }
-      .sheet-wrap {
-        width: 210mm;
-        margin: 0;
-        box-shadow: none;
-        border: none;
-      }
-    }
-  </style>
-</head>
-<body>
-  <div class="toolbar">
-    <button class="primary" onclick="window.print()">Save as PDF</button>
-    <button onclick="window.close()">Close</button>
-  </div>
-  <div class="sheet-wrap">
-    <div class="sheet">
-      <div class="center">
-        <div class="head-company">CHIBO HOLDINGS CO., LTD.</div>
-        <div class="head-address">
-          Ontex Namba Bldg. 7F 2-2-45 Minato Machi,<br/>
-          Naniwa-ku Osaka-shi, Osaka, 556-0017,Japan<br/>
-          Phone +81-6-6633-1570<br/>
-          FAX&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;+81-6-6633-2191
-        </div>
-        <div class="head-invoice">INVOICE</div>
-      </div>
-
-      <div class="meta-row">
-        <div><span style="margin-right:8px;">TO :</span> ${escapeHtml(buyerText)}</div>
-        <div class="meta-right">
-          <div><span style="display:inline-block; width:82px;">INV Number:</span> ${escapeHtml(invoiceNo)}</div>
-          <div><span style="display:inline-block; width:82px;">DATE:</span> ${escapeHtml(invoiceDateText)}</div>
-        </div>
-      </div>
-
-      <table class="main">
-        <colgroup>
-          <col style="width:23.2%">
-          <col style="width:14.2%">
-          <col style="width:21.6%">
-          <col style="width:14.6%">
-          <col style="width:10.5%">
-          <col style="width:15.9%">
-        </colgroup>
-        <thead>
-          <tr>
-            <th>Location</th>
-            <th>Sales month</th>
-            <th>Sales (Local Currency)</th>
-            <th>${escapeHtml(salesCurrencyLabel)}</th>
-            <th>Royalty %</th>
-            <th>Amount</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td class="left">${escapeHtml(locationText)}</td>
-            <td style="text-align:center">${escapeHtml(salesMonthText)}</td>
-            <td>${escapeHtml(salesLocalText)}</td>
-            <td>${escapeHtml(fxSalesText)}</td>
-            <td style="text-align:center">${escapeHtml(royaltyRateText)}</td>
-            <td>${escapeHtml(formatAmount(rowAmount))}</td>
-          </tr>
-        </tbody>
-      </table>
-
-      <div class="summary-box">
-        <div class="summary-minimum">
-          <span class="label">"Minimum Royalty"</span>
-          <span class="note">${specialNoteHtml || '&nbsp;'}</span>
-          <span class="amount">${escapeHtml(minimumText)}</span>
-        </div>
-        ${invoiceSummary.bankCharge > 0 ? `<div class="summary-line red"><span>${escapeHtml(bankChargeTitle)}</span><span>${escapeHtml(bankChargeText)}</span></div>` : ''}
-        <div class="summary-line total">
-          <span class="label">Royalty Amount</span>
-          <span class="amount">${escapeHtml(totalText)}</span>
-        </div>
-      </div>
-
-      <div class="paybox">
-        <div class="pay-title">Please make payment payable to:</div>
-        <div>Beneficiary Name : CHIBO HOLDINGS CO., LTD.</div>
-        <div>Beneficiary Address : 1-5-5 DOUTONNBORI, CHUO-KU, OSAKA, 542-0071 JAPAN</div>
-        <div>Beneficiary Bank Name : RESONA BANK&nbsp;&nbsp;SENBA BRANCH</div>
-        <div>Beneficiary Bank Address : 3-6-1 KITAKYUHOJIMACHI, CYUO-KU, OSAKA-SHI,OSAKA 541-0057, JAPAN</div>
-        <div>Swift Code : DIWAJPJT</div>
-        <div>Beneficiary Account Number : 0323028&nbsp;&nbsp;<span class="currency-red">${escapeHtml(invoiceCurrency)}</span></div>
-      </div>
-
-      <div class="footer">
-        <div>
-          <div>Buyer:</div>
-          <div>${escapeHtml(buyerText)}</div>
-          <div style="width:66mm; border-top:1px solid #333; margin-top:36px;"></div>
-        </div>
-        <div style="text-align:left;">
-          <div>Prepared by</div>
-          <div>CHIBO HOLDINGS CO.,LTD.</div>
-          <div class="signature-wrap">
-            <img src="${escapeHtml(signatureUrl)}" alt="Signature" />
-            <div class="sig-line">Kasumi Hemmi</div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-</body>
-</html>`;
+        const invoiceHtml = buildInvoiceHtml({
+            invoiceNo,
+            invoiceDateText,
+            buyerText,
+            salesCurrencyLabel,
+            locationText,
+            salesMonthText,
+            salesLocalText,
+            fxSalesText,
+            royaltyRateText,
+            rowAmountText: formatAmount(rowAmount),
+            minimumText,
+            bankChargeTitle,
+            bankChargeText,
+            showBankCharge: invoiceSummary.bankCharge > 0,
+            totalText,
+            invoiceCurrency,
+            signatureUrl,
+            specialNoteHtml,
+        });
 
         const popup = window.open('', '_blank');
         if (!popup) {
@@ -5348,10 +5437,6 @@ const LoginScreen: React.FC = () => {
                     <CompanyLogo />
                     <h1 className="text-2xl font-extrabold text-gray-900 mb-2">CHIBO</h1>
                     <p className="text-gray-500 mb-6">Global Franchise Manager</p>
-                    <div className="w-full mb-4 rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-left">
-                        <div className="text-[11px] font-bold text-gray-700 mb-1">Sign-in Guide</div>
-                        <div className="text-[11px] text-gray-600 leading-relaxed">HQ Admin: use Google sign-in. Owners/Managers: use email and password.</div>
-                    </div>
 
                     {isEmbeddedBrowser && (
                         <div className="w-full mb-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-left">
