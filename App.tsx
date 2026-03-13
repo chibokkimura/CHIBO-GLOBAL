@@ -5560,7 +5560,7 @@ const LoginScreen: React.FC = () => {
     const CompanyLogo = () => (
         <div className="w-56 h-40 mb-6 flex items-center justify-center">
             <img
-                src="/chibo-logo.png"
+                src="/chibo-logo-cropped.png"
                 alt="CHIBO logo"
                 className="w-full h-full object-contain"
                 loading="eager"
