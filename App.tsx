@@ -822,6 +822,22 @@ type InvoiceHtmlParams = {
   specialNoteHtml: string;
 };
 
+const INVOICE_ISSUER = {
+  companyName: 'CHIBO HOLDINGS CO., LTD.',
+  addressLine1: 'Ontex Namba Bldg. 7F 2-2-45 Minato Machi,',
+  addressLine2: 'Naniwa-ku Osaka-shi, Osaka, 556-0017,Japan',
+  phone: '+81-6-6633-1570',
+  fax: '+81-6-6633-2191',
+  beneficiaryName: 'CHIBO HOLDINGS CO., LTD.',
+  beneficiaryAddress: '1-5-5 DOUTONNBORI, CHUO-KU, OSAKA, 542-0071 JAPAN',
+  bankName: 'RESONA BANK  SENBA BRANCH',
+  bankAddress: '3-6-1 KITAKYUHOJIMACHI, CYUO-KU, OSAKA-SHI,OSAKA 541-0057, JAPAN',
+  swiftCode: 'DIWAJPJT',
+  accountNumber: '0323028',
+  preparedByCompany: 'CHIBO HOLDINGS CO.,LTD.',
+  preparedByName: 'Kasumi Hemmi',
+} as const;
+
 function buildInvoiceHtml(params: InvoiceHtmlParams): string {
   const {
     invoiceNo,
@@ -843,6 +859,20 @@ function buildInvoiceHtml(params: InvoiceHtmlParams): string {
     signatureUrl,
     specialNoteHtml,
   } = params;
+  const headerLine1 = escapeHtml(INVOICE_ISSUER.addressLine1);
+  const headerLine2 = escapeHtml(INVOICE_ISSUER.addressLine2);
+  const phone = escapeHtml(INVOICE_ISSUER.phone);
+  const fax = escapeHtml(INVOICE_ISSUER.fax);
+  const paymentLinesHtml = [
+    `Beneficiary Name : ${escapeHtml(INVOICE_ISSUER.beneficiaryName)}`,
+    `Beneficiary Address : ${escapeHtml(INVOICE_ISSUER.beneficiaryAddress)}`,
+    `Beneficiary Bank Name : ${escapeHtml(INVOICE_ISSUER.bankName)}`,
+    `Beneficiary Bank Address : ${escapeHtml(INVOICE_ISSUER.bankAddress)}`,
+    `Swift Code : ${escapeHtml(INVOICE_ISSUER.swiftCode)}`,
+    `Beneficiary Account Number : ${escapeHtml(INVOICE_ISSUER.accountNumber)}&nbsp;&nbsp;<span class="currency-red">${escapeHtml(invoiceCurrency)}</span>`,
+  ]
+    .map((line) => `<div>${line}</div>`)
+    .join('');
 
   return `<!doctype html>
 <html>
@@ -1048,12 +1078,12 @@ function buildInvoiceHtml(params: InvoiceHtmlParams): string {
   <div class="sheet-wrap">
     <div class="sheet">
       <div class="center">
-        <div class="head-company">CHIBO HOLDINGS CO., LTD.</div>
+        <div class="head-company">${escapeHtml(INVOICE_ISSUER.companyName)}</div>
         <div class="head-address">
-          Ontex Namba Bldg. 7F 2-2-45 Minato Machi,<br/>
-          Naniwa-ku Osaka-shi, Osaka, 556-0017,Japan<br/>
-          Phone +81-6-6633-1570<br/>
-          FAX&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;+81-6-6633-2191
+          ${headerLine1}<br/>
+          ${headerLine2}<br/>
+          Phone ${phone}<br/>
+          FAX&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;${fax}
         </div>
         <div class="head-invoice">INVOICE</div>
       </div>
@@ -1112,12 +1142,7 @@ function buildInvoiceHtml(params: InvoiceHtmlParams): string {
 
       <div class="paybox">
         <div class="pay-title">Please make payment payable to:</div>
-        <div>Beneficiary Name : CHIBO HOLDINGS CO., LTD.</div>
-        <div>Beneficiary Address : 1-5-5 DOUTONNBORI, CHUO-KU, OSAKA, 542-0071 JAPAN</div>
-        <div>Beneficiary Bank Name : RESONA BANK&nbsp;&nbsp;SENBA BRANCH</div>
-        <div>Beneficiary Bank Address : 3-6-1 KITAKYUHOJIMACHI, CYUO-KU, OSAKA-SHI,OSAKA 541-0057, JAPAN</div>
-        <div>Swift Code : DIWAJPJT</div>
-        <div>Beneficiary Account Number : 0323028&nbsp;&nbsp;<span class="currency-red">${escapeHtml(invoiceCurrency)}</span></div>
+        ${paymentLinesHtml}
       </div>
 
       <div class="footer">
@@ -1128,10 +1153,10 @@ function buildInvoiceHtml(params: InvoiceHtmlParams): string {
         </div>
         <div style="text-align:left;">
           <div>Prepared by</div>
-          <div>CHIBO HOLDINGS CO.,LTD.</div>
+          <div>${escapeHtml(INVOICE_ISSUER.preparedByCompany)}</div>
           <div class="signature-wrap">
             <img src="${escapeHtml(signatureUrl)}" alt="Signature" />
-            <div class="sig-line">Kasumi Hemmi</div>
+            <div class="sig-line">${escapeHtml(INVOICE_ISSUER.preparedByName)}</div>
           </div>
         </div>
       </div>
