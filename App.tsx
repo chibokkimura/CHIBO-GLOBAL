@@ -86,6 +86,16 @@ const STAFF_IMAGE_RESIZE = { maxWidth: 640, maxHeight: 640, quality: 0.82 };
 const IMAGE_SIGNED_URL_CACHE_MS = 6 * 60 * 60 * 1000;
 const LEGACY_MEDIA_MIGRATION_LIMIT = 80;
 const signedImageUrlCache = new Map<string, { url: string; expiresAt: number }>();
+const HQ_BOOTSTRAP_EMAILS = (() => {
+  const envRaw = String(import.meta.env.VITE_HQ_BOOTSTRAP_EMAILS ?? '').trim();
+  const envList = envRaw
+    .split(',')
+    .map((v) => v.trim().toLowerCase())
+    .filter(Boolean);
+  const fallback = ['chibo.k.kimura@gmail.com', 'chibo.global.mgsystem@gmail.com'];
+  const source = envList.length > 0 ? envList : fallback;
+  return Array.from(new Set(source));
+})();
 
 function createLocalEntityId(prefix: string): string {
   const rand = Math.random().toString(36).slice(2, 10);
@@ -3129,6 +3139,88 @@ const HQStoreDetail: React.FC<{
         return data;
     }, [storeSales]);
 
+    const performanceSummary = useMemo(() => {
+        const now = new Date();
+        const todayKey = formatDate(now);
+        const thisMonthKey = formatMonthKey(now);
+        const lastMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        const lastMonthKey = formatMonthKey(lastMonthDate);
+        const sameMonthLastYearDate = new Date(now.getFullYear() - 1, now.getMonth(), 1);
+        const sameMonthLastYearKey = formatMonthKey(sameMonthLastYearDate);
+
+        const sevenDaysAgo = new Date(now);
+        sevenDaysAgo.setDate(now.getDate() - 6);
+        const sevenDaysAgoKey = formatDate(sevenDaysAgo);
+
+        const prevWeekStart = new Date(now);
+        prevWeekStart.setDate(now.getDate() - 13);
+        const prevWeekEnd = new Date(now);
+        prevWeekEnd.setDate(now.getDate() - 7);
+        const prevWeekStartKey = formatDate(prevWeekStart);
+        const prevWeekEndKey = formatDate(prevWeekEnd);
+
+        const sumByMonthKey = (monthKey: string) =>
+            storeSales
+                .filter((sale) => sale.date.startsWith(monthKey))
+                .reduce((sum, sale) => sum + (sale.totalAmount || 0), 0);
+
+        const sumByDateRange = (fromKey: string, toKey: string) =>
+            storeSales
+                .filter((sale) => sale.date >= fromKey && sale.date <= toKey)
+                .reduce((sum, sale) => sum + (sale.totalAmount || 0), 0);
+
+        const thisMonthTotal = sumByMonthKey(thisMonthKey);
+        const lastMonthTotal = sumByMonthKey(lastMonthKey);
+        const sameMonthLastYearTotal = sumByMonthKey(sameMonthLastYearKey);
+        const thisWeekTotal = sumByDateRange(sevenDaysAgoKey, todayKey);
+        const previousWeekTotal = sumByDateRange(prevWeekStartKey, prevWeekEndKey);
+
+        const calcDelta = (current: number, baseline: number) => {
+            if (baseline <= 0) return null;
+            return ((current - baseline) / baseline) * 100;
+        };
+
+        const formatMoney = (amount: number) => `${store.currency} ${Math.round(amount).toLocaleString()}`;
+        const formatJPY = (amount: number) => {
+            const converted = convertToJPY(amount, store.currency, fxRates);
+            if (converted === null) return null;
+            return `¥ ${Math.round(converted).toLocaleString()}`;
+        };
+
+        return {
+            monthly: {
+                value: thisMonthTotal,
+                baseline: lastMonthTotal,
+                deltaPct: calcDelta(thisMonthTotal, lastMonthTotal),
+            },
+            weekly: {
+                value: thisWeekTotal,
+                baseline: previousWeekTotal,
+                deltaPct: calcDelta(thisWeekTotal, previousWeekTotal),
+            },
+            yoy: {
+                value: thisMonthTotal,
+                baseline: sameMonthLastYearTotal,
+                deltaPct: calcDelta(thisMonthTotal, sameMonthLastYearTotal),
+            },
+            formatMoney,
+            formatJPY,
+        };
+    }, [storeSales, store.currency, fxRates]);
+
+    const formatDeltaText = (deltaPct: number | null) => {
+        if (deltaPct === null) return 'No baseline data';
+        const sign = deltaPct >= 0 ? '+' : '';
+        return `${sign}${deltaPct.toFixed(1)}%`;
+    };
+
+    const deltaToneClass = (deltaPct: number | null) => {
+        if (deltaPct === null) return 'text-gray-500';
+        if (deltaPct > 0) return 'text-emerald-600';
+        if (deltaPct < 0) return 'text-red-600';
+        return 'text-gray-600';
+    };
+
     const ingredientUnitMap = useMemo(() => {
         const map: Record<string, string> = {};
         standardIngredients.forEach(ing => {
@@ -4003,6 +4095,38 @@ const HQStoreDetail: React.FC<{
 
                     <div className="bg-white p-6 rounded-2xl shadow-sm border">
                         <h2 className="text-xl font-bold mb-4">Store Performance</h2>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+                            <div className="rounded-xl border border-gray-200 bg-gray-50 p-3">
+                                <div className="text-[11px] font-bold uppercase text-gray-500">Monthly Sales</div>
+                                <div className="mt-1 text-lg font-extrabold text-gray-900">{performanceSummary.formatMoney(performanceSummary.monthly.value)}</div>
+                                {store.currency !== 'JPY' && (
+                                    <div className="text-xs text-gray-500 mt-1">{performanceSummary.formatJPY(performanceSummary.monthly.value) ?? 'JPY N/A'}</div>
+                                )}
+                                <div className={`mt-2 text-xs font-bold ${deltaToneClass(performanceSummary.monthly.deltaPct)}`}>
+                                    vs Last Month {formatDeltaText(performanceSummary.monthly.deltaPct)}
+                                </div>
+                            </div>
+                            <div className="rounded-xl border border-gray-200 bg-gray-50 p-3">
+                                <div className="text-[11px] font-bold uppercase text-gray-500">Weekly Sales (Last 7 Days)</div>
+                                <div className="mt-1 text-lg font-extrabold text-gray-900">{performanceSummary.formatMoney(performanceSummary.weekly.value)}</div>
+                                {store.currency !== 'JPY' && (
+                                    <div className="text-xs text-gray-500 mt-1">{performanceSummary.formatJPY(performanceSummary.weekly.value) ?? 'JPY N/A'}</div>
+                                )}
+                                <div className={`mt-2 text-xs font-bold ${deltaToneClass(performanceSummary.weekly.deltaPct)}`}>
+                                    vs Previous 7 Days {formatDeltaText(performanceSummary.weekly.deltaPct)}
+                                </div>
+                            </div>
+                            <div className="rounded-xl border border-gray-200 bg-gray-50 p-3">
+                                <div className="text-[11px] font-bold uppercase text-gray-500">YoY (This Month)</div>
+                                <div className="mt-1 text-lg font-extrabold text-gray-900">{performanceSummary.formatMoney(performanceSummary.yoy.value)}</div>
+                                {store.currency !== 'JPY' && (
+                                    <div className="text-xs text-gray-500 mt-1">{performanceSummary.formatJPY(performanceSummary.yoy.value) ?? 'JPY N/A'}</div>
+                                )}
+                                <div className={`mt-2 text-xs font-bold ${deltaToneClass(performanceSummary.yoy.deltaPct)}`}>
+                                    vs Same Month Last Year {formatDeltaText(performanceSummary.yoy.deltaPct)}
+                                </div>
+                            </div>
+                        </div>
                         <div className="h-64 bg-gray-50 rounded-xl p-2">
                             {monthlyRevenueData.every(d => d.value === 0) ? (
                                 <div className="h-full flex items-center justify-center text-gray-400">
@@ -5395,7 +5519,7 @@ const LoginScreen: React.FC = () => {
     const [password, setPassword] = useState('');
     const [authMode, setAuthMode] = useState<'signin' | 'signup'>('signin');
     const normalizedEmail = email.trim().toLowerCase();
-    const isHqGoogleOnlyEmail = normalizedEmail === 'chibo.k.kimura@gmail.com' || normalizedEmail === 'chibo.global.mgsystem@gmail.com';
+    const isHqGoogleOnlyEmail = HQ_BOOTSTRAP_EMAILS.includes(normalizedEmail);
     const isEmbeddedBrowser = useMemo(() => {
         if (typeof navigator === 'undefined') return false;
         const ua = navigator.userAgent || '';
@@ -6268,11 +6392,7 @@ const App = () => {
   };
 
  // Map Supabase session email -> app user (DB + HQ override)
-const HQ_EMAILS = [
-  'chibo.k.kimura@gmail.com',
-  'chibo.global.mgsystem@gmail.com',
-  // Add HQ emails here
-];
+const HQ_EMAILS = HQ_BOOTSTRAP_EMAILS;
 
 const [resolvedUser, setResolvedUser] = useState<User | null>(null);
 const [authLoading, setAuthLoading] = useState<boolean>(true);
