@@ -49,6 +49,7 @@ GitHub path:
 
 - `VITE_SUPABASE_URL`
 - `VITE_SUPABASE_ANON_KEY`
+- `VITE_HQ_BOOTSTRAP_EMAILS` (optional, comma-separated HQ emails for first-login HQ bootstrap)
 
 2. Supabase Dashboard → Auth → URL Configuration
 
@@ -91,12 +92,14 @@ Supabase Dashboard → Authentication → URL Configuration
 
 - `VITE_SUPABASE_URL=...`
 - `VITE_SUPABASE_ANON_KEY=...`
+- `VITE_HQ_BOOTSTRAP_EMAILS=hq1@company.com,hq2@company.com` (optional)
 
 #### Vercel
 Vercel → Project → Settings → Environment Variables
 
 - `VITE_SUPABASE_URL`
 - `VITE_SUPABASE_ANON_KEY`
+- `VITE_HQ_BOOTSTRAP_EMAILS` (optional)
 
 추가 후 Redeploy.
 
