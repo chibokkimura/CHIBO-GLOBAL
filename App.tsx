@@ -81,6 +81,7 @@ const SALES_FALLBACK_POLL_MS = 60000;
 const OWNER_VIEW_STORAGE_PREFIX = 'chibo:owner:view:';
 const HQ_SELECTED_STORE_STORAGE_KEY = 'chibo:hq:selectedStoreId';
 let salesClosedReasonColumnSupported: boolean | null = null;
+let salesIsClosedColumnSupported: boolean | null = null;
 let setMenuTableSupported: boolean | null = null;
 let saleSetItemsTableSupported: boolean | null = null;
 const SALES_RECEIPT_IMAGE_RESIZE = { maxWidth: 1800, maxHeight: 1800, quality: 0.85 };
@@ -195,10 +196,21 @@ const formatLookbackLabel = (days: number) => {
 };
 
 function isMissingClosedReasonColumnError(error: unknown): boolean {
+  return isMissingColumnError(error, 'closed_reason');
+}
+
+function isMissingColumnError(error: unknown, columnName: string): boolean {
   const message = typeof error === 'object' && error && 'message' in error
     ? String((error as any).message)
     : '';
-  return message.toLowerCase().includes("could not find the 'closed_reason' column");
+  const lower = message.toLowerCase();
+  const target = columnName.toLowerCase();
+  return (
+    lower.includes(`could not find the '${target}' column`) ||
+    lower.includes(`column ${target} does not exist`) ||
+    lower.includes(`column \"${target}\" does not exist`) ||
+    lower.includes(`column '${target}' does not exist`)
+  );
 }
 
 function isMissingTableError(error: unknown, tableName: string): boolean {
@@ -540,33 +552,49 @@ async function loadSales(daysBack?: number): Promise<Sale[]> {
     : null;
 
   const selectWithClosedReason = 'id,store_id,date,total_amount,is_closed,closed_reason';
-  const selectWithoutClosedReason = 'id,store_id,date,total_amount,is_closed';
+  const selectWithIsClosedOnly = 'id,store_id,date,total_amount,is_closed';
+  const selectLegacy = 'id,store_id,date,total_amount';
 
-  const runSalesQuery = async (includeClosedReason: boolean) => {
+  const runSalesQuery = async (selectClause: string) => {
     let query = supabase
       .from('sales')
-      .select(includeClosedReason ? selectWithClosedReason : selectWithoutClosedReason)
+      .select(selectClause)
       .order('date', { ascending: false });
     if (since) query = query.gte('date', since);
     return await query;
   };
 
   let salesData: any[] = [];
+  let firstError: unknown = null;
+
   const preferClosedReason = salesClosedReasonColumnSupported !== false;
-  const first = await runSalesQuery(preferClosedReason);
-  if (first.error) {
-    if (preferClosedReason && isMissingClosedReasonColumnError(first.error)) {
-      salesClosedReasonColumnSupported = false;
-      const fallback = await runSalesQuery(false);
-      if (fallback.error) throw fallback.error;
-      salesData = fallback.data ?? [];
-    } else {
-      throw first.error;
+  const preferIsClosed = salesIsClosedColumnSupported !== false;
+  const queryOrder = preferClosedReason
+    ? [selectWithClosedReason, selectWithIsClosedOnly, selectLegacy]
+    : (preferIsClosed ? [selectWithIsClosedOnly, selectLegacy] : [selectLegacy]);
+
+  let usedSelect: string | null = null;
+  for (const selectClause of queryOrder) {
+    const result = await runSalesQuery(selectClause);
+    if (!result.error) {
+      salesData = result.data ?? [];
+      usedSelect = selectClause;
+      break;
     }
-  } else {
-    if (preferClosedReason) salesClosedReasonColumnSupported = true;
-    salesData = first.data ?? [];
+    if (!firstError) firstError = result.error;
+    const missingClosedReason = isMissingClosedReasonColumnError(result.error);
+    const missingIsClosed = isMissingColumnError(result.error, 'is_closed');
+    if (missingClosedReason || missingIsClosed) {
+      continue;
+    }
+    throw result.error;
   }
+
+  if (!usedSelect) {
+    throw (firstError ?? new Error('Failed to load sales.'));
+  }
+  salesClosedReasonColumnSupported = usedSelect === selectWithClosedReason;
+  salesIsClosedColumnSupported = usedSelect !== selectLegacy;
 
   const saleIds = (salesData ?? []).map((s: any) => s.id);
   let receiptIds = new Set<string>();
@@ -577,8 +605,15 @@ async function loadSales(daysBack?: number): Promise<Sale[]> {
       .in('id', saleIds)
       .not('receipt_image', 'is', null)
       .neq('receipt_image', '');
-    if (receiptErr) throw receiptErr;
-    receiptIds = new Set((receiptRows ?? []).map((r: any) => r.id as string));
+    if (receiptErr) {
+      if (isMissingColumnError(receiptErr, 'receipt_image')) {
+        console.warn('sales.receipt_image column is missing; receipt link indicator will be hidden.');
+      } else {
+        throw receiptErr;
+      }
+    } else {
+      receiptIds = new Set((receiptRows ?? []).map((r: any) => r.id as string));
+    }
   }
 
   let itemData: any[] = [];
@@ -929,24 +964,44 @@ async function addSale(sale: Sale) {
     date: sale.date,
     total_amount: sale.totalAmount,
     receipt_image: receiptPath,
+  };
+  const payloadWithIsClosed = {
+    ...basePayload,
     is_closed: sale.isClosed ?? false,
   };
   const payloadWithClosedReason = {
-    ...basePayload,
+    ...payloadWithIsClosed,
     closed_reason: sale.closedReason ?? null,
   };
   const preferClosedReason = salesClosedReasonColumnSupported !== false;
-  const firstInsert = await supabase
-    .from('sales')
-    .insert(preferClosedReason ? payloadWithClosedReason : basePayload);
+  const preferIsClosed = salesIsClosedColumnSupported !== false;
+  const payloadOrder = preferClosedReason
+    ? [payloadWithClosedReason, payloadWithIsClosed, basePayload]
+    : (preferIsClosed ? [payloadWithIsClosed, basePayload] : [basePayload]);
 
-  let sErr = firstInsert.error ?? null;
-  if (sErr && preferClosedReason && isMissingClosedReasonColumnError(sErr)) {
-    salesClosedReasonColumnSupported = false;
-    const fallbackInsert = await supabase.from('sales').insert(basePayload);
-    sErr = fallbackInsert.error ?? null;
-  } else if (!sErr && preferClosedReason) {
-    salesClosedReasonColumnSupported = true;
+  let sErr: any = null;
+  let insertedPayloadType: 'full' | 'isClosedOnly' | 'legacy' | null = null;
+  for (const payload of payloadOrder) {
+    const result = await supabase.from('sales').insert(payload);
+    if (!result.error) {
+      if (payload === payloadWithClosedReason) insertedPayloadType = 'full';
+      else if (payload === payloadWithIsClosed) insertedPayloadType = 'isClosedOnly';
+      else insertedPayloadType = 'legacy';
+      sErr = null;
+      break;
+    }
+    sErr = result.error;
+    const missingClosedReason = isMissingClosedReasonColumnError(result.error);
+    const missingIsClosed = isMissingColumnError(result.error, 'is_closed');
+    if (missingClosedReason || missingIsClosed) {
+      continue;
+    }
+    break;
+  }
+
+  if (insertedPayloadType) {
+    salesClosedReasonColumnSupported = insertedPayloadType === 'full';
+    salesIsClosedColumnSupported = insertedPayloadType !== 'legacy';
   }
 
   if (sErr) {
