@@ -210,6 +210,25 @@ function isMissingTableError(error: unknown, tableName: string): boolean {
   return message.includes(rel) || message.includes(schemaCache) || message.includes(`relation \"${tableName.toLowerCase()}\" does not exist`);
 }
 
+function getPostgrestErrorCode(error: unknown): string | null {
+  if (typeof error !== 'object' || error === null) return null;
+  if (!('code' in error)) return null;
+  return String((error as any).code ?? '').trim() || null;
+}
+
+function isPermissionDeniedTableError(error: unknown, tableName: string): boolean {
+  const message = typeof error === 'object' && error && 'message' in error
+    ? String((error as any).message).toLowerCase()
+    : '';
+  const code = getPostgrestErrorCode(error);
+  if (code === '42501') return true;
+  return message.includes(`permission denied for table ${tableName.toLowerCase()}`);
+}
+
+function isSkippableSalesChildTableError(error: unknown, tableName: string): boolean {
+  return isMissingTableError(error, tableName) || isPermissionDeniedTableError(error, tableName);
+}
+
 function safeParseJson<T>(raw: string | null): T | null {
   if (!raw) return null;
   try {
@@ -568,8 +587,15 @@ async function loadSales(daysBack?: number): Promise<Sale[]> {
       .from('sale_items')
       .select('sale_id,menu_id,quantity')
       .in('sale_id', saleIds);
-    if (itemErr) throw itemErr;
-    itemData = data ?? [];
+    if (itemErr) {
+      if (isSkippableSalesChildTableError(itemErr, 'sale_items')) {
+        console.warn('Skipping sale_items load due to table availability/permission issue', itemErr);
+      } else {
+        throw itemErr;
+      }
+    } else {
+      itemData = data ?? [];
+    }
   }
 
   let setItemData: any[] = [];
@@ -579,8 +605,9 @@ async function loadSales(daysBack?: number): Promise<Sale[]> {
       .select('sale_id,set_menu_id,quantity')
       .in('sale_id', saleIds);
     if (setItemErr) {
-      if (isMissingTableError(setItemErr, 'sale_set_items')) {
+      if (isSkippableSalesChildTableError(setItemErr, 'sale_set_items')) {
         saleSetItemsTableSupported = false;
+        console.warn('Skipping sale_set_items load due to table availability/permission issue', setItemErr);
       } else {
         throw setItemErr;
       }
