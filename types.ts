@@ -42,6 +42,19 @@ export interface RecipeItem {
   quantity: number;
 }
 
+export interface SetMenuItem {
+  menuId: string;
+  quantity: number;
+}
+
+export interface SetMenu {
+  id: string;
+  storeId: string;
+  name: string;
+  price: number;
+  items: SetMenuItem[];
+}
+
 export interface Menu {
   id: string;
   storeId: string;
@@ -58,12 +71,18 @@ export interface SaleItem {
   quantity: number;
 }
 
+export interface SaleSetItem {
+  setMenuId: string;
+  quantity: number;
+}
+
 export interface Sale {
   id: string;
   storeId: string;
   date: string; // ISO Date string YYYY-MM-DD
   totalAmount: number;
   items: SaleItem[];
+  setItems?: SaleSetItem[];
   receiptImage?: string;
   hasReceipt?: boolean;
   isClosed?: boolean; // New: Flag for Closed/Rest days

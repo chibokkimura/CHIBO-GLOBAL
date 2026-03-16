@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { User, Store, Menu, Sale, Employee, UserRole, Ingredient, SaleItem, RecipeItem } from './types';
+import { User, Store, Menu, SetMenu, Sale, Employee, UserRole, Ingredient, SaleItem, SaleSetItem, RecipeItem } from './types';
 import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, LineChart, Line, ComposedChart, Cell
 } from 'recharts';
@@ -39,7 +39,7 @@ type GlobalConfig = {
 };
 
 type GlobalConfigLoadState = 'loading' | 'loaded' | 'error';
-type RefreshScope = 'stores' | 'ingredients' | 'employees' | 'menus' | 'sales' | 'storeStocks' | 'globalConfig';
+type RefreshScope = 'stores' | 'ingredients' | 'employees' | 'menus' | 'setMenus' | 'sales' | 'storeStocks' | 'globalConfig';
 
 type ScopeMutationCounter = Record<RefreshScope, number>;
 
@@ -49,6 +49,7 @@ function createInitialScopeMutationCounter(): ScopeMutationCounter {
     ingredients: 0,
     employees: 0,
     menus: 0,
+    setMenus: 0,
     sales: 0,
     storeStocks: 0,
     globalConfig: 0,
@@ -80,6 +81,8 @@ const SALES_FALLBACK_POLL_MS = 60000;
 const OWNER_VIEW_STORAGE_PREFIX = 'chibo:owner:view:';
 const HQ_SELECTED_STORE_STORAGE_KEY = 'chibo:hq:selectedStoreId';
 let salesClosedReasonColumnSupported: boolean | null = null;
+let setMenuTableSupported: boolean | null = null;
+let saleSetItemsTableSupported: boolean | null = null;
 const SALES_RECEIPT_IMAGE_RESIZE = { maxWidth: 1800, maxHeight: 1800, quality: 0.85 };
 const MENU_IMAGE_RESIZE = { maxWidth: 1400, maxHeight: 1400, quality: 0.82 };
 const STAFF_IMAGE_RESIZE = { maxWidth: 640, maxHeight: 640, quality: 0.82 };
@@ -196,6 +199,15 @@ function isMissingClosedReasonColumnError(error: unknown): boolean {
     ? String((error as any).message)
     : '';
   return message.toLowerCase().includes("could not find the 'closed_reason' column");
+}
+
+function isMissingTableError(error: unknown, tableName: string): boolean {
+  const message = typeof error === 'object' && error && 'message' in error
+    ? String((error as any).message).toLowerCase()
+    : '';
+  const rel = `relation \"public.${tableName.toLowerCase()}\" does not exist`;
+  const schemaCache = `could not find the table '${tableName.toLowerCase()}'`;
+  return message.includes(rel) || message.includes(schemaCache) || message.includes(`relation \"${tableName.toLowerCase()}\" does not exist`);
 }
 
 function safeParseJson<T>(raw: string | null): T | null {
@@ -449,6 +461,54 @@ async function loadMenus(): Promise<Menu[]> {
   }));
 }
 
+async function loadSetMenus(): Promise<SetMenu[]> {
+  if (setMenuTableSupported === false) return [];
+  const { data: setData, error: setErr } = await supabase
+    .from('set_menus')
+    .select('id,store_id,name,price')
+    .order('id');
+  if (setErr) {
+    if (isMissingTableError(setErr, 'set_menus')) {
+      setMenuTableSupported = false;
+      return [];
+    }
+    throw setErr;
+  }
+  setMenuTableSupported = true;
+
+  const setIds = (setData ?? []).map((row: any) => row.id);
+  let itemData: any[] = [];
+  if (setIds.length > 0) {
+    const { data, error } = await supabase
+      .from('set_menu_items')
+      .select('set_menu_id,menu_id,quantity')
+      .in('set_menu_id', setIds);
+    if (error) {
+      if (isMissingTableError(error, 'set_menu_items')) {
+        setMenuTableSupported = false;
+        return [];
+      }
+      throw error;
+    }
+    itemData = data ?? [];
+  }
+
+  const itemsBySet: Record<string, { menuId: string; quantity: number }[]> = {};
+  itemData.forEach((row: any) => {
+    const arr = itemsBySet[row.set_menu_id] ?? [];
+    arr.push({ menuId: row.menu_id, quantity: Number(row.quantity) });
+    itemsBySet[row.set_menu_id] = arr;
+  });
+
+  return (setData ?? []).map((row: any) => ({
+    id: row.id,
+    storeId: row.store_id,
+    name: row.name,
+    price: Number(row.price ?? 0),
+    items: itemsBySet[row.id] ?? [],
+  }));
+}
+
 async function loadSales(daysBack?: number): Promise<Sale[]> {
   const formatDateOnly = (d: Date) => {
     const year = d.getFullYear();
@@ -512,11 +572,36 @@ async function loadSales(daysBack?: number): Promise<Sale[]> {
     itemData = data ?? [];
   }
 
+  let setItemData: any[] = [];
+  if (saleIds.length > 0 && saleSetItemsTableSupported !== false) {
+    const { data, error: setItemErr } = await supabase
+      .from('sale_set_items')
+      .select('sale_id,set_menu_id,quantity')
+      .in('sale_id', saleIds);
+    if (setItemErr) {
+      if (isMissingTableError(setItemErr, 'sale_set_items')) {
+        saleSetItemsTableSupported = false;
+      } else {
+        throw setItemErr;
+      }
+    } else {
+      saleSetItemsTableSupported = true;
+      setItemData = data ?? [];
+    }
+  }
+
   const itemsBySale: Record<string, SaleItem[]> = {};
   itemData.forEach((r: any) => {
     const arr = itemsBySale[r.sale_id] ?? [];
     arr.push({ menuId: r.menu_id, quantity: Number(r.quantity) });
     itemsBySale[r.sale_id] = arr;
+  });
+
+  const setItemsBySale: Record<string, SaleSetItem[]> = {};
+  setItemData.forEach((r: any) => {
+    const arr = setItemsBySale[r.sale_id] ?? [];
+    arr.push({ setMenuId: r.set_menu_id, quantity: Number(r.quantity) });
+    setItemsBySale[r.sale_id] = arr;
   });
 
   return (salesData ?? []).map((s: any) => ({
@@ -525,6 +610,7 @@ async function loadSales(daysBack?: number): Promise<Sale[]> {
     date: s.date,
     totalAmount: Number(s.total_amount),
     items: itemsBySale[s.id] ?? [],
+    setItems: setItemsBySale[s.id] ?? [],
     hasReceipt: receiptIds.has(s.id),
     isClosed: Boolean(s.is_closed),
     closedReason: s.closed_reason ?? undefined,
@@ -624,6 +710,90 @@ async function deleteMenu(menuId: string) {
   if (error) throw error;
 
   await deleteStorageObjectByPath(existing?.image_url ?? null);
+}
+
+async function saveSetMenu(setMenu: SetMenu) {
+  const mergedItems = new Map<string, number>();
+  for (const row of setMenu.items ?? []) {
+    if (!row.menuId) continue;
+    const qty = Number(row.quantity);
+    if (!Number.isFinite(qty) || qty <= 0) continue;
+    mergedItems.set(row.menuId, (mergedItems.get(row.menuId) ?? 0) + qty);
+  }
+
+  const { error: menuErr } = await supabase.from('set_menus').upsert({
+    id: setMenu.id,
+    store_id: setMenu.storeId,
+    name: setMenu.name,
+    price: setMenu.price,
+  });
+  if (menuErr) {
+    if (isMissingTableError(menuErr, 'set_menus')) {
+      setMenuTableSupported = false;
+      throw new Error('Set menu tables are not ready. Run set menu migration SQL first.');
+    }
+    throw menuErr;
+  }
+  setMenuTableSupported = true;
+
+  const nextRows = Array.from(mergedItems.entries()).map(([menuId, quantity]) => ({
+    set_menu_id: setMenu.id,
+    menu_id: menuId,
+    quantity,
+  }));
+
+  if (nextRows.length > 0) {
+    const { error: upsertErr } = await supabase
+      .from('set_menu_items')
+      .upsert(nextRows, { onConflict: 'set_menu_id,menu_id' });
+    if (upsertErr) {
+      if (isMissingTableError(upsertErr, 'set_menu_items')) {
+        setMenuTableSupported = false;
+        throw new Error('Set menu item table is missing. Run set menu migration SQL first.');
+      }
+      throw upsertErr;
+    }
+  }
+
+  if (nextRows.length === 0) {
+    const { error: clearErr } = await supabase
+      .from('set_menu_items')
+      .delete()
+      .eq('set_menu_id', setMenu.id);
+    if (clearErr) throw clearErr;
+    return;
+  }
+
+  const { data: currentRows, error: currentErr } = await supabase
+    .from('set_menu_items')
+    .select('menu_id')
+    .eq('set_menu_id', setMenu.id);
+  if (currentErr) throw currentErr;
+
+  const keepSet = new Set(nextRows.map((row) => row.menu_id));
+  const toDelete = (currentRows ?? [])
+    .map((row: any) => String(row.menu_id))
+    .filter((menuId) => !keepSet.has(menuId));
+
+  if (toDelete.length > 0) {
+    const { error: pruneErr } = await supabase
+      .from('set_menu_items')
+      .delete()
+      .eq('set_menu_id', setMenu.id)
+      .in('menu_id', toDelete);
+    if (pruneErr) throw pruneErr;
+  }
+}
+
+async function deleteSetMenu(setMenuId: string) {
+  const { error } = await supabase.from('set_menus').delete().eq('id', setMenuId);
+  if (error) {
+    if (isMissingTableError(error, 'set_menus')) {
+      setMenuTableSupported = false;
+      throw new Error('Set menu tables are not ready. Run set menu migration SQL first.');
+    }
+    throw error;
+  }
 }
 
 async function saveEmployees(storeId: string, emps: Employee[], removedIds: string[] = []) {
@@ -767,6 +937,29 @@ async function addSale(sale: Sale) {
     if (error) {
       const message = error.message || 'Unknown sale items error';
       throw new Error(`Failed to save sale items: ${message}`);
+    }
+  }
+
+  if (sale.setItems?.length && saleSetItemsTableSupported !== false) {
+    const setRows = sale.setItems
+      .filter((item) => Number(item.quantity) > 0 && item.setMenuId)
+      .map((item) => ({
+        sale_id: sale.id,
+        set_menu_id: item.setMenuId,
+        quantity: Number(item.quantity),
+      }));
+    if (setRows.length > 0) {
+      const { error } = await supabase.from('sale_set_items').insert(setRows);
+      if (error) {
+        if (isMissingTableError(error, 'sale_set_items')) {
+          saleSetItemsTableSupported = false;
+        } else {
+          const message = error.message || 'Unknown sale set items error';
+          throw new Error(`Failed to save set menu items: ${message}`);
+        }
+      } else {
+        saleSetItemsTableSupported = true;
+      }
     }
   }
 }
@@ -1801,13 +1994,15 @@ const SalesReporter: React.FC<{
   store: Store;
   sales: Sale[];
   menus: Menu[];
+  setMenus: SetMenu[];
   categories: string[];
   initialDate: string | null;
   onSave: (sale: Sale) => Promise<void> | void;
   onCancel: () => void;
-}> = ({ store, sales, menus, categories, initialDate, onSave, onCancel }) => {
+}> = ({ store, sales, menus, setMenus, categories, initialDate, onSave, onCancel }) => {
   const [date, setDate] = useState(initialDate || formatDate(new Date()));
   const [items, setItems] = useState<SaleItem[]>([]); // Store category name in menuId
+  const [setMenuItems, setSetMenuItems] = useState<SaleSetItem[]>([]);
   const [isClosed, setIsClosed] = useState(false);
   const [receiptImage, setReceiptImage] = useState<string | null>(null);
   const [manualRevenue, setManualRevenue] = useState<string>('');
@@ -1823,6 +2018,7 @@ const SalesReporter: React.FC<{
       setDate(formatDate(new Date()));
     }
     setItems([]);
+    setSetMenuItems([]);
     setIsClosed(false);
     setReceiptImage(null);
     setManualRevenue('');
@@ -1835,6 +2031,7 @@ const SalesReporter: React.FC<{
       setReceiptImage(null);
       setManualRevenue('');
       setItems([]);
+      setSetMenuItems([]);
     }
   }, [isClosed]);
 
@@ -1876,6 +2073,35 @@ const SalesReporter: React.FC<{
     });
   };
 
+  const handleSetQuantityInput = (setMenuId: string, val: string) => {
+    const clean = normalizeNumberInput(val);
+    const newQty = clean === '' ? 0 : parseInt(clean, 10);
+    if (newQty < 0) return;
+
+    setSetMenuItems((prev) => {
+      const existing = prev.find((item) => item.setMenuId === setMenuId);
+      if (existing) {
+        if (newQty === 0) return prev.filter((item) => item.setMenuId !== setMenuId);
+        return prev.map((item) => item.setMenuId === setMenuId ? { ...item, quantity: newQty } : item);
+      }
+      if (newQty > 0) return [...prev, { setMenuId, quantity: newQty }];
+      return prev;
+    });
+  };
+
+  const handleSetQuantityChange = (setMenuId: string, delta: number) => {
+    setSetMenuItems((prev) => {
+      const existing = prev.find((item) => item.setMenuId === setMenuId);
+      if (existing) {
+        const newQty = Math.max(0, existing.quantity + delta);
+        if (newQty === 0) return prev.filter((item) => item.setMenuId !== setMenuId);
+        return prev.map((item) => item.setMenuId === setMenuId ? { ...item, quantity: newQty } : item);
+      }
+      if (delta > 0) return [...prev, { setMenuId, quantity: delta }];
+      return prev;
+    });
+  };
+
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -1899,12 +2125,49 @@ const SalesReporter: React.FC<{
     const reason = closedReason.trim();
     if (isClosed && !reason) return;
     const totalAmount = isClosed ? 0 : (parseFloat(manualRevenue) || 0);
+    const normalizedSetItems = isClosed
+      ? []
+      : setMenuItems
+          .filter((item) => item.setMenuId && Number(item.quantity) > 0)
+          .map((item) => ({ setMenuId: item.setMenuId, quantity: Number(item.quantity) }));
+
+    const categoryTotals = new Map<string, number>();
+    if (!isClosed) {
+      items
+        .filter((item) => item.menuId && Number(item.quantity) > 0)
+        .forEach((item) => {
+          categoryTotals.set(item.menuId, (categoryTotals.get(item.menuId) ?? 0) + Number(item.quantity));
+        });
+
+      if (normalizedSetItems.length > 0) {
+        const setMenuById = new Map(setMenus.map((setMenu) => [setMenu.id, setMenu]));
+        const menuById = new Map(menus.map((menu) => [menu.id, menu]));
+        normalizedSetItems.forEach((setEntry) => {
+          const setMenu = setMenuById.get(setEntry.setMenuId);
+          if (!setMenu) return;
+          setMenu.items.forEach((component) => {
+            const targetMenu = menuById.get(component.menuId);
+            if (!targetMenu) return;
+            const addQty = Number(component.quantity) * Number(setEntry.quantity);
+            if (!Number.isFinite(addQty) || addQty <= 0) return;
+            categoryTotals.set(targetMenu.category, (categoryTotals.get(targetMenu.category) ?? 0) + addQty);
+          });
+        });
+      }
+    }
+
+    const expandedCategoryItems: SaleItem[] = Array.from(categoryTotals.entries()).map(([menuId, quantity]) => ({
+      menuId,
+      quantity,
+    }));
+
     const newSale: Sale = {
       id: `SALE_${Date.now()}`,
       storeId: store.id,
       date,
       totalAmount,
-      items: isClosed ? [] : items,
+      items: isClosed ? [] : expandedCategoryItems,
+      setItems: isClosed ? [] : normalizedSetItems,
       isClosed,
       receiptImage: isClosed ? undefined : receiptImage || undefined,
       hasReceipt: !isClosed && Boolean(receiptImage),
@@ -2026,7 +2289,43 @@ const SalesReporter: React.FC<{
                 );
                 })}
             </div>
-            
+
+            {setMenus.length > 0 && (
+              <>
+                <h3 className="font-bold text-lg mt-8 mb-4">Set Menu Quantity</h3>
+                <div className="space-y-3">
+                  {setMenus.map((setMenu) => {
+                    const qty = setMenuItems.find((item) => item.setMenuId === setMenu.id)?.quantity || 0;
+                    return (
+                      <div key={setMenu.id} className="flex items-center justify-between p-3 border rounded-xl hover:border-black transition">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 bg-gray-100 rounded-lg flex items-center justify-center text-gray-500">
+                            <Layers className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <div className="font-bold">{setMenu.name}</div>
+                            <div className="text-xs text-gray-500">{setMenu.items.length} menu item(s)</div>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button onClick={() => handleSetQuantityChange(setMenu.id, -1)} className="w-8 h-8 flex items-center justify-center bg-gray-100 rounded-full hover:bg-gray-200 font-bold">-</button>
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            pattern="[0-9]*"
+                            className="w-16 p-2 text-center border border-gray-200 rounded-lg font-bold text-lg focus:ring-2 focus:ring-black outline-none"
+                            value={String(qty)}
+                            onChange={(e) => handleSetQuantityInput(setMenu.id, e.target.value)}
+                          />
+                          <button onClick={() => handleSetQuantityChange(setMenu.id, 1)} className="w-8 h-8 flex items-center justify-center bg-black text-white rounded-full hover:bg-gray-800 font-bold">+</button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+
             </div>
         )}
 
@@ -2137,6 +2436,250 @@ const MenuManager: React.FC<{
       />
     </div>
   );
+};
+
+const SetMenuEditor: React.FC<{
+    setMenu: SetMenu;
+    menus: Menu[];
+    onSave: (setMenu: SetMenu) => Promise<void> | void;
+    onBack: () => void;
+}> = ({ setMenu, menus, onSave, onBack }) => {
+    const [editedSet, setEditedSet] = useState<SetMenu>(() => ({
+        ...setMenu,
+        items: setMenu.items?.length > 0 ? setMenu.items : [{ menuId: '', quantity: 1 }],
+    }));
+    const [saving, setSaving] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+
+    const menuById = useMemo(() => new Map(menus.map((menu) => [menu.id, menu])), [menus]);
+
+    const updateSetItem = (idx: number, next: Partial<{ menuId: string; quantity: number }>) => {
+        setEditedSet((prev) => ({
+            ...prev,
+            items: prev.items.map((item, itemIdx) => itemIdx === idx ? { ...item, ...next } : item),
+        }));
+    };
+
+    const addSetItemRow = () => {
+        setEditedSet((prev) => ({ ...prev, items: [...prev.items, { menuId: '', quantity: 1 }] }));
+    };
+
+    const removeSetItemRow = (idx: number) => {
+        setEditedSet((prev) => ({ ...prev, items: prev.items.filter((_, itemIdx) => itemIdx !== idx) }));
+    };
+
+    const normalizeSetItems = () => {
+        const merged = new Map<string, number>();
+        editedSet.items.forEach((item) => {
+            const menuId = String(item.menuId ?? '').trim();
+            const quantity = Number(item.quantity);
+            if (!menuId || !Number.isFinite(quantity) || quantity <= 0) return;
+            if (!menuById.has(menuId)) return;
+            merged.set(menuId, (merged.get(menuId) ?? 0) + quantity);
+        });
+        return Array.from(merged.entries()).map(([menuId, quantity]) => ({ menuId, quantity }));
+    };
+
+    const handleSave = async () => {
+        if (saving) return;
+        const name = editedSet.name.trim();
+        if (!name) {
+            setError('Set menu name is required.');
+            return;
+        }
+        const normalizedItems = normalizeSetItems();
+        if (normalizedItems.length === 0) {
+            setError('Add at least one component menu with quantity > 0.');
+            return;
+        }
+        const price = Number(editedSet.price);
+        if (!Number.isFinite(price) || price < 0) {
+            setError('Price must be 0 or greater.');
+            return;
+        }
+        setSaving(true);
+        setError(null);
+        try {
+            await Promise.resolve(onSave({
+                ...editedSet,
+                name,
+                price,
+                items: normalizedItems,
+            }));
+        } catch (e) {
+            console.error('Failed to save set menu', e);
+            const message = e instanceof Error ? e.message : 'Failed to save set menu.';
+            setError(message);
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    return (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden" onClick={(e) => e.stopPropagation()}>
+                <div className="p-6 border-b flex justify-between items-center bg-gray-50">
+                    <h2 className="text-2xl font-bold">Edit Set Menu: {setMenu.name || 'New Set Menu'}</h2>
+                    <button onClick={onBack} className="p-2 hover:bg-gray-200 rounded-full transition"><X className="w-6 h-6" /></button>
+                </div>
+                <div className="p-6 overflow-y-auto space-y-6">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Set Name</label>
+                            <input
+                                value={editedSet.name}
+                                onChange={(e) => setEditedSet({ ...editedSet, name: e.target.value })}
+                                className="w-full p-3 bg-gray-50 rounded-xl font-bold border border-gray-200 focus:border-black outline-none"
+                                placeholder="e.g. Family Set A"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Set Price</label>
+                            <input
+                                type="number"
+                                value={Number.isFinite(editedSet.price) ? editedSet.price : 0}
+                                onChange={(e) => setEditedSet({ ...editedSet, price: Number(e.target.value || 0) })}
+                                className="w-full p-3 bg-gray-50 rounded-xl font-bold border border-gray-200 focus:border-black outline-none"
+                            />
+                        </div>
+                    </div>
+
+                    <div className="pt-2 border-t">
+                        <div className="flex items-center justify-between mb-3">
+                            <h3 className="font-bold text-lg">Set Components</h3>
+                            <button
+                                type="button"
+                                onClick={addSetItemRow}
+                                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-black text-white text-xs font-bold hover:bg-gray-800"
+                            >
+                                <Plus className="w-3 h-3" />
+                                Add Component
+                            </button>
+                        </div>
+                        <div className="space-y-3">
+                            {editedSet.items.map((item, idx) => (
+                                <div key={`${item.menuId}-${idx}`} className="grid grid-cols-12 gap-2 items-center">
+                                    <div className="col-span-8">
+                                        <select
+                                            value={item.menuId}
+                                            onChange={(e) => updateSetItem(idx, { menuId: e.target.value })}
+                                            className="w-full p-2 rounded-lg border border-gray-300 text-sm bg-white focus:border-black outline-none"
+                                        >
+                                            <option value="">Select Menu Item</option>
+                                            {menus.map((menu) => (
+                                                <option key={menu.id} value={menu.id}>
+                                                    {menu.name} ({menu.category})
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                    <div className="col-span-3">
+                                        <input
+                                            type="number"
+                                            min={1}
+                                            value={item.quantity}
+                                            onChange={(e) => updateSetItem(idx, { quantity: Math.max(0, Number(e.target.value || 0)) })}
+                                            className="w-full p-2 rounded-lg border border-gray-300 text-sm bg-white focus:border-black outline-none text-center font-semibold"
+                                        />
+                                    </div>
+                                    <div className="col-span-1">
+                                        <button
+                                            type="button"
+                                            onClick={() => removeSetItemRow(idx)}
+                                            className="p-2 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-full transition"
+                                            aria-label="Remove component"
+                                        >
+                                            <Trash2 className="w-4 h-4" />
+                                        </button>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                        {menus.length === 0 && (
+                            <div className="mt-3 text-sm text-red-600">
+                                No normal menu items found. Add menu items first, then create set menus.
+                            </div>
+                        )}
+                    </div>
+                    {error && <div className="text-sm text-red-600 font-semibold">{error}</div>}
+                </div>
+                <div className="p-4 border-t bg-gray-50 flex justify-end gap-3">
+                    <button onClick={onBack} className="px-6 py-3 font-bold text-gray-500 hover:bg-gray-100 rounded-xl transition">Cancel</button>
+                    <button
+                        onClick={handleSave}
+                        disabled={saving}
+                        className={`px-6 py-3 bg-black text-white font-bold rounded-xl transition ${saving ? 'opacity-60 cursor-not-allowed' : 'hover:bg-gray-800'}`}
+                    >
+                        {saving ? 'Saving...' : 'Save Set Menu'}
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+const SetMenuManager: React.FC<{
+    store: Store;
+    menus: Menu[];
+    setMenus: SetMenu[];
+    onEdit: (setMenu: SetMenu) => void;
+    onCreate: (setMenu: SetMenu) => void;
+    onDelete: (id: string) => void;
+}> = ({ store, menus, setMenus, onEdit, onCreate, onDelete }) => {
+    const menuById = useMemo(() => new Map(menus.map((menu) => [menu.id, menu])), [menus]);
+
+    return (
+        <div className="mt-10">
+            <div className="flex justify-between items-center mb-6">
+                <h2 className="text-2xl font-bold">Set Menu Management</h2>
+                <button
+                    onClick={() => onCreate({
+                        id: createLocalEntityId('SM'),
+                        storeId: store.id,
+                        name: 'New Set Menu',
+                        price: 0,
+                        items: [],
+                    })}
+                    className="flex items-center gap-2 bg-black text-white px-4 py-2 rounded-xl font-bold text-sm hover:bg-gray-800"
+                >
+                    <Plus className="w-4 h-4" /> Add Set Menu
+                </button>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {setMenus.map((setMenu) => (
+                    <div key={setMenu.id} className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 hover:shadow-md transition group">
+                        <div className="flex justify-between items-start gap-3">
+                            <div>
+                                <h3 className="font-bold text-lg">{setMenu.name}</h3>
+                                <div className="text-xs text-gray-500 mt-1">{setMenu.items.length} component menu(s)</div>
+                            </div>
+                            <div className="font-bold text-lg">{store.currency} {setMenu.price.toLocaleString()}</div>
+                        </div>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                            {setMenu.items.map((item) => {
+                                const menu = menuById.get(item.menuId);
+                                return (
+                                    <span key={`${setMenu.id}-${item.menuId}`} className="text-xs px-2 py-1 rounded-full bg-gray-100 text-gray-700 font-semibold">
+                                        {menu?.name ?? 'Unknown Menu'} x {item.quantity}
+                                    </span>
+                                );
+                            })}
+                            {setMenu.items.length === 0 && (
+                                <span className="text-xs text-gray-400">No components configured.</span>
+                            )}
+                        </div>
+                        <div className="mt-4 pt-4 border-t flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button onClick={() => onEdit(setMenu)} className="p-2 bg-white rounded-full shadow-sm hover:bg-gray-100"><Settings className="w-4 h-4" /></button>
+                            <button onClick={() => onDelete(setMenu.id)} className="p-2 bg-white text-red-500 rounded-full shadow-sm hover:bg-red-50"><Trash2 className="w-4 h-4" /></button>
+                        </div>
+                    </div>
+                ))}
+            </div>
+            {setMenus.length === 0 && (
+                <div className="text-sm text-gray-400 italic">No set menus yet.</div>
+            )}
+        </div>
+    );
 };
 
 const RecipeEditor: React.FC<{
@@ -2687,6 +3230,7 @@ const HQStoreDetail: React.FC<{
     store: Store;
     sales: Sale[];
     menus: Menu[];
+    setMenus: SetMenu[];
     employees: Employee[];
     ingredients: Ingredient[];
     storeStocks: StoreIngredientStock[];
@@ -2707,10 +3251,14 @@ const HQStoreDetail: React.FC<{
     onUpdateMenu: (menu: Menu) => void;
     onCreateMenu: (menu: Menu) => void;
     onDeleteMenu: (id: string) => void;
+    onUpdateSetMenu: (setMenu: SetMenu) => void;
+    onCreateSetMenu: (setMenu: SetMenu) => void;
+    onDeleteSetMenu: (id: string) => void;
     onUpdateEmployees: (storeId: string, employees: Employee[]) => void;
     onAddIngredient: (ing: Ingredient) => Promise<void> | void;
-}> = ({ store, sales, menus, employees, ingredients, storeStocks, allStores, categories, standardIngredients, currencies, positions, fxRates, fxStatus, salesLookbackLabel, onLoadMoreSales, onBack, onUpdateStore, onSaveStoreStocks, onMergeStores, onDeleteStore, onUpdateMenu, onCreateMenu, onDeleteMenu, onUpdateEmployees, onAddIngredient }) => {
+}> = ({ store, sales, menus, setMenus, employees, ingredients, storeStocks, allStores, categories, standardIngredients, currencies, positions, fxRates, fxStatus, salesLookbackLabel, onLoadMoreSales, onBack, onUpdateStore, onSaveStoreStocks, onMergeStores, onDeleteStore, onUpdateMenu, onCreateMenu, onDeleteMenu, onUpdateSetMenu, onCreateSetMenu, onDeleteSetMenu, onUpdateEmployees, onAddIngredient }) => {
     const storeMenus = menus.filter(m => m.storeId === store.id);
+    const storeSetMenus = setMenus.filter(sm => sm.storeId === store.id);
     const storeEmployees = employees.filter(e => e.storeId === store.id);
     const storeSales = useMemo(() => sales.filter(s => s.storeId === store.id), [sales, store.id]);
     const sortedStoreSales = useMemo(
@@ -2718,6 +3266,7 @@ const HQStoreDetail: React.FC<{
         [storeSales]
     );
     const [editingMenu, setEditingMenu] = useState<Menu | null>(null);
+    const [editingSetMenu, setEditingSetMenu] = useState<SetMenu | null>(null);
     const [viewingReceipt, setViewingReceipt] = useState<string | null>(null);
     const receiptCacheRef = useRef<Record<string, string>>({});
     const [receiptLoadingId, setReceiptLoadingId] = useState<string | null>(null);
@@ -3750,6 +4299,17 @@ const HQStoreDetail: React.FC<{
                   onBack={() => setEditingMenu(null)}
                 />
             )}
+            {editingSetMenu && (
+                <SetMenuEditor
+                    setMenu={editingSetMenu}
+                    menus={storeMenus}
+                    onSave={async (nextSetMenu) => {
+                        await Promise.resolve(onUpdateSetMenu(nextSetMenu));
+                        setEditingSetMenu(null);
+                    }}
+                    onBack={() => setEditingSetMenu(null)}
+                />
+            )}
             
             <button onClick={onBack} className="flex items-center gap-2 text-gray-500 hover:text-black mb-6 font-bold">
                 <ArrowLeft className="w-5 h-5"/> Back to Dashboard
@@ -4338,6 +4898,22 @@ const HQStoreDetail: React.FC<{
                                                         Closure reason: {sale.closedReason}
                                                     </div>
                                                 )}
+                                                <div className="text-xs font-bold text-gray-500 uppercase mb-2">Set Menu Quantities</div>
+                                                {sale.setItems?.length ? (
+                                                    <div className="flex flex-wrap gap-2">
+                                                        {sale.setItems.map((item, idx) => {
+                                                            const setMenu = storeSetMenus.find((row) => row.id === item.setMenuId);
+                                                            return (
+                                                                <div key={`${item.setMenuId}-${idx}`} className="bg-white border border-gray-200 px-2 py-1 rounded text-xs font-bold text-gray-700">
+                                                                    {setMenu?.name ?? 'Unknown Set'} • {item.quantity}
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                ) : (
+                                                    <div className="text-xs text-gray-400 mb-4">No set menu data for this report.</div>
+                                                )}
+
                                                 <div className="text-xs font-bold text-gray-500 uppercase mb-2">Category Quantities</div>
                                                 {sale.items?.length ? (
                                                     <div className="flex flex-wrap gap-2">
@@ -4390,6 +4966,15 @@ const HQStoreDetail: React.FC<{
                 onEdit={setEditingMenu}
                 onCreate={(menu) => setEditingMenu(menu)}
                 onDelete={onDeleteMenu}
+            />
+
+            <SetMenuManager
+                store={store}
+                menus={storeMenus}
+                setMenus={storeSetMenus}
+                onEdit={setEditingSetMenu}
+                onCreate={(setMenu) => setEditingSetMenu(setMenu)}
+                onDelete={onDeleteSetMenu}
             />
 
             <div className="mt-10">
@@ -4545,6 +5130,7 @@ const HQDashboard: React.FC<{
   stores: Store[];
   sales: Sale[];
   menus: Menu[];
+  setMenus: SetMenu[];
   employees: Employee[];
   ingredients: Ingredient[];
   storeStocks: StoreIngredientStock[];
@@ -4566,9 +5152,12 @@ const HQDashboard: React.FC<{
   onUpdateMenu: (menu: Menu) => void;
   onCreateMenu: (menu: Menu) => void;
   onDeleteMenu: (id: string) => void;
+  onUpdateSetMenu: (setMenu: SetMenu) => void;
+  onCreateSetMenu: (setMenu: SetMenu) => void;
+  onDeleteSetMenu: (id: string) => void;
   onUpdateEmployees: (storeId: string, employees: Employee[]) => void;
   onAddIngredient: (ing: Ingredient) => Promise<void> | void;
-}> = ({ user, onLogout, stores, sales, menus, employees, ingredients, storeStocks, globalConfig, salesLookbackLabel, onLoadMoreSales, onUpdateGlobalConfig, onUpdateStore, onSaveStoreStocks, onDeleteStore, onUpdateMenu, onCreateMenu, onDeleteMenu, onUpdateEmployees, onAddIngredient }) => {
+}> = ({ user, onLogout, stores, sales, menus, setMenus, employees, ingredients, storeStocks, globalConfig, salesLookbackLabel, onLoadMoreSales, onUpdateGlobalConfig, onUpdateStore, onSaveStoreStocks, onDeleteStore, onUpdateMenu, onCreateMenu, onDeleteMenu, onUpdateSetMenu, onCreateSetMenu, onDeleteSetMenu, onUpdateEmployees, onAddIngredient }) => {
   const [selectedStore, setSelectedStore] = useState<Store | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isSalesAnalyticsOpen, setIsSalesAnalyticsOpen] = useState(false);
@@ -4695,6 +5284,7 @@ const HQDashboard: React.FC<{
         store={selectedStore}
         sales={sales}
         menus={menus}
+        setMenus={setMenus}
         employees={employees}
         ingredients={ingredients}
         storeStocks={storeStocks}
@@ -4715,6 +5305,9 @@ const HQDashboard: React.FC<{
         onUpdateMenu={onUpdateMenu}
         onCreateMenu={onCreateMenu}
         onDeleteMenu={onDeleteMenu}
+        onUpdateSetMenu={onUpdateSetMenu}
+        onCreateSetMenu={onCreateSetMenu}
+        onDeleteSetMenu={onDeleteSetMenu}
         onUpdateEmployees={onUpdateEmployees}
         onAddIngredient={onAddIngredient}
       />
@@ -4983,6 +5576,7 @@ const StoreDashboard: React.FC<{
   onLogout: () => void;
   sales: Sale[];
   menus: Menu[];
+  setMenus: SetMenu[];
   employees: Employee[];
   ingredients: Ingredient[];
   globalConfig: {
@@ -4994,17 +5588,22 @@ const StoreDashboard: React.FC<{
   onUpdateMenu: (menu: Menu) => void;
   onCreateMenu: (menu: Menu) => void;
   onDeleteMenu: (id: string) => void;
+  onUpdateSetMenu: (setMenu: SetMenu) => void;
+  onCreateSetMenu: (setMenu: SetMenu) => void;
+  onDeleteSetMenu: (id: string) => void;
   onUpdateEmployees: (employees: Employee[]) => void;
   onAddIngredient: (ing: Ingredient) => Promise<void> | void;
-}> = ({ user, store, onLogout, sales, menus, employees, ingredients, globalConfig, onAddSale, onUpdateMenu, onCreateMenu, onDeleteMenu, onUpdateEmployees, onAddIngredient }) => {
+}> = ({ user, store, onLogout, sales, menus, setMenus, employees, ingredients, globalConfig, onAddSale, onUpdateMenu, onCreateMenu, onDeleteMenu, onUpdateSetMenu, onCreateSetMenu, onDeleteSetMenu, onUpdateEmployees, onAddIngredient }) => {
     const [view, setView] = useState<'dashboard' | 'report' | 'menu' | 'staff'>('dashboard');
     const [reportDate, setReportDate] = useState<string | null>(null);
     const [editingMenu, setEditingMenu] = useState<Menu | null>(null);
+    const [editingSetMenu, setEditingSetMenu] = useState<SetMenu | null>(null);
     const navReadyRef = useRef(false);
     const navRestoreRef = useRef(false);
     const popLockRef = useRef(false);
     const ownerViewStorageKey = `${OWNER_VIEW_STORAGE_PREFIX}${store.id}`;
     const storeMenus = menus.filter(m => m.storeId === store.id);
+    const storeSetMenus = setMenus.filter(sm => sm.storeId === store.id);
     const storeEmployees = employees.filter(e => e.storeId === store.id);
     const storeSales = sales.filter(s => s.storeId === store.id);
     const missingDates = useMemo(() => getMissingDates(sales, store.id, 7), [sales, store.id]);
@@ -5208,6 +5807,7 @@ const StoreDashboard: React.FC<{
             setReportDate(state.reportDate ?? null);
             setView(state.view ?? 'dashboard');
             setEditingMenu(null);
+            setEditingSetMenu(null);
         };
         window.addEventListener('popstate', onPopState);
         return () => window.removeEventListener('popstate', onPopState);
@@ -5227,6 +5827,17 @@ const StoreDashboard: React.FC<{
                         setEditingMenu(null);
                     }}
                     onBack={() => setEditingMenu(null)}
+                />
+            )}
+            {editingSetMenu && (
+                <SetMenuEditor
+                    setMenu={editingSetMenu}
+                    menus={storeMenus}
+                    onSave={async (nextSetMenu) => {
+                        await Promise.resolve(onUpdateSetMenu(nextSetMenu));
+                        setEditingSetMenu(null);
+                    }}
+                    onBack={() => setEditingSetMenu(null)}
                 />
             )}
 
@@ -5500,6 +6111,7 @@ const StoreDashboard: React.FC<{
   store={store}
   sales={sales}
   menus={storeMenus}
+  setMenus={storeSetMenus}
   categories={globalConfig.categories}
   initialDate={reportDate}
   onSave={async (sale) => {
@@ -5516,13 +6128,23 @@ const StoreDashboard: React.FC<{
                     )}
 
                     {view === 'menu' && (
-                        <MenuManager 
-                            store={store}
-                            menus={storeMenus}
-                            onEdit={setEditingMenu}
-                            onCreate={(menu) => setEditingMenu(menu)}
-                            onDelete={onDeleteMenu}
-                        />
+                        <div>
+                            <MenuManager 
+                                store={store}
+                                menus={storeMenus}
+                                onEdit={setEditingMenu}
+                                onCreate={(menu) => setEditingMenu(menu)}
+                                onDelete={onDeleteMenu}
+                            />
+                            <SetMenuManager
+                                store={store}
+                                menus={storeMenus}
+                                setMenus={storeSetMenus}
+                                onEdit={setEditingSetMenu}
+                                onCreate={(setMenu) => setEditingSetMenu(setMenu)}
+                                onDelete={onDeleteSetMenu}
+                            />
+                        </div>
                     )}
 
                     {view === 'staff' && (
@@ -5978,7 +6600,8 @@ const App = () => {
   // Data State
   const [stores, setStores] = useState<Store[]>([]);
   const [sales, setSales] = useState<Sale[]>([]);
-  const [menus, setMenus] = useState<Menu[]>([]);
+  const [menus, setMenuRows] = useState<Menu[]>([]);
+  const [setMenus, setSetMenus] = useState<SetMenu[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [ingredients, setIngredients] = useState<Ingredient[]>([]);
   const [storeStocks, setStoreStocks] = useState<StoreIngredientStock[]>([]);
@@ -6044,6 +6667,7 @@ const App = () => {
       loadIngredients(),
       loadEmployees(),
       loadMenus(),
+      loadSetMenus(),
       loadSales(salesLookbackRef.current),
       loadStoreIngredientStocks(),
       loadGlobalConfig(),
@@ -6074,26 +6698,33 @@ const App = () => {
 
     const mnRes = results[3];
     if (mnRes.status === 'fulfilled' && canApplyScopeResult('menus', scopeSnapshot)) {
-      setMenus(mnRes.value);
+      setMenuRows(mnRes.value);
     } else {
       errors.push(mnRes.reason?.message ?? 'Failed to load menus');
     }
 
-    const slRes = results[4];
+    const smRes = results[4];
+    if (smRes.status === 'fulfilled' && canApplyScopeResult('setMenus', scopeSnapshot)) {
+      setSetMenus(smRes.value);
+    } else {
+      errors.push(smRes.reason?.message ?? 'Failed to load set menus');
+    }
+
+    const slRes = results[5];
     if (slRes.status === 'fulfilled' && canApplyScopeResult('sales', scopeSnapshot)) {
       setSales(slRes.value);
     } else {
       errors.push(slRes.reason?.message ?? 'Failed to load sales');
     }
 
-    const ssRes = results[5];
+    const ssRes = results[6];
     if (ssRes.status === 'fulfilled' && canApplyScopeResult('storeStocks', scopeSnapshot)) {
       setStoreStocks(ssRes.value);
     } else {
       errors.push(ssRes.reason?.message ?? 'Failed to load store stock');
     }
 
-    const gcRes = results[6];
+    const gcRes = results[7];
     if (gcRes.status === 'fulfilled' && canApplyScopeResult('globalConfig', scopeSnapshot)) {
       const gc = gcRes.value;
       if (gc.exists === null) {
@@ -6146,7 +6777,10 @@ const App = () => {
       tasks.push(loadEmployees().then((rows) => { if (canApplyScopeResult('employees', scopeSnapshot)) setEmployees(rows); }).catch(e => errors.push(e?.message ?? 'Failed to load employees')));
     }
     if (scopes.has('menus')) {
-      tasks.push(loadMenus().then((rows) => { if (canApplyScopeResult('menus', scopeSnapshot)) setMenus(rows); }).catch(e => errors.push(e?.message ?? 'Failed to load menus')));
+      tasks.push(loadMenus().then((rows) => { if (canApplyScopeResult('menus', scopeSnapshot)) setMenuRows(rows); }).catch(e => errors.push(e?.message ?? 'Failed to load menus')));
+    }
+    if (scopes.has('setMenus')) {
+      tasks.push(loadSetMenus().then((rows) => { if (canApplyScopeResult('setMenus', scopeSnapshot)) setSetMenus(rows); }).catch(e => errors.push(e?.message ?? 'Failed to load set menus')));
     }
     if (scopes.has('sales')) {
       tasks.push(loadSales(salesLookbackRef.current).then((rows) => { if (canApplyScopeResult('sales', scopeSnapshot)) setSales(rows); }).catch(e => errors.push(e?.message ?? 'Failed to load sales')));
@@ -6361,8 +6995,11 @@ const App = () => {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'stores' }, () => schedulePartialRefresh(['stores']))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'sales' }, () => schedulePartialRefresh(['sales']))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'sale_items' }, () => schedulePartialRefresh(['sales']))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'sale_set_items' }, () => schedulePartialRefresh(['sales']))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'menus' }, () => schedulePartialRefresh(['menus']))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'menu_recipe_items' }, () => schedulePartialRefresh(['menus']))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'set_menus' }, () => schedulePartialRefresh(['setMenus']))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'set_menu_items' }, () => schedulePartialRefresh(['setMenus']))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'employees' }, () => schedulePartialRefresh(['employees']))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'ingredients' }, () => schedulePartialRefresh(['ingredients']))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'store_ingredient_stock' }, () => schedulePartialRefresh(['storeStocks']))
@@ -6390,7 +7027,7 @@ const App = () => {
     const intervalId = window.setInterval(() => {
       if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
       if (realtimeSubscribedRef.current) return;
-      schedulePartialRefresh(['sales', 'employees', 'menus', 'storeStocks']);
+      schedulePartialRefresh(['sales', 'employees', 'menus', 'setMenus', 'storeStocks']);
     }, SALES_FALLBACK_POLL_MS);
     return () => window.clearInterval(intervalId);
   }, [sessionEmail, schedulePartialRefresh]);
@@ -6399,7 +7036,7 @@ const App = () => {
     if (!sessionEmail) return;
     const onFocusOrVisible = () => {
       if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
-      schedulePartialRefresh(['sales', 'employees', 'menus', 'storeStocks']);
+      schedulePartialRefresh(['sales', 'employees', 'menus', 'setMenus', 'storeStocks']);
     };
     window.addEventListener('focus', onFocusOrVisible);
     document.addEventListener('visibilitychange', onFocusOrVisible);
@@ -6644,6 +7281,7 @@ if (!resolvedUser) {
               stores={stores}
               sales={sales}
               menus={menus}
+              setMenus={setMenus}
               employees={employees}
               ingredients={ingredients}
               storeStocks={storeStocks}
@@ -6687,7 +7325,7 @@ if (!resolvedUser) {
               }}
               onUpdateMenu={async (m) => {
                 beginScopeMutation(['menus']);
-                setMenus(prev => {
+                setMenuRows(prev => {
                   const exists = prev.some(menu => menu.id === m.id);
                   if (exists) return prev.map(menu => menu.id === m.id ? m : menu);
                   return [...prev, m];
@@ -6704,7 +7342,7 @@ if (!resolvedUser) {
               }}
               onCreateMenu={async (m) => {
                 beginScopeMutation(['menus']);
-                setMenus(prev => {
+                setMenuRows(prev => {
                   const exists = prev.some(menu => menu.id === m.id);
                   if (exists) return prev.map(menu => menu.id === m.id ? m : menu);
                   return [...prev, m];
@@ -6721,7 +7359,7 @@ if (!resolvedUser) {
               }}
               onDeleteMenu={async (id) => {
                 beginScopeMutation(['menus']);
-                setMenus(prev => prev.filter(menu => menu.id !== id));
+                setMenuRows(prev => prev.filter(menu => menu.id !== id));
                 try {
                   await deleteMenu(id);
                 } catch (e) {
@@ -6730,6 +7368,53 @@ if (!resolvedUser) {
                 } finally {
                   endScopeMutation(['menus']);
                   schedulePartialRefresh(['menus']);
+                }
+              }}
+              onUpdateSetMenu={async (setMenu) => {
+                beginScopeMutation(['setMenus']);
+                setSetMenus((prev) => {
+                  const exists = prev.some((row) => row.id === setMenu.id);
+                  if (exists) return prev.map((row) => row.id === setMenu.id ? setMenu : row);
+                  return [...prev, setMenu];
+                });
+                try {
+                  await saveSetMenu(setMenu);
+                } catch (e) {
+                  await refreshAll();
+                  throw e;
+                } finally {
+                  endScopeMutation(['setMenus']);
+                  schedulePartialRefresh(['setMenus']);
+                }
+              }}
+              onCreateSetMenu={async (setMenu) => {
+                beginScopeMutation(['setMenus']);
+                setSetMenus((prev) => {
+                  const exists = prev.some((row) => row.id === setMenu.id);
+                  if (exists) return prev.map((row) => row.id === setMenu.id ? setMenu : row);
+                  return [...prev, setMenu];
+                });
+                try {
+                  await saveSetMenu(setMenu);
+                } catch (e) {
+                  await refreshAll();
+                  throw e;
+                } finally {
+                  endScopeMutation(['setMenus']);
+                  schedulePartialRefresh(['setMenus']);
+                }
+              }}
+              onDeleteSetMenu={async (id) => {
+                beginScopeMutation(['setMenus']);
+                setSetMenus((prev) => prev.filter((row) => row.id !== id));
+                try {
+                  await deleteSetMenu(id);
+                } catch (e) {
+                  await refreshAll();
+                  throw e;
+                } finally {
+                  endScopeMutation(['setMenus']);
+                  schedulePartialRefresh(['setMenus']);
                 }
               }}
               onUpdateEmployees={async (storeId, emps) => { await updateEmployeesForStore(storeId, emps); }}
@@ -6765,6 +7450,7 @@ if (!myStore) {
           onLogout={handleLogout}
           sales={sales}
           menus={menus}
+          setMenus={setMenus}
           employees={employees}
           ingredients={ingredients}
           globalConfig={globalConfig}
@@ -6890,7 +7576,7 @@ if (!myStore) {
 
           onUpdateMenu={async (m) => {
             beginScopeMutation(['menus']);
-            setMenus(prev => {
+            setMenuRows(prev => {
               const exists = prev.some(menu => menu.id === m.id);
               if (exists) return prev.map(menu => menu.id === m.id ? m : menu);
               return [...prev, m];
@@ -6907,7 +7593,7 @@ if (!myStore) {
           }}
           onCreateMenu={async (m) => {
             beginScopeMutation(['menus']);
-            setMenus(prev => {
+            setMenuRows(prev => {
               const exists = prev.some(menu => menu.id === m.id);
               if (exists) return prev.map(menu => menu.id === m.id ? m : menu);
               return [...prev, m];
@@ -6924,7 +7610,7 @@ if (!myStore) {
           }}
           onDeleteMenu={async (id) => {
             beginScopeMutation(['menus']);
-            setMenus(prev => prev.filter(menu => menu.id !== id));
+            setMenuRows(prev => prev.filter(menu => menu.id !== id));
             try {
               await deleteMenu(id);
             } catch (e) {
@@ -6933,6 +7619,53 @@ if (!myStore) {
             } finally {
               endScopeMutation(['menus']);
               schedulePartialRefresh(['menus']);
+            }
+          }}
+          onUpdateSetMenu={async (setMenu) => {
+            beginScopeMutation(['setMenus']);
+            setSetMenus((prev) => {
+              const exists = prev.some((row) => row.id === setMenu.id);
+              if (exists) return prev.map((row) => row.id === setMenu.id ? setMenu : row);
+              return [...prev, setMenu];
+            });
+            try {
+              await saveSetMenu(setMenu);
+            } catch (e) {
+              await refreshAll();
+              throw e;
+            } finally {
+              endScopeMutation(['setMenus']);
+              schedulePartialRefresh(['setMenus']);
+            }
+          }}
+          onCreateSetMenu={async (setMenu) => {
+            beginScopeMutation(['setMenus']);
+            setSetMenus((prev) => {
+              const exists = prev.some((row) => row.id === setMenu.id);
+              if (exists) return prev.map((row) => row.id === setMenu.id ? setMenu : row);
+              return [...prev, setMenu];
+            });
+            try {
+              await saveSetMenu(setMenu);
+            } catch (e) {
+              await refreshAll();
+              throw e;
+            } finally {
+              endScopeMutation(['setMenus']);
+              schedulePartialRefresh(['setMenus']);
+            }
+          }}
+          onDeleteSetMenu={async (id) => {
+            beginScopeMutation(['setMenus']);
+            setSetMenus((prev) => prev.filter((row) => row.id !== id));
+            try {
+              await deleteSetMenu(id);
+            } catch (e) {
+              await refreshAll();
+              throw e;
+            } finally {
+              endScopeMutation(['setMenus']);
+              schedulePartialRefresh(['setMenus']);
             }
           }}
           onUpdateEmployees={async (emps) => { await updateEmployeesForStore(myStore.id, emps); }}
