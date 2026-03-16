@@ -71,6 +71,20 @@ create table if not exists public.menu_recipe_items (
   primary key (menu_id, ingredient_id)
 );
 
+create table if not exists public.set_menus (
+  id text primary key,
+  store_id text not null references public.stores(id) on delete cascade,
+  name text not null,
+  price numeric not null default 0
+);
+
+create table if not exists public.set_menu_items (
+  set_menu_id text not null references public.set_menus(id) on delete cascade,
+  menu_id text not null references public.menus(id) on delete restrict,
+  quantity numeric not null,
+  primary key (set_menu_id, menu_id)
+);
+
 create table if not exists public.sales (
   id text primary key,
   store_id text not null references public.stores(id) on delete cascade,
@@ -86,6 +100,13 @@ create table if not exists public.sale_items (
   menu_id text not null,
   quantity integer not null,
   primary key (sale_id, menu_id)
+);
+
+create table if not exists public.sale_set_items (
+  sale_id text not null references public.sales(id) on delete cascade,
+  set_menu_id text not null references public.set_menus(id) on delete restrict,
+  quantity integer not null,
+  primary key (sale_id, set_menu_id)
 );
 
 -- =========================
@@ -263,8 +284,11 @@ alter table public.store_ingredient_stock enable row level security;
 alter table public.employees enable row level security;
 alter table public.menus enable row level security;
 alter table public.menu_recipe_items enable row level security;
+alter table public.set_menus enable row level security;
+alter table public.set_menu_items enable row level security;
 alter table public.sales enable row level security;
 alter table public.sale_items enable row level security;
+alter table public.sale_set_items enable row level security;
 
 -- app_users: users can read/update their own profile; HQ can read all
 drop policy if exists "app_users_select_own_or_hq" on public.app_users;
@@ -470,6 +494,80 @@ using (
   )
 );
 
+-- set_menus: HQ all; OWNER only own store
+drop policy if exists "set_menus_select_hq_or_own" on public.set_menus;
+create policy "set_menus_select_hq_or_own"
+on public.set_menus for select
+using (public.is_hq() or store_id = public.current_store_id());
+
+drop policy if exists "set_menus_write_hq_or_own" on public.set_menus;
+create policy "set_menus_write_hq_or_own"
+on public.set_menus for insert
+with check (public.is_hq() or store_id = public.current_store_id());
+
+drop policy if exists "set_menus_update_hq_or_own" on public.set_menus;
+create policy "set_menus_update_hq_or_own"
+on public.set_menus for update
+using (public.is_hq() or store_id = public.current_store_id())
+with check (public.is_hq() or store_id = public.current_store_id());
+
+drop policy if exists "set_menus_delete_hq_or_own" on public.set_menus;
+create policy "set_menus_delete_hq_or_own"
+on public.set_menus for delete
+using (public.is_hq() or store_id = public.current_store_id());
+
+-- set_menu_items: HQ all; OWNER only own store via set menu join
+drop policy if exists "set_menu_items_select_hq_or_own" on public.set_menu_items;
+create policy "set_menu_items_select_hq_or_own"
+on public.set_menu_items for select
+using (
+  public.is_hq() or exists (
+    select 1 from public.set_menus sm
+    where sm.id = set_menu_items.set_menu_id
+      and sm.store_id = public.current_store_id()
+  )
+);
+
+drop policy if exists "set_menu_items_write_hq_or_own" on public.set_menu_items;
+create policy "set_menu_items_write_hq_or_own"
+on public.set_menu_items for insert
+with check (
+  public.is_hq() or exists (
+    select 1 from public.set_menus sm
+    where sm.id = set_menu_items.set_menu_id
+      and sm.store_id = public.current_store_id()
+  )
+);
+
+drop policy if exists "set_menu_items_update_hq_or_own" on public.set_menu_items;
+create policy "set_menu_items_update_hq_or_own"
+on public.set_menu_items for update
+using (
+  public.is_hq() or exists (
+    select 1 from public.set_menus sm
+    where sm.id = set_menu_items.set_menu_id
+      and sm.store_id = public.current_store_id()
+  )
+)
+with check (
+  public.is_hq() or exists (
+    select 1 from public.set_menus sm
+    where sm.id = set_menu_items.set_menu_id
+      and sm.store_id = public.current_store_id()
+  )
+);
+
+drop policy if exists "set_menu_items_delete_hq_or_own" on public.set_menu_items;
+create policy "set_menu_items_delete_hq_or_own"
+on public.set_menu_items for delete
+using (
+  public.is_hq() or exists (
+    select 1 from public.set_menus sm
+    where sm.id = set_menu_items.set_menu_id
+      and sm.store_id = public.current_store_id()
+  )
+);
+
 -- sales: HQ all; OWNER own store
 drop policy if exists "sales_select_hq_or_own" on public.sales;
 create policy "sales_select_hq_or_own"
@@ -544,14 +642,71 @@ using (
   )
 );
 
+-- sale_set_items: HQ all; OWNER own store via sales join
+drop policy if exists "sale_set_items_select_hq_or_own" on public.sale_set_items;
+create policy "sale_set_items_select_hq_or_own"
+on public.sale_set_items for select
+using (
+  public.is_hq() or exists (
+    select 1 from public.sales s
+    where s.id = sale_set_items.sale_id
+      and s.store_id = public.current_store_id()
+  )
+);
+
+drop policy if exists "sale_set_items_write_hq_or_own" on public.sale_set_items;
+create policy "sale_set_items_write_hq_or_own"
+on public.sale_set_items for insert
+with check (
+  public.is_hq() or exists (
+    select 1 from public.sales s
+    where s.id = sale_set_items.sale_id
+      and s.store_id = public.current_store_id()
+  )
+);
+
+drop policy if exists "sale_set_items_update_hq_or_own" on public.sale_set_items;
+create policy "sale_set_items_update_hq_or_own"
+on public.sale_set_items for update
+using (
+  public.is_hq() or exists (
+    select 1 from public.sales s
+    where s.id = sale_set_items.sale_id
+      and s.store_id = public.current_store_id()
+  )
+)
+with check (
+  public.is_hq() or exists (
+    select 1 from public.sales s
+    where s.id = sale_set_items.sale_id
+      and s.store_id = public.current_store_id()
+  )
+);
+
+drop policy if exists "sale_set_items_delete_hq_or_own" on public.sale_set_items;
+create policy "sale_set_items_delete_hq_or_own"
+on public.sale_set_items for delete
+using (
+  public.is_hq() or exists (
+    select 1 from public.sales s
+    where s.id = sale_set_items.sale_id
+      and s.store_id = public.current_store_id()
+  )
+);
+
 -- =========================
 -- Indexes (performance)
 -- =========================
 
 create index if not exists sales_store_date_idx on public.sales (store_id, date);
 create index if not exists sale_items_sale_id_idx on public.sale_items (sale_id);
+create index if not exists sale_set_items_sale_id_idx on public.sale_set_items (sale_id);
+create index if not exists sale_set_items_set_menu_id_idx on public.sale_set_items (set_menu_id);
 create index if not exists menu_recipe_items_menu_id_idx on public.menu_recipe_items (menu_id);
 create index if not exists menus_store_id_idx on public.menus (store_id);
+create index if not exists set_menus_store_id_idx on public.set_menus (store_id);
+create index if not exists set_menu_items_set_menu_id_idx on public.set_menu_items (set_menu_id);
+create index if not exists set_menu_items_menu_id_idx on public.set_menu_items (menu_id);
 create index if not exists employees_store_id_idx on public.employees (store_id);
 create index if not exists store_ingredient_stock_store_id_idx on public.store_ingredient_stock (store_id);
 
