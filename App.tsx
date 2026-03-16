@@ -2764,12 +2764,25 @@ const HQStoreDetail: React.FC<{
     const [unlinkError, setUnlinkError] = useState<string | null>(null);
     const [invoiceMonthKey, setInvoiceMonthKey] = useState<string>(() => formatMonthKey(new Date()));
     const [invoiceCurrency, setInvoiceCurrency] = useState<'JPY' | 'USD'>('JPY');
-    const [invoiceNumber, setInvoiceNumber] = useState<string>('CHDR-001');
+    const [invoiceNumber, setInvoiceNumber] = useState<string>('');
+    const [invoiceNumberEdited, setInvoiceNumberEdited] = useState(false);
     const [invoiceMinimumDraft, setInvoiceMinimumDraft] = useState<string>('0');
     const [invoiceBankChargeDraft, setInvoiceBankChargeDraft] = useState<string>('0');
     const [invoiceBankChargeLabel, setInvoiceBankChargeLabel] = useState<string>('Bank Charge');
     const [invoiceSpecialNote, setInvoiceSpecialNote] = useState<string>('');
     const [invoiceError, setInvoiceError] = useState<string | null>(null);
+
+    const defaultInvoiceNumber = useMemo(() => {
+        const monthToken = (invoiceMonthKey || formatMonthKey(new Date())).replace('-', '');
+        const storeToken = (store.id || 'STORE').replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(-4) || 'STORE';
+        return `CHDR-${monthToken}-${storeToken}`;
+    }, [invoiceMonthKey, store.id]);
+
+    useEffect(() => {
+        if (!invoiceNumberEdited) {
+            setInvoiceNumber(defaultInvoiceNumber);
+        }
+    }, [defaultInvoiceNumber, invoiceNumberEdited]);
 
     const openReceipt = async (saleId: string) => {
         setReceiptError(null);
@@ -3066,7 +3079,7 @@ const HQStoreDetail: React.FC<{
         }
 
         const issueDate = new Date();
-        const invoiceNo = invoiceNumber.trim() || 'CHDR-001';
+        const invoiceNo = invoiceNumber.trim() || defaultInvoiceNumber;
         const monthLabel = formatInvoiceMonthCell(invoiceMonthKey);
         const locationText = `${store.country} / ${store.name}`;
         const amountSymbol = invoiceCurrency === 'JPY' ? '¥' : '$';
@@ -3855,10 +3868,25 @@ const HQStoreDetail: React.FC<{
                             <div className="text-[11px] font-bold text-gray-500 mb-1">INV Number</div>
                             <input
                                 value={invoiceNumber}
-                                onChange={(e) => setInvoiceNumber(e.target.value.replace(/[^\dA-Za-z-]/g, ''))}
+                                onChange={(e) => {
+                                    setInvoiceNumberEdited(true);
+                                    setInvoiceNumber(e.target.value.replace(/[^\dA-Za-z-]/g, ''));
+                                }}
                                 className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
-                                placeholder="CHDR-144"
+                                placeholder={defaultInvoiceNumber}
                             />
+                            {invoiceNumberEdited && (
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setInvoiceNumberEdited(false);
+                                        setInvoiceNumber(defaultInvoiceNumber);
+                                    }}
+                                    className="mt-1 text-[11px] font-semibold text-gray-500 hover:text-black"
+                                >
+                                    Use auto INV number
+                                </button>
+                            )}
                         </div>
                         <div>
                             <div className="text-[11px] font-bold text-gray-500 mb-1">Minimum Royalty</div>
@@ -5515,7 +5543,6 @@ const LoginScreen: React.FC = () => {
     const [loginError, setLoginError] = useState<string | null>(null);
     const [loginInfo, setLoginInfo] = useState<string | null>(null);
     const [loginBusy, setLoginBusy] = useState(false);
-    const [loginChannel, setLoginChannel] = useState<'google' | 'email'>('google');
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [authMode, setAuthMode] = useState<'signin' | 'signup'>('signin');
@@ -5560,7 +5587,7 @@ const LoginScreen: React.FC = () => {
     const CompanyLogo = () => (
         <div className="w-56 h-40 mb-6 flex items-center justify-center">
             <img
-                src="/chibo-logo-cropped.png"
+                src="/chibo-logo.png"
                 alt="CHIBO logo"
                 className="w-full h-full object-contain"
                 loading="eager"
@@ -5577,150 +5604,121 @@ const LoginScreen: React.FC = () => {
                     <h1 className="text-2xl font-extrabold text-gray-900 mb-2">CHIBO</h1>
                     <p className="text-gray-500 mb-6">Global Franchise Manager</p>
 
-                    <div className="w-full mb-4 rounded-xl bg-gray-100 p-1 grid grid-cols-2 gap-1">
-                        <button
-                            type="button"
-                            onClick={() => {
-                                setLoginChannel('google');
-                                setLoginError(null);
-                                setLoginInfo(null);
-                            }}
-                            className={`rounded-lg px-3 py-2 text-xs font-bold transition ${
-                                loginChannel === 'google' ? 'bg-black text-white' : 'text-gray-600 hover:bg-white'
-                            }`}
-                        >
-                            Google (Recommended)
-                        </button>
-                        <button
-                            type="button"
-                            onClick={() => {
-                                setLoginChannel('email');
-                                setLoginError(null);
-                                setLoginInfo(null);
-                            }}
-                            className={`rounded-lg px-3 py-2 text-xs font-bold transition ${
-                                loginChannel === 'email' ? 'bg-black text-white' : 'text-gray-600 hover:bg-white'
-                            }`}
-                        >
-                            Email (China Only)
-                        </button>
-                    </div>
+                    <div className="w-full text-left space-y-3">
+                        {isEmbeddedBrowser && (
+                            <div className="w-full rounded-xl border border-amber-200 bg-amber-50 p-3 text-left">
+                                <div className="text-xs font-bold text-amber-900 mb-1">Unsupported in-app browser</div>
+                                <div className="text-xs text-amber-800 leading-relaxed">
+                                    Google login is blocked in embedded browsers (error 403: disallowed_useragent).
+                                    Open this page in Safari/Chrome and sign in there.
+                                </div>
+                            </div>
+                        )}
 
-                    {loginChannel === 'google' ? (
-                        <div className="w-full text-left space-y-3">
-                            {isEmbeddedBrowser && (
-                                <div className="w-full rounded-xl border border-amber-200 bg-amber-50 p-3 text-left">
-                                    <div className="text-xs font-bold text-amber-900 mb-1">Unsupported in-app browser</div>
-                                    <div className="text-xs text-amber-800 leading-relaxed">
-                                        Google login is blocked in embedded browsers (error 403: disallowed_useragent).
-                                        Open this page in Safari/Chrome and sign in there.
-                                    </div>
-                                </div>
-                            )}
-                            <button
-                                onClick={async () => {
-                                    try {
-                                        setLoginError(null);
-                                        setLoginInfo(null);
-                                        await signInWithGoogle();
-                                    } catch (e: any) {
-                                        console.error('Login failed', e);
-                                        setLoginError(toFriendlyOAuthError(e?.message));
-                                    }
-                                }}
-                                disabled={isEmbeddedBrowser}
-                                className="w-full inline-flex items-center justify-center gap-3 px-4 py-3 rounded-xl border border-gray-200 hover:border-gray-300 hover:bg-gray-50 transition font-semibold disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-white disabled:hover:border-gray-200"
-                            >
-                                <span className="text-lg">G</span>
-                                Continue with Google
-                            </button>
-                            <div className="text-[11px] text-gray-500 leading-relaxed">
-                                Recommended for HQ and non-China owners/managers.
-                            </div>
-                            {isEmbeddedBrowser && (
-                                <button
-                                    type="button"
-                                    onClick={() => {
-                                        window.open(window.location.href, '_blank', 'noopener,noreferrer');
-                                    }}
-                                    className="w-full inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-black text-white font-semibold"
-                                >
-                                    Open in External Browser
-                                </button>
-                            )}
-                        </div>
-                    ) : (
-                        <div className="w-full text-left space-y-2">
-                            <input
-                                type="email"
-                                value={email}
-                                onChange={(e) => setEmail(e.target.value)}
-                                autoComplete="email"
-                                placeholder="Email (qq.com / 163.com / etc.)"
-                                className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm"
-                            />
-                            <input
-                                type="password"
-                                value={password}
-                                onChange={(e) => setPassword(e.target.value)}
-                                autoComplete={authMode === 'signin' ? 'current-password' : 'new-password'}
-                                placeholder="Password"
-                                className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm"
-                            />
-                            <button
-                                type="button"
-                                disabled={loginBusy || !email.trim() || !password || (authMode === 'signin' && isHqGoogleOnlyEmail)}
-                                onClick={async () => {
-                                    try {
-                                        setLoginBusy(true);
-                                        setLoginError(null);
-                                        setLoginInfo(null);
-                                        if (authMode === 'signin' && isHqGoogleOnlyEmail) {
-                                            setLoginInfo('This email is HQ-only. Switch to "HQ Admin (Google)" and use Google sign-in.');
-                                            return;
-                                        }
-                                        if (authMode === 'signin') {
-                                            await signInWithEmailPassword(email, password);
-                                        } else {
-                                            await signUpWithEmailPassword(email, password);
-                                            setLoginInfo('Account created. If email confirmation is enabled, verify email first, then sign in.');
-                                            setAuthMode('signin');
-                                        }
-                                    } catch (e: any) {
-                                        console.error('Email auth failed', e);
-                                        setLoginError(toFriendlyAuthError(e?.message));
-                                    } finally {
-                                        setLoginBusy(false);
-                                    }
-                                }}
-                                className="w-full inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-black text-white font-semibold disabled:opacity-50"
-                            >
-                                {loginBusy ? 'Processing...' : authMode === 'signin' ? 'Sign in with Email' : 'Create Owner Account'}
-                            </button>
-                            <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800">
-                                Use email sign-in only if Google sign-in is not available in your region (e.g. China).
-                            </div>
-                            {authMode === 'signin' && isHqGoogleOnlyEmail && (
-                                <div className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs leading-relaxed text-blue-800">
-                                    This email is mapped to HQ Google sign-in and cannot use email/password.
-                                </div>
-                            )}
+                        <button
+                            onClick={async () => {
+                                try {
+                                    setLoginError(null);
+                                    setLoginInfo(null);
+                                    await signInWithGoogle();
+                                } catch (e: any) {
+                                    console.error('Login failed', e);
+                                    setLoginError(toFriendlyOAuthError(e?.message));
+                                }
+                            }}
+                            disabled={isEmbeddedBrowser}
+                            className="w-full inline-flex items-center justify-center gap-3 px-4 py-3 rounded-xl border border-gray-200 hover:border-gray-300 hover:bg-gray-50 transition font-semibold disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-white disabled:hover:border-gray-200"
+                        >
+                            <span className="text-lg">G</span>
+                            Continue with Google
+                        </button>
+
+                        {isEmbeddedBrowser && (
                             <button
                                 type="button"
                                 onClick={() => {
-                                    setAuthMode((prev) => (prev === 'signin' ? 'signup' : 'signin'));
+                                    window.open(window.location.href, '_blank', 'noopener,noreferrer');
+                                }}
+                                className="w-full inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-black text-white font-semibold"
+                            >
+                                Open in External Browser
+                            </button>
+                        )}
+                    </div>
+
+                    <div className="w-full my-4 flex items-center gap-3">
+                        <div className="h-px bg-gray-200 flex-1" />
+                        <span className="text-[11px] font-bold text-gray-400">OR</span>
+                        <div className="h-px bg-gray-200 flex-1" />
+                    </div>
+
+                    <div className="w-full text-left space-y-2">
+                        <input
+                            type="email"
+                            value={email}
+                            onChange={(e) => setEmail(e.target.value)}
+                            autoComplete="email"
+                            placeholder="Email"
+                            className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm"
+                        />
+                        <input
+                            type="password"
+                            value={password}
+                            onChange={(e) => setPassword(e.target.value)}
+                            autoComplete={authMode === 'signin' ? 'current-password' : 'new-password'}
+                            placeholder="Password"
+                            className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm"
+                        />
+                        <button
+                            type="button"
+                            disabled={loginBusy || !email.trim() || !password || (authMode === 'signin' && isHqGoogleOnlyEmail)}
+                            onClick={async () => {
+                                try {
+                                    setLoginBusy(true);
                                     setLoginError(null);
                                     setLoginInfo(null);
-                                }}
-                                className="w-full text-xs font-semibold text-gray-600 hover:text-black"
-                            >
-                                {authMode === 'signin' ? 'Need account? Create one' : 'Already have account? Sign in'}
-                            </button>
-                            <div className="text-[11px] text-gray-500 leading-relaxed">
-                                Password reset is handled by HQ admin in this pilot phase.
+                                    if (authMode === 'signin' && isHqGoogleOnlyEmail) {
+                                        setLoginInfo('This HQ account must sign in with Google.');
+                                        return;
+                                    }
+                                    if (authMode === 'signin') {
+                                        await signInWithEmailPassword(email, password);
+                                    } else {
+                                        await signUpWithEmailPassword(email, password);
+                                        setLoginInfo('Account created. If email confirmation is enabled, verify email first, then sign in.');
+                                        setAuthMode('signin');
+                                    }
+                                } catch (e: any) {
+                                    console.error('Email auth failed', e);
+                                    setLoginError(toFriendlyAuthError(e?.message));
+                                } finally {
+                                    setLoginBusy(false);
+                                }
+                            }}
+                            className="w-full inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-black text-white font-semibold disabled:opacity-50"
+                        >
+                            {loginBusy ? 'Processing...' : authMode === 'signin' ? 'Sign in with Email' : 'Create Owner Account'}
+                        </button>
+                        {authMode === 'signin' && isHqGoogleOnlyEmail && (
+                            <div className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs leading-relaxed text-blue-800">
+                                This email is mapped to HQ Google sign-in and cannot use email/password.
                             </div>
+                        )}
+                        <button
+                            type="button"
+                            onClick={() => {
+                                setAuthMode((prev) => (prev === 'signin' ? 'signup' : 'signin'));
+                                setLoginError(null);
+                                setLoginInfo(null);
+                            }}
+                            className="w-full text-xs font-semibold text-gray-600 hover:text-black"
+                        >
+                            {authMode === 'signin' ? 'Need account? Create one' : 'Already have account? Sign in'}
+                        </button>
+                        <div className="text-[11px] text-gray-500 leading-relaxed">
+                            Password reset is handled by HQ admin in this pilot phase.
                         </div>
-                    )}
+                    </div>
 
                     {loginInfo && (
                         <div className="mt-4 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-xl p-2 w-full text-left">{loginInfo}</div>
