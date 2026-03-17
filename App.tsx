@@ -1212,11 +1212,15 @@ type InvoiceHtmlParams = {
   fxSalesText: string;
   royaltyRateText: string;
   rowAmountText: string;
+  royaltyAmountText: string;
   minimumText: string;
   bankChargeTitle: string;
   bankChargeText: string;
   showBankCharge: boolean;
-  totalText: string;
+  showWithholdingTax: boolean;
+  withholdingTaxText: string;
+  finalAmountLabelText: string;
+  finalAmountText: string;
   invoiceCurrency: string;
   signatureUrl: string;
   specialNoteHtml: string;
@@ -1250,15 +1254,23 @@ function buildInvoiceHtml(params: InvoiceHtmlParams): string {
     fxSalesText,
     royaltyRateText,
     rowAmountText,
+    royaltyAmountText,
     minimumText,
     bankChargeTitle,
     bankChargeText,
     showBankCharge,
-    totalText,
+    showWithholdingTax,
+    withholdingTaxText,
+    finalAmountLabelText,
+    finalAmountText,
     invoiceCurrency,
     signatureUrl,
     specialNoteHtml,
   } = params;
+  const buyerTextTrimmed = buyerText.trim();
+  const buyerLines = buyerTextTrimmed ? buyerTextTrimmed.split(/\r?\n/).map((line) => line.trim()).filter(Boolean) : ['-'];
+  const buyerMetaHtml = buyerLines.map((line) => escapeHtml(line)).join('<br/>');
+  const buyerFooterText = escapeHtml(buyerLines[0] ?? '-');
   const headerLine1 = escapeHtml(INVOICE_ISSUER.addressLine1);
   const headerLine2 = escapeHtml(INVOICE_ISSUER.addressLine2);
   const phone = escapeHtml(INVOICE_ISSUER.phone);
@@ -1489,7 +1501,7 @@ function buildInvoiceHtml(params: InvoiceHtmlParams): string {
       </div>
 
       <div class="meta-row">
-        <div><span style="margin-right:8px;">TO :</span> ${escapeHtml(buyerText)}</div>
+        <div><span style="margin-right:8px;">TO :</span> ${buyerMetaHtml}</div>
         <div class="meta-right">
           <div><span style="display:inline-block; width:82px;">INV Number:</span> ${escapeHtml(invoiceNo)}</div>
           <div><span style="display:inline-block; width:82px;">DATE:</span> ${escapeHtml(invoiceDateText)}</div>
@@ -1533,10 +1545,12 @@ function buildInvoiceHtml(params: InvoiceHtmlParams): string {
           <span class="note">${specialNoteHtml || '&nbsp;'}</span>
           <span class="amount">${escapeHtml(minimumText)}</span>
         </div>
+        ${showWithholdingTax ? `<div class="summary-line"><span>Royalty Amount</span><span>${escapeHtml(royaltyAmountText)}</span></div>` : ''}
+        ${showWithholdingTax ? `<div class="summary-line"><span>Withholding Tax</span><span>${escapeHtml(withholdingTaxText)}</span></div>` : ''}
         ${showBankCharge ? `<div class="summary-line red"><span>${escapeHtml(bankChargeTitle)}</span><span>${escapeHtml(bankChargeText)}</span></div>` : ''}
         <div class="summary-line total">
-          <span class="label">Royalty Amount</span>
-          <span class="amount">${escapeHtml(totalText)}</span>
+          <span class="label">${escapeHtml(finalAmountLabelText)}</span>
+          <span class="amount">${escapeHtml(finalAmountText)}</span>
         </div>
       </div>
 
@@ -1548,7 +1562,7 @@ function buildInvoiceHtml(params: InvoiceHtmlParams): string {
       <div class="footer">
         <div>
           <div>Buyer:</div>
-          <div>${escapeHtml(buyerText)}</div>
+          <div>${buyerFooterText}</div>
           <div style="width:66mm; border-top:1px solid #333; margin-top:36px;"></div>
         </div>
         <div style="text-align:left;">
@@ -1570,6 +1584,12 @@ const parseMoneyInput = (raw: string): number => {
   const n = Number(raw.replace(/[^\d.-]/g, ''));
   if (Number.isNaN(n) || !Number.isFinite(n)) return 0;
   return Math.max(0, Math.round(n));
+};
+
+const parsePercentInput = (raw: string): number => {
+  const n = Number(raw.replace(/[^\d.-]/g, ''));
+  if (Number.isNaN(n) || !Number.isFinite(n)) return 0;
+  return Math.max(0, n);
 };
 
 const convertAmountByUsdRates = (
@@ -3524,17 +3544,46 @@ const HQStoreDetail: React.FC<{
     const [unlinkError, setUnlinkError] = useState<string | null>(null);
     const [invoiceMonthKey, setInvoiceMonthKey] = useState<string>(() => formatMonthKey(new Date()));
     const [invoiceCurrency, setInvoiceCurrency] = useState<'JPY' | 'USD'>('JPY');
+    const defaultInvoiceSummaryMode = useMemo<'royalty_only' | 'withholding'>(() => {
+        const country = String(store.country ?? '').toLowerCase();
+        const name = String(store.name ?? '').toLowerCase();
+        const isChinaStore = country.includes('china') || country.includes('中国') || country.includes('중국')
+            || name.includes('ningbo') || name.includes('宁波') || name.includes('寧波');
+        return isChinaStore ? 'withholding' : 'royalty_only';
+    }, [store.id, store.country, store.name]);
+    const [invoiceSummaryMode, setInvoiceSummaryMode] = useState<'royalty_only' | 'withholding'>(defaultInvoiceSummaryMode);
     const [invoiceNumber, setInvoiceNumber] = useState<string>('');
     const [invoiceNumberEdited, setInvoiceNumberEdited] = useState(false);
     const [invoiceMinimumDraft, setInvoiceMinimumDraft] = useState<string>('0');
+    const defaultWithholdingRateDraft = useMemo(() => {
+        const country = String(store.country ?? '').toLowerCase();
+        const name = String(store.name ?? '').toLowerCase();
+        const isChinaStore = country.includes('china') || country.includes('中国') || country.includes('중국')
+            || name.includes('ningbo') || name.includes('宁波') || name.includes('寧波');
+        return isChinaStore ? '15.09' : '0';
+    }, [store.id, store.country, store.name]);
+    const [invoiceWithholdingTaxRateDraft, setInvoiceWithholdingTaxRateDraft] = useState<string>(defaultWithholdingRateDraft);
     const [invoiceBankChargeDraft, setInvoiceBankChargeDraft] = useState<string>('0');
     const [invoiceBankChargeLabel, setInvoiceBankChargeLabel] = useState<string>('Bank Charge');
+    const [invoiceToDraft, setInvoiceToDraft] = useState<string>(store.name || '');
     const [invoiceSpecialNote, setInvoiceSpecialNote] = useState<string>('');
     const [invoiceError, setInvoiceError] = useState<string | null>(null);
 
     useEffect(() => {
         setSalesMonthFilter(defaultSalesMonthKey);
     }, [store.id, defaultSalesMonthKey]);
+
+    useEffect(() => {
+        setInvoiceWithholdingTaxRateDraft(defaultWithholdingRateDraft);
+    }, [defaultWithholdingRateDraft]);
+
+    useEffect(() => {
+        setInvoiceSummaryMode(defaultInvoiceSummaryMode);
+    }, [defaultInvoiceSummaryMode]);
+
+    useEffect(() => {
+        setInvoiceToDraft(store.name || '');
+    }, [store.id, store.name]);
 
     const defaultInvoiceNumber = useMemo(() => {
         const monthToken = (invoiceMonthKey || formatMonthKey(new Date())).replace('-', '');
@@ -3815,9 +3864,12 @@ const HQStoreDetail: React.FC<{
         const royaltyRate = store.royaltyPercentage || 0;
         const salesRoyalty = convertedSales === null ? null : Math.round((convertedSales * royaltyRate) / 100);
         const minimumRoyalty = parseMoneyInput(invoiceMinimumDraft);
+        const requestedWithholdingRate = parsePercentInput(invoiceWithholdingTaxRateDraft);
+        const withholdingRate = invoiceSummaryMode === 'withholding' ? requestedWithholdingRate : 0;
         const bankCharge = parseMoneyInput(invoiceBankChargeDraft);
         const royaltyBase = salesRoyalty === null ? 0 : Math.max(salesRoyalty, minimumRoyalty);
-        const totalDue = royaltyBase + bankCharge;
+        const withholdingTax = Math.round((royaltyBase * withholdingRate) / 100);
+        const totalDue = Math.max(0, royaltyBase - withholdingTax + bankCharge);
         return {
             monthSales,
             localSalesTotal,
@@ -3825,11 +3877,24 @@ const HQStoreDetail: React.FC<{
             royaltyRate,
             salesRoyalty,
             minimumRoyalty,
+            withholdingRate,
+            withholdingTax,
             bankCharge,
             royaltyBase,
             totalDue,
         };
-    }, [storeSales, invoiceMonthKey, store.currency, invoiceCurrency, fxRates, store.royaltyPercentage, invoiceMinimumDraft, invoiceBankChargeDraft]);
+    }, [
+        storeSales,
+        invoiceMonthKey,
+        store.currency,
+        invoiceCurrency,
+        fxRates,
+        store.royaltyPercentage,
+        invoiceMinimumDraft,
+        invoiceSummaryMode,
+        invoiceWithholdingTaxRateDraft,
+        invoiceBankChargeDraft,
+    ]);
 
     const handleGenerateInvoicePdf = () => {
         setInvoiceError(null);
@@ -3856,9 +3921,12 @@ const HQStoreDetail: React.FC<{
         const fxSalesText = formatAmount(invoiceSummary.convertedSales);
         const royaltyRateText = `${invoiceSummary.royaltyRate}%`;
         const minimumText = formatAmount(invoiceSummary.minimumRoyalty);
+        const withholdingTaxText = formatAmount(invoiceSummary.withholdingTax);
         const totalText = formatAmount(invoiceSummary.totalDue);
         const bankChargeText = formatAmount(invoiceSummary.bankCharge);
-        const buyerText = store.name;
+        const buyerText = invoiceToDraft.trim() || store.name;
+        const showWithholdingTax = invoiceSummaryMode === 'withholding';
+        const finalAmountLabelText = showWithholdingTax ? 'Remittance Amount' : 'Royalty Amount';
         const invoiceDateText = formatInvoiceDateDot(issueDate);
         const signatureUrl = `${window.location.origin}/invoice-signature-kasumi.png`;
         const specialNoteHtml = escapeHtml(invoiceSpecialNote.trim()).replace(/\n/g, '<br/>');
@@ -3873,11 +3941,15 @@ const HQStoreDetail: React.FC<{
             fxSalesText,
             royaltyRateText,
             rowAmountText: formatAmount(rowAmount),
+            royaltyAmountText: formatAmount(invoiceSummary.royaltyBase),
             minimumText,
             bankChargeTitle,
             bankChargeText,
             showBankCharge: invoiceSummary.bankCharge > 0,
-            totalText,
+            showWithholdingTax,
+            withholdingTaxText,
+            finalAmountLabelText,
+            finalAmountText: totalText,
             invoiceCurrency,
             signatureUrl,
             specialNoteHtml,
@@ -4613,7 +4685,7 @@ const HQStoreDetail: React.FC<{
                             Generate Invoice PDF
                         </button>
                     </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-6 gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-8 gap-3">
                         <div>
                             <div className="text-[11px] font-bold text-gray-500 mb-1">Invoice Month</div>
                             <select
@@ -4637,6 +4709,17 @@ const HQStoreDetail: React.FC<{
                             >
                                 <option value="JPY">JPY</option>
                                 <option value="USD">USD</option>
+                            </select>
+                        </div>
+                        <div>
+                            <div className="text-[11px] font-bold text-gray-500 mb-1">Summary Format</div>
+                            <select
+                                value={invoiceSummaryMode}
+                                onChange={(e) => setInvoiceSummaryMode(e.target.value as 'royalty_only' | 'withholding')}
+                                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                            >
+                                <option value="royalty_only">Royalty Amount only</option>
+                                <option value="withholding">Royalty + Withholding + Remittance</option>
                             </select>
                         </div>
                         <div>
@@ -4672,6 +4755,17 @@ const HQStoreDetail: React.FC<{
                                 placeholder="150000"
                             />
                         </div>
+                        {invoiceSummaryMode === 'withholding' && (
+                            <div>
+                                <div className="text-[11px] font-bold text-gray-500 mb-1">Withholding Tax (%)</div>
+                                <input
+                                    value={invoiceWithholdingTaxRateDraft}
+                                    onChange={(e) => setInvoiceWithholdingTaxRateDraft(normalizePercentInput(e.target.value))}
+                                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                                    placeholder="15.09"
+                                />
+                            </div>
+                        )}
                         <div>
                             <div className="text-[11px] font-bold text-gray-500 mb-1">Bank Charge</div>
                             <input
@@ -4692,6 +4786,15 @@ const HQStoreDetail: React.FC<{
                         </div>
                     </div>
                     <div>
+                        <div className="text-[11px] font-bold text-gray-500 mb-1">TO (Buyer)</div>
+                        <textarea
+                            value={invoiceToDraft}
+                            onChange={(e) => setInvoiceToDraft(e.target.value)}
+                            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm min-h-[64px] resize-y"
+                            placeholder={`Buyer company / recipient name\nAddress line 1\nAddress line 2`}
+                        />
+                    </div>
+                    <div>
                         <div className="text-[11px] font-bold text-gray-500 mb-1">Special Note</div>
                         <textarea
                             value={invoiceSpecialNote}
@@ -4700,7 +4803,7 @@ const HQStoreDetail: React.FC<{
                             placeholder={`Optional note for the invoice body.\nExample: smaller than 100 m2`}
                         />
                     </div>
-                    <div className="text-xs text-gray-600 grid sm:grid-cols-3 gap-2">
+                    <div className="text-xs text-gray-600 grid sm:grid-cols-4 gap-2">
                         <div>
                             Local Sales: <span className="font-bold">{store.currency} {invoiceSummary.localSalesTotal.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
                         </div>
@@ -4708,7 +4811,16 @@ const HQStoreDetail: React.FC<{
                             Sales ({invoiceCurrency}): <span className="font-bold">{invoiceSummary.convertedSales === null ? 'N/A' : invoiceSummary.convertedSales.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
                         </div>
                         <div>
-                            Royalty Amount: <span className="font-bold">{invoiceCurrency} {invoiceSummary.totalDue.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                            Royalty Amount: <span className="font-bold">{invoiceCurrency} {invoiceSummary.royaltyBase.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                        </div>
+                        {invoiceSummaryMode === 'withholding' && (
+                            <div>
+                                Withholding Tax: <span className="font-bold">{invoiceCurrency} {invoiceSummary.withholdingTax.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                            </div>
+                        )}
+                        <div>
+                            {invoiceSummaryMode === 'withholding' ? 'Remittance Amount' : 'Royalty Amount'}:{' '}
+                            <span className="font-bold">{invoiceCurrency} {invoiceSummary.totalDue.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
                         </div>
                     </div>
                     {invoiceError && <div className="text-xs text-red-600">{invoiceError}</div>}
