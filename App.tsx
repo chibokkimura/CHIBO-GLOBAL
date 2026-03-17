@@ -666,7 +666,7 @@ async function loadSales(daysBack?: number): Promise<Sale[]> {
     setItemsBySale[r.sale_id] = arr;
   });
 
-  return (salesData ?? []).map((s: any) => ({
+  const mappedSales = (salesData ?? []).map((s: any) => ({
     id: s.id,
     storeId: s.store_id,
     date: s.date,
@@ -677,6 +677,34 @@ async function loadSales(daysBack?: number): Promise<Sale[]> {
     isClosed: Boolean(s.is_closed),
     closedReason: s.closed_reason ?? undefined,
   }));
+
+  const scoreSale = (entry: Sale) => {
+    let score = 0;
+    if ((entry.items?.length ?? 0) > 0) score += 10;
+    if ((entry.setItems?.length ?? 0) > 0) score += 6;
+    if (entry.hasReceipt) score += 3;
+    if (entry.totalAmount > 0) score += 1;
+    return score;
+  };
+
+  const dedupedByStoreDate = new Map<string, Sale>();
+  for (const row of mappedSales) {
+    const key = `${row.storeId}::${row.date}`;
+    const current = dedupedByStoreDate.get(key);
+    if (!current) {
+      dedupedByStoreDate.set(key, row);
+      continue;
+    }
+    const currentScore = scoreSale(current);
+    const nextScore = scoreSale(row);
+    if (nextScore > currentScore || (nextScore === currentScore && String(row.id) > String(current.id))) {
+      dedupedByStoreDate.set(key, row);
+    }
+  }
+
+  return Array.from(dedupedByStoreDate.values()).sort(
+    (a, b) => b.date.localeCompare(a.date) || String(b.id).localeCompare(String(a.id))
+  );
 }
 
 async function loadReceiptImage(saleId: string): Promise<string | null> {
@@ -946,47 +974,87 @@ async function uploadReceiptImage(storeId: string, saleId: string, dataUrl: stri
 }
 
 async function addSale(sale: Sale) {
+  const { data: existingRows, error: existingErr } = await supabase
+    .from('sales')
+    .select('id')
+    .eq('store_id', sale.storeId)
+    .eq('date', sale.date)
+    .order('id', { ascending: false })
+    .limit(1);
+  if (existingErr) throw existingErr;
+  const existingSaleId = existingRows?.[0]?.id ? String(existingRows[0].id) : null;
+  const targetSaleId = existingSaleId ?? sale.id;
+
   let receiptPath: string | null = null;
   if (!sale.isClosed && !sale.receiptImage) {
     throw new Error('Receipt image is required for open days.');
   }
   if (sale.receiptImage && !sale.isClosed) {
     try {
-      receiptPath = await uploadReceiptImage(sale.storeId, sale.id, sale.receiptImage);
+      receiptPath = await uploadReceiptImage(sale.storeId, targetSaleId, sale.receiptImage);
     } catch (e) {
       console.error('Receipt upload failed', e);
       throw new Error('Failed to upload receipt image. Please retry.');
     }
   }
-  const basePayload = {
-    id: sale.id,
+
+  const insertBasePayload = {
+    id: targetSaleId,
     store_id: sale.storeId,
     date: sale.date,
     total_amount: sale.totalAmount,
     receipt_image: receiptPath,
   };
-  const payloadWithIsClosed = {
-    ...basePayload,
+  const insertPayloadWithIsClosed = {
+    ...insertBasePayload,
     is_closed: sale.isClosed ?? false,
   };
-  const payloadWithClosedReason = {
-    ...payloadWithIsClosed,
+  const insertPayloadWithClosedReason = {
+    ...insertPayloadWithIsClosed,
     closed_reason: sale.closedReason ?? null,
   };
+
+  const updateBasePayload = {
+    total_amount: sale.totalAmount,
+    receipt_image: receiptPath,
+  };
+  const updatePayloadWithIsClosed = {
+    ...updateBasePayload,
+    is_closed: sale.isClosed ?? false,
+  };
+  const updatePayloadWithClosedReason = {
+    ...updatePayloadWithIsClosed,
+    closed_reason: sale.closedReason ?? null,
+  };
+
   const preferClosedReason = salesClosedReasonColumnSupported !== false;
   const preferIsClosed = salesIsClosedColumnSupported !== false;
   const payloadOrder = preferClosedReason
-    ? [payloadWithClosedReason, payloadWithIsClosed, basePayload]
-    : (preferIsClosed ? [payloadWithIsClosed, basePayload] : [basePayload]);
+    ? (
+      existingSaleId
+        ? [updatePayloadWithClosedReason, updatePayloadWithIsClosed, updateBasePayload]
+        : [insertPayloadWithClosedReason, insertPayloadWithIsClosed, insertBasePayload]
+    )
+    : (
+      preferIsClosed
+        ? (existingSaleId ? [updatePayloadWithIsClosed, updateBasePayload] : [insertPayloadWithIsClosed, insertBasePayload])
+        : (existingSaleId ? [updateBasePayload] : [insertBasePayload])
+    );
 
   let sErr: any = null;
-  let insertedPayloadType: 'full' | 'isClosedOnly' | 'legacy' | null = null;
+  let writtenPayloadType: 'full' | 'isClosedOnly' | 'legacy' | null = null;
   for (const payload of payloadOrder) {
-    const result = await supabase.from('sales').insert(payload);
+    const result = existingSaleId
+      ? await supabase.from('sales').update(payload).eq('id', targetSaleId)
+      : await supabase.from('sales').insert(payload);
     if (!result.error) {
-      if (payload === payloadWithClosedReason) insertedPayloadType = 'full';
-      else if (payload === payloadWithIsClosed) insertedPayloadType = 'isClosedOnly';
-      else insertedPayloadType = 'legacy';
+      if (payload === insertPayloadWithClosedReason || payload === updatePayloadWithClosedReason) {
+        writtenPayloadType = 'full';
+      } else if (payload === insertPayloadWithIsClosed || payload === updatePayloadWithIsClosed) {
+        writtenPayloadType = 'isClosedOnly';
+      } else {
+        writtenPayloadType = 'legacy';
+      }
       sErr = null;
       break;
     }
@@ -999,9 +1067,9 @@ async function addSale(sale: Sale) {
     break;
   }
 
-  if (insertedPayloadType) {
-    salesClosedReasonColumnSupported = insertedPayloadType === 'full';
-    salesIsClosedColumnSupported = insertedPayloadType !== 'legacy';
+  if (writtenPayloadType) {
+    salesClosedReasonColumnSupported = writtenPayloadType === 'full';
+    salesIsClosedColumnSupported = writtenPayloadType !== 'legacy';
   }
 
   if (sErr) {
@@ -1009,9 +1077,20 @@ async function addSale(sale: Sale) {
     throw new Error(`Failed to save sales report: ${message}`);
   }
 
+  if (existingSaleId) {
+    const { error: clearItemsErr } = await supabase
+      .from('sale_items')
+      .delete()
+      .eq('sale_id', targetSaleId);
+    if (clearItemsErr) {
+      const message = clearItemsErr.message || 'Unknown clear sale items error';
+      throw new Error(`Failed to refresh sale items: ${message}`);
+    }
+  }
+
   if (sale.items?.length) {
     const rows = sale.items.map(i => ({
-      sale_id: sale.id,
+      sale_id: targetSaleId,
       menu_id: i.menuId,
       quantity: i.quantity,
     }));
@@ -1022,11 +1101,26 @@ async function addSale(sale: Sale) {
     }
   }
 
+  if (existingSaleId && saleSetItemsTableSupported !== false) {
+    const { error: clearSetItemsErr } = await supabase
+      .from('sale_set_items')
+      .delete()
+      .eq('sale_id', targetSaleId);
+    if (clearSetItemsErr) {
+      if (isMissingTableError(clearSetItemsErr, 'sale_set_items')) {
+        saleSetItemsTableSupported = false;
+      } else {
+        const message = clearSetItemsErr.message || 'Unknown clear set menu items error';
+        throw new Error(`Failed to refresh set menu items: ${message}`);
+      }
+    }
+  }
+
   if (sale.setItems?.length && saleSetItemsTableSupported !== false) {
     const setRows = sale.setItems
       .filter((item) => Number(item.quantity) > 0 && item.setMenuId)
       .map((item) => ({
-        sale_id: sale.id,
+        sale_id: targetSaleId,
         set_menu_id: item.setMenuId,
         quantity: Number(item.quantity),
       }));
