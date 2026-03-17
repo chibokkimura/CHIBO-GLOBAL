@@ -678,33 +678,7 @@ async function loadSales(daysBack?: number): Promise<Sale[]> {
     closedReason: s.closed_reason ?? undefined,
   }));
 
-  const scoreSale = (entry: Sale) => {
-    let score = 0;
-    if ((entry.items?.length ?? 0) > 0) score += 10;
-    if ((entry.setItems?.length ?? 0) > 0) score += 6;
-    if (entry.hasReceipt) score += 3;
-    if (entry.totalAmount > 0) score += 1;
-    return score;
-  };
-
-  const dedupedByStoreDate = new Map<string, Sale>();
-  for (const row of mappedSales) {
-    const key = `${row.storeId}::${row.date}`;
-    const current = dedupedByStoreDate.get(key);
-    if (!current) {
-      dedupedByStoreDate.set(key, row);
-      continue;
-    }
-    const currentScore = scoreSale(current);
-    const nextScore = scoreSale(row);
-    if (nextScore > currentScore || (nextScore === currentScore && String(row.id) > String(current.id))) {
-      dedupedByStoreDate.set(key, row);
-    }
-  }
-
-  return Array.from(dedupedByStoreDate.values()).sort(
-    (a, b) => b.date.localeCompare(a.date) || String(b.id).localeCompare(String(a.id))
-  );
+  return dedupeSalesByStoreDate(mappedSales);
 }
 
 async function loadReceiptImage(saleId: string): Promise<string | null> {
@@ -1151,6 +1125,53 @@ const formatDate = (date: Date) => {
   return `${year}-${month}-${day}`;
 };
 const formatMonthKey = (date: Date) => formatDate(date).slice(0, 7);
+
+const formatMonthKeyLabel = (monthKey: string) => {
+  const [year, month] = monthKey.split('-').map((v) => Number(v));
+  if (!year || !month) return monthKey;
+  return new Date(year, month - 1, 1).toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'long',
+  });
+};
+
+const extractMonthKey = (dateText: string) => {
+  if (!dateText || dateText.length < 7) return '';
+  return dateText.slice(0, 7);
+};
+
+const scoreSaleCompleteness = (entry: Sale) => {
+  let score = 0;
+  if ((entry.items?.length ?? 0) > 0) score += 10;
+  if ((entry.setItems?.length ?? 0) > 0) score += 6;
+  if (entry.hasReceipt) score += 3;
+  if (entry.totalAmount > 0) score += 1;
+  return score;
+};
+
+const preferSaleEntry = (current: Sale, next: Sale): Sale => {
+  const currentScore = scoreSaleCompleteness(current);
+  const nextScore = scoreSaleCompleteness(next);
+  if (nextScore > currentScore) return next;
+  if (nextScore < currentScore) return current;
+  return String(next.id) > String(current.id) ? next : current;
+};
+
+const dedupeSalesByStoreDate = (rows: Sale[]): Sale[] => {
+  const dedupedByStoreDate = new Map<string, Sale>();
+  for (const row of rows) {
+    const key = `${row.storeId}::${row.date}`;
+    const current = dedupedByStoreDate.get(key);
+    if (!current) {
+      dedupedByStoreDate.set(key, row);
+      continue;
+    }
+    dedupedByStoreDate.set(key, preferSaleEntry(current, row));
+  }
+  return Array.from(dedupedByStoreDate.values()).sort(
+    (a, b) => b.date.localeCompare(a.date) || String(b.id).localeCompare(String(a.id))
+  );
+};
 
 const formatInvoiceMonthLabel = (monthKey: string) => {
   const [y, m] = monthKey.split('-').map((v) => Number(v));
@@ -3441,6 +3462,20 @@ const HQStoreDetail: React.FC<{
         () => [...storeSales].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()),
         [storeSales]
     );
+    const defaultSalesMonthKey = 'all';
+    const salesMonthOptions = useMemo(() => {
+        const keys = new Set<string>();
+        sortedStoreSales.forEach((sale) => {
+            const key = extractMonthKey(sale.date);
+            if (key) keys.add(key);
+        });
+        return Array.from(keys).sort((a, b) => b.localeCompare(a));
+    }, [sortedStoreSales]);
+    const [salesMonthFilter, setSalesMonthFilter] = useState<string>(defaultSalesMonthKey);
+    const visibleStoreSales = useMemo(() => {
+        if (salesMonthFilter === 'all') return sortedStoreSales;
+        return sortedStoreSales.filter((sale) => extractMonthKey(sale.date) === salesMonthFilter);
+    }, [sortedStoreSales, salesMonthFilter]);
     const [editingMenu, setEditingMenu] = useState<Menu | null>(null);
     const [editingSetMenu, setEditingSetMenu] = useState<SetMenu | null>(null);
     const [viewingReceipt, setViewingReceipt] = useState<string | null>(null);
@@ -3496,6 +3531,10 @@ const HQStoreDetail: React.FC<{
     const [invoiceBankChargeLabel, setInvoiceBankChargeLabel] = useState<string>('Bank Charge');
     const [invoiceSpecialNote, setInvoiceSpecialNote] = useState<string>('');
     const [invoiceError, setInvoiceError] = useState<string | null>(null);
+
+    useEffect(() => {
+        setSalesMonthFilter(defaultSalesMonthKey);
+    }, [store.id, defaultSalesMonthKey]);
 
     const defaultInvoiceNumber = useMemo(() => {
         const monthToken = (invoiceMonthKey || formatMonthKey(new Date())).replace('-', '');
@@ -4992,6 +5031,18 @@ const HQStoreDetail: React.FC<{
                         <ClipboardList className="w-5 h-5"/> Sales History
                     </h2>
                     <div className="flex items-center gap-3">
+                        <select
+                            value={salesMonthFilter}
+                            onChange={(e) => setSalesMonthFilter(e.target.value)}
+                            className="text-xs font-semibold border border-gray-200 rounded-lg px-2 py-1 bg-white"
+                        >
+                            <option value="all">All Months</option>
+                            {salesMonthOptions.map((monthKey) => (
+                                <option key={monthKey} value={monthKey}>
+                                    {formatMonthKeyLabel(monthKey)}
+                                </option>
+                            ))}
+                        </select>
                         <span className="text-xs text-gray-400">Showing {salesLookbackLabel} data</span>
                         <button
                             type="button"
@@ -5014,7 +5065,7 @@ const HQStoreDetail: React.FC<{
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-50">
-                            {sortedStoreSales.map(sale => (
+                            {visibleStoreSales.map(sale => (
                                 <React.Fragment key={sale.id}>
                                     <tr className="hover:bg-gray-50 transition">
                                         <td className="p-4 font-medium">{sale.date}</td>
@@ -5123,7 +5174,7 @@ const HQStoreDetail: React.FC<{
                                     )}
                                 </React.Fragment>
                             ))}
-                            {sortedStoreSales.length === 0 && (
+                            {visibleStoreSales.length === 0 && (
                                 <tr>
                                     <td colSpan={5} className="p-8 text-center text-gray-400">No sales reports found.</td>
                                 </tr>
@@ -5782,10 +5833,40 @@ const StoreDashboard: React.FC<{
     const storeSetMenus = setMenus.filter(sm => sm.storeId === store.id);
     const storeEmployees = employees.filter(e => e.storeId === store.id);
     const storeSales = sales.filter(s => s.storeId === store.id);
+    const canonicalStoreSales = useMemo(
+        () => dedupeSalesByStoreDate(storeSales),
+        [storeSales]
+    );
+    const dashboardMonthKey = formatMonthKey(new Date());
+    const sortedStoreSales = useMemo(
+        () => [...canonicalStoreSales].sort((a, b) => b.date.localeCompare(a.date) || String(b.id).localeCompare(String(a.id))),
+        [canonicalStoreSales]
+    );
+    const recentMonthOptions = useMemo(() => {
+        const keys = new Set<string>();
+        sortedStoreSales.forEach((sale) => {
+            const key = extractMonthKey(sale.date);
+            if (key) keys.add(key);
+        });
+        return Array.from(keys).sort((a, b) => b.localeCompare(a));
+    }, [sortedStoreSales]);
+    const recentMonthSelectOptions = useMemo(() => {
+        const keys = new Set<string>(recentMonthOptions);
+        keys.add(dashboardMonthKey);
+        return Array.from(keys).sort((a, b) => b.localeCompare(a));
+    }, [recentMonthOptions, dashboardMonthKey]);
+    const [recentReportMonth, setRecentReportMonth] = useState<string>(dashboardMonthKey);
+    const recentMonthlyReports = useMemo(
+        () => sortedStoreSales.filter((sale) => extractMonthKey(sale.date) === recentReportMonth),
+        [sortedStoreSales, recentReportMonth]
+    );
+    useEffect(() => {
+        setRecentReportMonth(dashboardMonthKey);
+    }, [store.id, dashboardMonthKey]);
     const missingDates = useMemo(() => getMissingDates(sales, store.id, 7), [sales, store.id]);
     const missingDatesAll = useMemo(() => getMissingDates(sales, store.id, 120), [sales, store.id]);
     const missingDateSet = useMemo(() => new Set(missingDatesAll), [missingDatesAll]);
-    const submittedDateSet = useMemo(() => new Set(storeSales.map(s => s.date)), [storeSales]);
+    const submittedDateSet = useMemo(() => new Set(canonicalStoreSales.map(s => s.date)), [canonicalStoreSales]);
     const performance = useMemo(() => {
         const lookbackDays = 7;
         const today = new Date();
@@ -5818,28 +5899,30 @@ const StoreDashboard: React.FC<{
 
     // Chart Data Preparation
     const salesData = useMemo(() => {
-        // Last 7 days
+        const totalsByDate = new Map<string, number>();
+        canonicalStoreSales.forEach((sale) => {
+            totalsByDate.set(sale.date, (totalsByDate.get(sale.date) ?? 0) + (sale.totalAmount || 0));
+        });
+
         const data = [];
         const today = new Date();
         for (let i = 6; i >= 0; i--) {
             const d = new Date(today);
             d.setDate(today.getDate() - i);
             const dateStr = formatDate(d);
-            const sale = storeSales.find(s => s.date === dateStr);
             data.push({
-                name: dateStr.slice(5), // MM-DD
-                sales: sale ? sale.totalAmount : 0
+                name: dateStr.slice(5),
+                sales: totalsByDate.get(dateStr) ?? 0,
             });
         }
         return data;
-    }, [storeSales]);
+    }, [canonicalStoreSales]);
 
     const categoryMonthlyData = useMemo(() => {
         const today = new Date();
-        const currentMonth = today.getMonth();
-        const currentYear = today.getFullYear();
-        const prevMonth = currentMonth === 0 ? 11 : currentMonth - 1;
-        const prevYear = currentMonth === 0 ? currentYear - 1 : currentYear;
+        const currentMonthKey = formatMonthKey(today);
+        const prevMonthDate = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+        const prevMonthKey = formatMonthKey(prevMonthDate);
 
         const currentCounts: Record<string, number> = {};
         const prevCounts: Record<string, number> = {};
@@ -5848,14 +5931,12 @@ const StoreDashboard: React.FC<{
             prevCounts[c] = 0;
         });
 
-        storeSales.forEach(sale => {
-            const d = new Date(sale.date);
-            const month = d.getMonth();
-            const year = d.getFullYear();
+        canonicalStoreSales.forEach(sale => {
+            const monthKey = extractMonthKey(sale.date);
             let target: Record<string, number> | null = null;
-            if (month === currentMonth && year === currentYear) {
+            if (monthKey === currentMonthKey) {
                 target = currentCounts;
-            } else if (month === prevMonth && year === prevYear) {
+            } else if (monthKey === prevMonthKey) {
                 target = prevCounts;
             }
             if (!target) return;
@@ -5870,28 +5951,21 @@ const StoreDashboard: React.FC<{
             current: currentCounts[name] || 0,
             previous: prevCounts[name] || 0
         }));
-    }, [storeSales, globalConfig.categories]);
+    }, [canonicalStoreSales, globalConfig.categories]);
 
     // Comparison Logic (Current Month vs Previous Month)
     const metricComparison = useMemo(() => {
         const today = new Date();
-        const currentMonth = today.getMonth();
-        const currentYear = today.getFullYear();
-        const prevMonth = currentMonth === 0 ? 11 : currentMonth - 1;
-        const prevMonthYear = currentMonth === 0 ? currentYear - 1 : currentYear;
+        const currentMonthKey = formatMonthKey(today);
+        const prevMonthDate = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+        const prevMonthKey = formatMonthKey(prevMonthDate);
 
-        const currentMonthSales = storeSales
-            .filter(s => {
-                const d = new Date(s.date);
-                return d.getMonth() === currentMonth && d.getFullYear() === currentYear;
-            })
+        const currentMonthSales = canonicalStoreSales
+            .filter(s => extractMonthKey(s.date) === currentMonthKey)
             .reduce((acc, curr) => acc + curr.totalAmount, 0);
 
-        const prevMonthSales = storeSales
-            .filter(s => {
-                const d = new Date(s.date);
-                return d.getMonth() === prevMonth && d.getFullYear() === prevMonthYear;
-            })
+        const prevMonthSales = canonicalStoreSales
+            .filter(s => extractMonthKey(s.date) === prevMonthKey)
             .reduce((acc, curr) => acc + curr.totalAmount, 0);
 
         const growth = prevMonthSales > 0 
@@ -5899,7 +5973,7 @@ const StoreDashboard: React.FC<{
             : 0;
 
         return { currentMonthSales, growth };
-    }, [storeSales]);
+    }, [canonicalStoreSales]);
 
     const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
@@ -6268,15 +6342,28 @@ const StoreDashboard: React.FC<{
                              </div>
                              
                              <div className="bg-white p-6 rounded-2xl shadow-sm border">
-                                <h3 className="font-bold text-lg mb-4">Recent Daily Reports</h3>
+                                <div className="mb-4 flex items-center justify-between gap-3">
+                                    <h3 className="font-bold text-lg">Recent Daily Reports</h3>
+                                    <select
+                                        value={recentReportMonth}
+                                        onChange={(e) => setRecentReportMonth(e.target.value)}
+                                        className="text-xs font-semibold border border-gray-200 rounded-lg px-2 py-1 bg-white"
+                                    >
+                                        {recentMonthSelectOptions.map((monthKey) => (
+                                            <option key={monthKey} value={monthKey}>
+                                                {formatMonthKeyLabel(monthKey)}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
                                 <div className="space-y-2">
-                                    {storeSales.slice(0, 5).map(sale => (
+                                    {recentMonthlyReports.map(sale => (
                                         <div key={sale.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
                                             <div className="font-medium">{sale.date}</div>
                                             <div className="font-bold">{sale.isClosed ? 'Closed' : `${store.currency} ${sale.totalAmount.toLocaleString()}`}</div>
                                         </div>
                                     ))}
-                                    {storeSales.length === 0 && <div className="text-gray-400 text-sm">No reports yet.</div>}
+                                    {recentMonthlyReports.length === 0 && <div className="text-gray-400 text-sm">No reports in this month.</div>}
                                 </div>
                              </div>
                         </div>
@@ -7631,9 +7718,14 @@ if (!myStore) {
           ingredients={ingredients}
           globalConfig={globalConfig}
           onAddSale={async (s) => {
-            setSales(prev => [s, ...prev]);   // immediate UI update
             try {
               await addSale(s);
+              try {
+                const latestSales = await loadSales(salesLookbackRef.current);
+                setSales(latestSales);
+              } catch (reloadErr) {
+                console.error('Failed to reload sales after save', reloadErr);
+              }
 
               // Apply stock consumption to store_ingredient_stock
               if (s.items && s.items.length > 0) {
@@ -7742,7 +7834,6 @@ if (!myStore) {
                 }
               }
             } catch (e) {
-              setSales(prev => prev.filter(row => row.id !== s.id));
               await refreshAll();
               throw e;
             } finally {
