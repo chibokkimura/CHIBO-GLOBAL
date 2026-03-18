@@ -2399,7 +2399,11 @@ const SalesReporter: React.FC<{
   };
 
   const handleSave = async () => {
-    if (!isClosed && !receiptImage) return;
+    const hasAnyReceipt = Boolean(receiptImage || existingSaleForDate?.hasReceipt);
+    if (!isClosed && !hasAnyReceipt) {
+      setSubmitError('Receipt image is required for open days.');
+      return;
+    }
     const reason = closedReason.trim();
     if (isClosed && !reason) return;
     const totalAmount = isClosed ? 0 : (parseFloat(manualRevenue) || 0);
@@ -2448,7 +2452,7 @@ const SalesReporter: React.FC<{
       setItems: isClosed ? [] : normalizedSetItems,
       isClosed,
       receiptImage: isClosed ? undefined : receiptImage || undefined,
-      hasReceipt: !isClosed && (Boolean(receiptImage) || Boolean(existingSaleForDate?.hasReceipt)),
+      hasReceipt: !isClosed && hasAnyReceipt,
       closedReason: isClosed ? reason : undefined,
     };
     setSubmitError(null);
@@ -3644,6 +3648,8 @@ const HQStoreDetail: React.FC<{
     const [invoiceToDraft, setInvoiceToDraft] = useState<string>(store.name || '');
     const [invoiceSpecialNote, setInvoiceSpecialNote] = useState<string>('');
     const [invoiceError, setInvoiceError] = useState<string | null>(null);
+    const [detailSection, setDetailSection] = useState<'sales' | 'inventory' | 'invoice' | 'menu' | 'staff' | 'accounts'>('sales');
+    const [menuSection, setMenuSection] = useState<'items' | 'sets'>('items');
 
     useEffect(() => {
         setSalesMonthFilter(defaultSalesMonthKey);
@@ -3665,6 +3671,11 @@ const HQStoreDetail: React.FC<{
     useEffect(() => {
         setInvoiceToDraft(store.name || '');
     }, [store.id, store.name]);
+
+    useEffect(() => {
+        setDetailSection('sales');
+        setMenuSection('items');
+    }, [store.id]);
 
     const defaultInvoiceNumber = useMemo(() => {
         const monthToken = (invoiceMonthKey || formatMonthKey(new Date())).replace('-', '');
@@ -4828,6 +4839,33 @@ const HQStoreDetail: React.FC<{
                 </div>
             </div>
 
+            <div className="sticky top-0 z-20 bg-gray-50/95 backdrop-blur supports-[backdrop-filter]:bg-gray-50/80 py-2 mb-6 overflow-x-auto">
+                <div className="inline-flex items-center gap-2 rounded-2xl border border-gray-200 bg-white p-1 min-w-max">
+                    {[
+                        { key: 'sales', label: 'Sales' },
+                        { key: 'inventory', label: 'Inventory' },
+                        { key: 'invoice', label: 'Invoice' },
+                        { key: 'menu', label: 'Menu' },
+                        { key: 'staff', label: 'Staff' },
+                        { key: 'accounts', label: 'Accounts' },
+                    ].map((tab) => (
+                        <button
+                            key={tab.key}
+                            type="button"
+                            onClick={() => setDetailSection(tab.key as 'sales' | 'inventory' | 'invoice' | 'menu' | 'staff' | 'accounts')}
+                            className={`px-4 py-2 rounded-xl text-sm font-bold transition ${
+                                detailSection === tab.key
+                                    ? 'bg-black text-white'
+                                    : 'text-gray-600 hover:bg-gray-100'
+                            }`}
+                        >
+                            {tab.label}
+                        </button>
+                    ))}
+                </div>
+            </div>
+
+            {detailSection === 'invoice' && (
             <div className="bg-white p-5 rounded-2xl shadow-sm border mb-8">
                 <div className="flex flex-col gap-4">
                     <div className="flex items-center justify-between gap-2">
@@ -5023,9 +5061,10 @@ const HQStoreDetail: React.FC<{
                     {invoiceError && <div className="text-xs text-red-600">{invoiceError}</div>}
                 </div>
             </div>
+            )}
 
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
-                <div className="space-y-8">
+            {detailSection === 'sales' && (
+            <div className="space-y-8 mb-8">
                     {/* Compliance Alert */}
                     <div className={`p-6 rounded-2xl shadow-sm border ${missingDates.length > 0 ? 'bg-red-50 border-red-200' : 'bg-green-50 border-green-200'}`}>
                         <div className="flex items-start gap-4">
@@ -5078,131 +5117,6 @@ const HQStoreDetail: React.FC<{
                                 </div>
                             </div>
                         </div>
-                    </div>
-
-                    {mergeCandidates.length > 0 && (
-                        <div className="bg-white p-6 rounded-2xl shadow-sm border">
-                            <h2 className="text-xl font-bold mb-2">Merge Duplicate Store</h2>
-                            <p className="text-xs text-gray-500 mb-4">
-                                If multiple accounts created duplicate stores (same name/city/country), you can merge them into this store.
-                            </p>
-                            <div className="flex flex-col md:flex-row gap-3">
-                                <select
-                                    value={mergeSourceId}
-                                    onChange={(e) => setMergeSourceId(e.target.value)}
-                                    className="flex-1 border border-gray-200 rounded-xl p-2 text-sm"
-                                >
-                                    <option value="">Select store to merge into this one</option>
-                                    {mergeCandidates.map(s => (
-                                        <option key={s.id} value={s.id}>
-                                            {s.name} • {s.city}, {s.country} • {s.currency}
-                                        </option>
-                                    ))}
-                                </select>
-                                <button
-                                    type="button"
-                                    onClick={handleMerge}
-                                    disabled={!mergeSourceId || mergeBusy}
-                                    className="px-4 py-2 rounded-xl bg-black text-white text-sm font-bold disabled:opacity-50"
-                                >
-                                    {mergeBusy ? 'Merging...' : 'Merge'}
-                                </button>
-                            </div>
-                            {mergeError && <div className="mt-3 text-xs text-red-600">{mergeError}</div>}
-                            <div className="mt-3 text-[10px] text-gray-400">
-                                Note: If currencies differ and sales exist, merge is blocked to avoid mixing currencies.
-                            </div>
-                        </div>
-                    )}
-
-                    <div className="bg-white p-6 rounded-2xl shadow-sm border">
-                        <h2 className="text-xl font-bold mb-2">Link Account to This Store</h2>
-                        <p className="text-xs text-gray-500 mb-4">
-                            Use this when a manager created the wrong store. This links their account to this store without touching existing data.
-                        </p>
-                        <div className="flex flex-col md:flex-row gap-3">
-                            <input
-                                value={linkEmail}
-                                onChange={(e) => setLinkEmail(e.target.value)}
-                                placeholder="manager@email.com"
-                                className="flex-1 border border-gray-200 rounded-xl p-2 text-sm"
-                            />
-                            <button
-                                type="button"
-                                onClick={handleLinkAccount}
-                                disabled={linkBusy}
-                                className="px-4 py-2 rounded-xl bg-black text-white text-sm font-bold disabled:opacity-50"
-                            >
-                                {linkBusy ? 'Linking...' : 'Link Account'}
-                            </button>
-                        </div>
-                        {linkError && <div className="mt-3 text-xs text-red-600">{linkError}</div>}
-                        {linkSuccess && <div className="mt-3 text-xs text-emerald-600">{linkSuccess}</div>}
-                        <div className="mt-3 text-[10px] text-gray-400">
-                            Note: The user must sign in at least once so their account exists.
-                        </div>
-                        {owners.length > 0 && (
-                            <div className="mt-5 space-y-2">
-                                <div className="text-sm font-bold text-gray-700">Linked Accounts</div>
-                                {owners.map(owner => (
-                                    <div key={owner.email} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
-                                        <div className="text-xs text-gray-700">
-                                            <div className="font-semibold">
-                                                {owner.name || '—'} <span className="text-gray-500">({owner.email})</span>
-                                            </div>
-                                            <div className="text-[11px] text-gray-500">store_id: {owner.storeId || '—'}</div>
-                                        </div>
-                                        <div className="flex flex-wrap items-center gap-2">
-                                            <select
-                                                value={moveTargets[owner.email] || ''}
-                                                onChange={(e) => setMoveTargets(prev => ({ ...prev, [owner.email]: e.target.value }))}
-                                                className="px-2 py-1 rounded-lg border border-gray-200 text-xs"
-                                            >
-                                                <option value="">Move to store...</option>
-                                                {allStores.filter(s => s.id !== store.id).map(s => (
-                                                    <option key={s.id} value={s.id}>
-                                                        {s.name} • {s.city}
-                                                    </option>
-                                                ))}
-                                            </select>
-                                            <button
-                                                type="button"
-                                                onClick={() => handleMoveAccount(owner.email)}
-                                                disabled={moveBusy === owner.email || !moveTargets[owner.email]}
-                                                className="px-3 py-1 rounded-lg bg-black text-white text-xs font-bold disabled:opacity-50"
-                                            >
-                                                {moveBusy === owner.email ? 'Moving...' : 'Move'}
-                                            </button>
-                                            <button
-                                                type="button"
-                                                onClick={() => handleUnlinkAccount(owner.email)}
-                                                disabled={unlinkBusy === owner.email}
-                                                className="px-3 py-1 rounded-lg border border-red-200 text-red-600 text-xs font-bold disabled:opacity-50"
-                                            >
-                                                {unlinkBusy === owner.email ? 'Unlinking...' : 'Unlink'}
-                                            </button>
-                                        </div>
-                                    </div>
-                                ))}
-                                {moveError && <div className="text-xs text-red-600">{moveError}</div>}
-                                {unlinkError && <div className="text-xs text-red-600">{unlinkError}</div>}
-                            </div>
-                        )}
-                    </div>
-
-                    <div className="bg-white p-6 rounded-2xl shadow-sm border border-red-200">
-                        <h2 className="text-xl font-bold mb-2 text-red-700">Delete Empty Store</h2>
-                        <p className="text-xs text-red-600 mb-4">
-                            Use this only for mistakenly created stores with no data.
-                        </p>
-                        <button
-                            type="button"
-                            onClick={handleDeleteStore}
-                            className="px-4 py-2 rounded-xl bg-red-600 text-white text-sm font-bold hover:bg-red-700"
-                        >
-                            Delete Store
-                        </button>
-                        {deleteError && <div className="mt-3 text-xs text-red-600">{deleteError}</div>}
                     </div>
 
                     <div className="bg-white p-6 rounded-2xl shadow-sm border">
@@ -5262,10 +5176,11 @@ const HQStoreDetail: React.FC<{
                             )}
                         </div>
                     </div>
-                </div>
+            </div>
+            )}
 
-                {/* Real-time Inventory Section */}
-                <div className="bg-white p-6 rounded-2xl shadow-sm border border-black/10">
+            {detailSection === 'inventory' && (
+                <div className="bg-white p-6 rounded-2xl shadow-sm border border-black/10 mb-8">
                     <div className="flex justify-between items-center mb-6">
                         <h2 className="text-xl font-bold flex items-center gap-2">
                             <Package className="w-5 h-5"/> Real-time Inventory (Est.)
@@ -5313,7 +5228,6 @@ const HQStoreDetail: React.FC<{
                                             </div>
                                         </div>
                                     </div>
-                                    {/* Simulated Stock Bar */}
                                     <div className="h-3 w-full bg-gray-100 rounded-full overflow-hidden relative">
                                         <div 
                                             className={`h-full rounded-full ${isLow ? 'bg-red-500' : 'bg-black'}`} 
@@ -5332,8 +5246,9 @@ const HQStoreDetail: React.FC<{
                         )}
                     </div>
                 </div>
-            </div>
+            )}
 
+            {detailSection === 'sales' && (
             <div className="bg-white p-6 rounded-2xl shadow-sm border mb-8">
                 <div className="flex items-center justify-between mb-6">
                     <h2 className="text-xl font-bold flex items-center gap-2">
@@ -5536,25 +5451,56 @@ const HQStoreDetail: React.FC<{
                     <div className="mt-2 text-xs text-red-600">{saleAmountError}</div>
                 )}
             </div>
+            )}
 
-            <MenuManager 
-                store={store} 
-                menus={storeMenus} 
-                onEdit={setEditingMenu}
-                onCreate={(menu) => setEditingMenu(menu)}
-                onDelete={onDeleteMenu}
-            />
+            {detailSection === 'menu' && (
+                <div className="space-y-4 mb-8">
+                    <div className="flex items-center justify-end">
+                        <div className="inline-flex items-center rounded-xl border border-gray-200 bg-white p-1">
+                            <button
+                                type="button"
+                                onClick={() => setMenuSection('items')}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
+                                    menuSection === 'items' ? 'bg-black text-white' : 'text-gray-600 hover:bg-gray-100'
+                                }`}
+                            >
+                                Items ({storeMenus.length})
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setMenuSection('sets')}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
+                                    menuSection === 'sets' ? 'bg-black text-white' : 'text-gray-600 hover:bg-gray-100'
+                                }`}
+                            >
+                                Set Menus ({storeSetMenus.length})
+                            </button>
+                        </div>
+                    </div>
 
-            <SetMenuManager
-                store={store}
-                menus={storeMenus}
-                setMenus={storeSetMenus}
-                onEdit={setEditingSetMenu}
-                onCreate={(setMenu) => setEditingSetMenu(setMenu)}
-                onDelete={onDeleteSetMenu}
-            />
+                    {menuSection === 'items' ? (
+                        <MenuManager 
+                            store={store} 
+                            menus={storeMenus} 
+                            onEdit={setEditingMenu}
+                            onCreate={(menu) => setEditingMenu(menu)}
+                            onDelete={onDeleteMenu}
+                        />
+                    ) : (
+                        <SetMenuManager
+                            store={store}
+                            menus={storeMenus}
+                            setMenus={storeSetMenus}
+                            onEdit={setEditingSetMenu}
+                            onCreate={(setMenu) => setEditingSetMenu(setMenu)}
+                            onDelete={onDeleteSetMenu}
+                        />
+                    )}
+                </div>
+            )}
 
-            <div className="mt-10">
+            {detailSection === 'staff' && (
+            <div className="mt-2 mb-8">
                 <EmployeeManager
                     store={store}
                     employees={storeEmployees}
@@ -5562,6 +5508,136 @@ const HQStoreDetail: React.FC<{
                     onUpdate={(emps) => onUpdateEmployees(store.id, emps)}
                 />
             </div>
+            )}
+
+            {detailSection === 'accounts' && (
+                <div className="space-y-8 mb-8">
+                    {mergeCandidates.length > 0 && (
+                        <div className="bg-white p-6 rounded-2xl shadow-sm border">
+                            <h2 className="text-xl font-bold mb-2">Merge Duplicate Store</h2>
+                            <p className="text-xs text-gray-500 mb-4">
+                                If multiple accounts created duplicate stores (same name/city/country), you can merge them into this store.
+                            </p>
+                            <div className="flex flex-col md:flex-row gap-3">
+                                <select
+                                    value={mergeSourceId}
+                                    onChange={(e) => setMergeSourceId(e.target.value)}
+                                    className="flex-1 border border-gray-200 rounded-xl p-2 text-sm"
+                                >
+                                    <option value="">Select store to merge into this one</option>
+                                    {mergeCandidates.map(s => (
+                                        <option key={s.id} value={s.id}>
+                                            {s.name} • {s.city}, {s.country} • {s.currency}
+                                        </option>
+                                    ))}
+                                </select>
+                                <button
+                                    type="button"
+                                    onClick={handleMerge}
+                                    disabled={!mergeSourceId || mergeBusy}
+                                    className="px-4 py-2 rounded-xl bg-black text-white text-sm font-bold disabled:opacity-50"
+                                >
+                                    {mergeBusy ? 'Merging...' : 'Merge'}
+                                </button>
+                            </div>
+                            {mergeError && <div className="mt-3 text-xs text-red-600">{mergeError}</div>}
+                            <div className="mt-3 text-[10px] text-gray-400">
+                                Note: If currencies differ and sales exist, merge is blocked to avoid mixing currencies.
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="bg-white p-6 rounded-2xl shadow-sm border">
+                        <h2 className="text-xl font-bold mb-2">Link Account to This Store</h2>
+                        <p className="text-xs text-gray-500 mb-4">
+                            Use this when a manager created the wrong store. This links their account to this store without touching existing data.
+                        </p>
+                        <div className="flex flex-col md:flex-row gap-3">
+                            <input
+                                value={linkEmail}
+                                onChange={(e) => setLinkEmail(e.target.value)}
+                                placeholder="manager@email.com"
+                                className="flex-1 border border-gray-200 rounded-xl p-2 text-sm"
+                            />
+                            <button
+                                type="button"
+                                onClick={handleLinkAccount}
+                                disabled={linkBusy}
+                                className="px-4 py-2 rounded-xl bg-black text-white text-sm font-bold disabled:opacity-50"
+                            >
+                                {linkBusy ? 'Linking...' : 'Link Account'}
+                            </button>
+                        </div>
+                        {linkError && <div className="mt-3 text-xs text-red-600">{linkError}</div>}
+                        {linkSuccess && <div className="mt-3 text-xs text-emerald-600">{linkSuccess}</div>}
+                        <div className="mt-3 text-[10px] text-gray-400">
+                            Note: The user must sign in at least once so their account exists.
+                        </div>
+                        {owners.length > 0 && (
+                            <div className="mt-5 space-y-2">
+                                <div className="text-sm font-bold text-gray-700">Linked Accounts</div>
+                                {owners.map(owner => (
+                                    <div key={owner.email} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
+                                        <div className="text-xs text-gray-700">
+                                            <div className="font-semibold">
+                                                {owner.name || '—'} <span className="text-gray-500">({owner.email})</span>
+                                            </div>
+                                            <div className="text-[11px] text-gray-500">store_id: {owner.storeId || '—'}</div>
+                                        </div>
+                                        <div className="flex flex-wrap items-center gap-2">
+                                            <select
+                                                value={moveTargets[owner.email] || ''}
+                                                onChange={(e) => setMoveTargets(prev => ({ ...prev, [owner.email]: e.target.value }))}
+                                                className="px-2 py-1 rounded-lg border border-gray-200 text-xs"
+                                            >
+                                                <option value="">Move to store...</option>
+                                                {allStores.filter(s => s.id !== store.id).map(s => (
+                                                    <option key={s.id} value={s.id}>
+                                                        {s.name} • {s.city}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                            <button
+                                                type="button"
+                                                onClick={() => handleMoveAccount(owner.email)}
+                                                disabled={moveBusy === owner.email || !moveTargets[owner.email]}
+                                                className="px-3 py-1 rounded-lg bg-black text-white text-xs font-bold disabled:opacity-50"
+                                            >
+                                                {moveBusy === owner.email ? 'Moving...' : 'Move'}
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => handleUnlinkAccount(owner.email)}
+                                                disabled={unlinkBusy === owner.email}
+                                                className="px-3 py-1 rounded-lg border border-red-200 text-red-600 text-xs font-bold disabled:opacity-50"
+                                            >
+                                                {unlinkBusy === owner.email ? 'Unlinking...' : 'Unlink'}
+                                            </button>
+                                        </div>
+                                    </div>
+                                ))}
+                                {moveError && <div className="text-xs text-red-600">{moveError}</div>}
+                                {unlinkError && <div className="text-xs text-red-600">{unlinkError}</div>}
+                            </div>
+                        )}
+                    </div>
+
+                    <div className="bg-white p-6 rounded-2xl shadow-sm border border-red-200">
+                        <h2 className="text-xl font-bold mb-2 text-red-700">Delete Empty Store</h2>
+                        <p className="text-xs text-red-600 mb-4">
+                            Use this only for mistakenly created stores with no data.
+                        </p>
+                        <button
+                            type="button"
+                            onClick={handleDeleteStore}
+                            className="px-4 py-2 rounded-xl bg-red-600 text-white text-sm font-bold hover:bg-red-700"
+                        >
+                            Delete Store
+                        </button>
+                        {deleteError && <div className="mt-3 text-xs text-red-600">{deleteError}</div>}
+                    </div>
+                </div>
+            )}
 
             {viewingReceipt && (
                 <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 backdrop-blur-sm p-4">
@@ -6172,6 +6248,7 @@ const StoreDashboard: React.FC<{
   onAddIngredient: (ing: Ingredient) => Promise<void> | void;
 }> = ({ user, store, onLogout, sales, menus, setMenus, employees, ingredients, globalConfig, onAddSale, onUpdateMenu, onCreateMenu, onDeleteMenu, onUpdateSetMenu, onCreateSetMenu, onDeleteSetMenu, onUpdateEmployees, onAddIngredient }) => {
     const [view, setView] = useState<'dashboard' | 'report' | 'menu' | 'staff'>('dashboard');
+    const [menuSection, setMenuSection] = useState<'items' | 'sets'>('items');
     const [reportDate, setReportDate] = useState<string | null>(null);
     const [editingMenu, setEditingMenu] = useState<Menu | null>(null);
     const [editingSetMenu, setEditingSetMenu] = useState<SetMenu | null>(null);
@@ -6213,6 +6290,10 @@ const StoreDashboard: React.FC<{
     useEffect(() => {
         setRecentReportMonth(dashboardMonthKey);
     }, [store.id, dashboardMonthKey]);
+
+    useEffect(() => {
+        setMenuSection('items');
+    }, [store.id]);
     const missingDates = useMemo(() => getMissingDates(sales, store.id, 7), [sales, store.id]);
     const missingDatesAll = useMemo(() => getMissingDates(sales, store.id, 120), [sales, store.id]);
     const missingDateSet = useMemo(() => new Set(missingDatesAll), [missingDatesAll]);
@@ -6750,22 +6831,48 @@ const StoreDashboard: React.FC<{
                     )}
 
                     {view === 'menu' && (
-                        <div>
-                            <MenuManager 
-                                store={store}
-                                menus={storeMenus}
-                                onEdit={setEditingMenu}
-                                onCreate={(menu) => setEditingMenu(menu)}
-                                onDelete={onDeleteMenu}
-                            />
-                            <SetMenuManager
-                                store={store}
-                                menus={storeMenus}
-                                setMenus={storeSetMenus}
-                                onEdit={setEditingSetMenu}
-                                onCreate={(setMenu) => setEditingSetMenu(setMenu)}
-                                onDelete={onDeleteSetMenu}
-                            />
+                        <div className="space-y-4">
+                            <div className="sticky top-2 z-10 bg-gray-50/95 backdrop-blur supports-[backdrop-filter]:bg-gray-50/80 py-1 flex items-center justify-end">
+                                <div className="inline-flex items-center rounded-xl border border-gray-200 bg-white p-1">
+                                    <button
+                                        type="button"
+                                        onClick={() => setMenuSection('items')}
+                                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
+                                            menuSection === 'items' ? 'bg-black text-white' : 'text-gray-600 hover:bg-gray-100'
+                                        }`}
+                                    >
+                                        Items ({storeMenus.length})
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => setMenuSection('sets')}
+                                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
+                                            menuSection === 'sets' ? 'bg-black text-white' : 'text-gray-600 hover:bg-gray-100'
+                                        }`}
+                                    >
+                                        Set Menus ({storeSetMenus.length})
+                                    </button>
+                                </div>
+                            </div>
+
+                            {menuSection === 'items' ? (
+                                <MenuManager 
+                                    store={store}
+                                    menus={storeMenus}
+                                    onEdit={setEditingMenu}
+                                    onCreate={(menu) => setEditingMenu(menu)}
+                                    onDelete={onDeleteMenu}
+                                />
+                            ) : (
+                                <SetMenuManager
+                                    store={store}
+                                    menus={storeMenus}
+                                    setMenus={storeSetMenus}
+                                    onEdit={setEditingSetMenu}
+                                    onCreate={(setMenu) => setEditingSetMenu(setMenu)}
+                                    onDelete={onDeleteSetMenu}
+                                />
+                            )}
                         </div>
                     )}
 
