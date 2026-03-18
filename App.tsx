@@ -950,17 +950,18 @@ async function uploadReceiptImage(storeId: string, saleId: string, dataUrl: stri
 async function addSale(sale: Sale) {
   const { data: existingRows, error: existingErr } = await supabase
     .from('sales')
-    .select('id')
+    .select('id,receipt_image')
     .eq('store_id', sale.storeId)
     .eq('date', sale.date)
     .order('id', { ascending: false })
     .limit(1);
   if (existingErr) throw existingErr;
   const existingSaleId = existingRows?.[0]?.id ? String(existingRows[0].id) : null;
+  const existingReceiptPath = existingRows?.[0]?.receipt_image ? String(existingRows[0].receipt_image) : null;
   const targetSaleId = existingSaleId ?? sale.id;
 
-  let receiptPath: string | null = null;
-  if (!sale.isClosed && !sale.receiptImage) {
+  let receiptPath: string | null = sale.isClosed ? null : existingReceiptPath;
+  if (!sale.isClosed && !sale.receiptImage && !existingReceiptPath) {
     throw new Error('Receipt image is required for open days.');
   }
   if (sale.receiptImage && !sale.isClosed) {
@@ -1219,6 +1220,11 @@ type InvoiceHtmlParams = {
   showBankCharge: boolean;
   showWithholdingTax: boolean;
   withholdingTaxText: string;
+  showChinaTaxBreakdown: boolean;
+  taxBaseText: string;
+  vatTaxText: string;
+  incomeTaxText: string;
+  taxTotalText: string;
   finalAmountLabelText: string;
   finalAmountText: string;
   invoiceCurrency: string;
@@ -1261,6 +1267,11 @@ function buildInvoiceHtml(params: InvoiceHtmlParams): string {
     showBankCharge,
     showWithholdingTax,
     withholdingTaxText,
+    showChinaTaxBreakdown,
+    taxBaseText,
+    vatTaxText,
+    incomeTaxText,
+    taxTotalText,
     finalAmountLabelText,
     finalAmountText,
     invoiceCurrency,
@@ -1545,7 +1556,11 @@ function buildInvoiceHtml(params: InvoiceHtmlParams): string {
           <span class="note">${specialNoteHtml || '&nbsp;'}</span>
           <span class="amount">${escapeHtml(minimumText)}</span>
         </div>
-        ${showWithholdingTax ? `<div class="summary-line"><span>Royalty Amount</span><span>${escapeHtml(royaltyAmountText)}</span></div>` : ''}
+        <div class="summary-line"><span>Royalty Amount</span><span>${escapeHtml(royaltyAmountText)}</span></div>
+        ${showChinaTaxBreakdown ? `<div class="summary-line"><span>Tax Base (Excl. VAT)</span><span>${escapeHtml(taxBaseText)}</span></div>` : ''}
+        ${showChinaTaxBreakdown ? `<div class="summary-line"><span>VAT (6%)</span><span>${escapeHtml(vatTaxText)}</span></div>` : ''}
+        ${showChinaTaxBreakdown ? `<div class="summary-line"><span>Income Tax (10%)</span><span>${escapeHtml(incomeTaxText)}</span></div>` : ''}
+        ${showChinaTaxBreakdown ? `<div class="summary-line"><span>Tax Total</span><span>${escapeHtml(taxTotalText)}</span></div>` : ''}
         ${showWithholdingTax ? `<div class="summary-line"><span>Withholding Tax</span><span>${escapeHtml(withholdingTaxText)}</span></div>` : ''}
         ${showBankCharge ? `<div class="summary-line red"><span>${escapeHtml(bankChargeTitle)}</span><span>${escapeHtml(bankChargeText)}</span></div>` : ''}
         <div class="summary-line total">
@@ -1590,6 +1605,31 @@ const parsePercentInput = (raw: string): number => {
   const n = Number(raw.replace(/[^\d.-]/g, ''));
   if (Number.isNaN(n) || !Number.isFinite(n)) return 0;
   return Math.max(0, n);
+};
+
+const normalizeDecimalInput = (raw: string, maxDecimals = 2) => {
+  const cleaned = raw.replace(/[^\d.]/g, '');
+  if (!cleaned) return '';
+  const parts = cleaned.split('.');
+  const intPart = parts[0].replace(/^0+(?=\d)/, '') || '0';
+  if (parts.length === 1) return intPart;
+  const fracPart = parts.slice(1).join('').slice(0, maxDecimals);
+  return fracPart.length > 0 ? `${intPart}.${fracPart}` : `${intPart}.`;
+};
+
+const formatDecimalForInput = (value: number) => {
+  if (!Number.isFinite(value)) return '';
+  const rounded = Math.round(value * 100) / 100;
+  return Number.isInteger(rounded) ? String(rounded) : String(rounded);
+};
+
+const formatMoneyDisplay = (value: number) => {
+  if (!Number.isFinite(value)) return '0';
+  const hasFraction = Math.abs(value - Math.trunc(value)) > 0.000001;
+  return value.toLocaleString(undefined, {
+    minimumFractionDigits: hasFraction ? 2 : 0,
+    maximumFractionDigits: 2,
+  });
 };
 
 const convertAmountByUsdRates = (
@@ -2234,14 +2274,35 @@ const SalesReporter: React.FC<{
     } else {
       setDate(formatDate(new Date()));
     }
-    setItems([]);
-    setSetMenuItems([]);
+    setSubmitError(null);
+  }, [initialDate]);
+
+  const existingSaleForDate = useMemo(() => {
+    const rows = sales
+      .filter((row) => row.storeId === store.id && row.date === date)
+      .sort((a, b) => String(b.id).localeCompare(String(a.id)));
+    return rows[0] ?? null;
+  }, [sales, store.id, date]);
+
+  useEffect(() => {
+    if (existingSaleForDate) {
+      setIsClosed(Boolean(existingSaleForDate.isClosed));
+      setReceiptImage(null);
+      setManualRevenue(existingSaleForDate.isClosed ? '' : formatDecimalForInput(existingSaleForDate.totalAmount || 0));
+      setItems((existingSaleForDate.items ?? []).map((item) => ({ ...item })));
+      setSetMenuItems((existingSaleForDate.setItems ?? []).map((item) => ({ ...item })));
+      setClosedReason(existingSaleForDate.closedReason ?? '');
+      setComment('');
+      return;
+    }
     setIsClosed(false);
     setReceiptImage(null);
     setManualRevenue('');
-    setComment('');
+    setItems([]);
+    setSetMenuItems([]);
     setClosedReason('');
-  }, [initialDate]);
+    setComment('');
+  }, [existingSaleForDate]);
 
   useEffect(() => {
     if (isClosed) {
@@ -2387,7 +2448,7 @@ const SalesReporter: React.FC<{
       setItems: isClosed ? [] : normalizedSetItems,
       isClosed,
       receiptImage: isClosed ? undefined : receiptImage || undefined,
-      hasReceipt: !isClosed && Boolean(receiptImage),
+      hasReceipt: !isClosed && (Boolean(receiptImage) || Boolean(existingSaleForDate?.hasReceipt)),
       closedReason: isClosed ? reason : undefined,
     };
     setSubmitError(null);
@@ -2403,7 +2464,9 @@ const SalesReporter: React.FC<{
     }
   };
 
-  const canSubmit = isClosed ? closedReason.trim().length > 0 : Boolean(receiptImage);
+  const canSubmit = isClosed
+    ? closedReason.trim().length > 0
+    : Boolean(receiptImage || existingSaleForDate?.hasReceipt);
 
   return (
     <div className="max-w-2xl mx-auto">
@@ -2412,6 +2475,11 @@ const SalesReporter: React.FC<{
       </div>
 
       <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 space-y-6">
+        {existingSaleForDate && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800 font-semibold">
+            Existing report found for {date}. Submitting will update this report.
+          </div>
+        )}
         <div>
           <label className="block text-sm font-bold text-gray-700 mb-2">Report Date</label>
           <input 
@@ -2455,13 +2523,16 @@ const SalesReporter: React.FC<{
                 <label className="block text-sm font-bold text-gray-700 mb-2">Total Daily Revenue ({store.currency})</label>
                 <input 
                   type="text"
-                  inputMode="numeric"
-                  pattern="[0-9]*"
+                  inputMode="decimal"
+                  pattern="[0-9]*[.]?[0-9]*"
                   value={manualRevenue} 
-                  onChange={e => setManualRevenue(normalizeNumberInput(e.target.value))}
+                  onChange={e => setManualRevenue(normalizeDecimalInput(e.target.value, 2))}
                   placeholder="Enter total sales amount"
                   className="w-full p-4 bg-gray-50 rounded-xl font-bold text-2xl border border-gray-200 focus:border-black outline-none"
                 />
+                {!receiptImage && existingSaleForDate?.hasReceipt && (
+                  <div className="mt-2 text-xs text-gray-500">Current receipt image will be kept.</div>
+                )}
               </div>
 
               <div className="mb-8">
@@ -3502,6 +3573,11 @@ const HQStoreDetail: React.FC<{
     const receiptCacheRef = useRef<Record<string, string>>({});
     const [receiptLoadingId, setReceiptLoadingId] = useState<string | null>(null);
     const [receiptError, setReceiptError] = useState<string | null>(null);
+    const [editingSaleAmountId, setEditingSaleAmountId] = useState<string | null>(null);
+    const [editingSaleAmountDraft, setEditingSaleAmountDraft] = useState<string>('');
+    const [saleAmountSaving, setSaleAmountSaving] = useState(false);
+    const [saleAmountError, setSaleAmountError] = useState<string | null>(null);
+    const [saleAmountOverrides, setSaleAmountOverrides] = useState<Record<string, number>>({});
     const missingDates = useMemo(() => getMissingDates(sales, store.id), [sales, store.id]);
     const missingDatesAll = useMemo(() => getMissingDates(sales, store.id, 120), [sales, store.id]);
     const missingDateSet = useMemo(() => new Set(missingDatesAll), [missingDatesAll]);
@@ -3544,25 +3620,25 @@ const HQStoreDetail: React.FC<{
     const [unlinkError, setUnlinkError] = useState<string | null>(null);
     const [invoiceMonthKey, setInvoiceMonthKey] = useState<string>(() => formatMonthKey(new Date()));
     const [invoiceCurrency, setInvoiceCurrency] = useState<'JPY' | 'USD'>('JPY');
-    const defaultInvoiceSummaryMode = useMemo<'royalty_only' | 'withholding'>(() => {
+    const isChinaStore = useMemo(() => {
         const country = String(store.country ?? '').toLowerCase();
         const name = String(store.name ?? '').toLowerCase();
-        const isChinaStore = country.includes('china') || country.includes('中国') || country.includes('중국')
+        return country.includes('china') || country.includes('中国') || country.includes('중국')
             || name.includes('ningbo') || name.includes('宁波') || name.includes('寧波');
-        return isChinaStore ? 'withholding' : 'royalty_only';
     }, [store.id, store.country, store.name]);
-    const [invoiceSummaryMode, setInvoiceSummaryMode] = useState<'royalty_only' | 'withholding'>(defaultInvoiceSummaryMode);
+    const defaultInvoiceSummaryMode = useMemo<'royalty_only' | 'withholding' | 'china_tax'>(() => (
+        isChinaStore ? 'china_tax' : 'royalty_only'
+    ), [isChinaStore]);
+    const [invoiceSummaryMode, setInvoiceSummaryMode] = useState<'royalty_only' | 'withholding' | 'china_tax'>(defaultInvoiceSummaryMode);
     const [invoiceNumber, setInvoiceNumber] = useState<string>('');
     const [invoiceNumberEdited, setInvoiceNumberEdited] = useState(false);
     const [invoiceMinimumDraft, setInvoiceMinimumDraft] = useState<string>('0');
-    const defaultWithholdingRateDraft = useMemo(() => {
-        const country = String(store.country ?? '').toLowerCase();
-        const name = String(store.name ?? '').toLowerCase();
-        const isChinaStore = country.includes('china') || country.includes('中国') || country.includes('중국')
-            || name.includes('ningbo') || name.includes('宁波') || name.includes('寧波');
-        return isChinaStore ? '15.09' : '0';
-    }, [store.id, store.country, store.name]);
+    const defaultWithholdingRateDraft = useMemo(() => (
+        isChinaStore ? '15.09' : '0'
+    ), [isChinaStore]);
     const [invoiceWithholdingTaxRateDraft, setInvoiceWithholdingTaxRateDraft] = useState<string>(defaultWithholdingRateDraft);
+    const [invoiceChinaVatRateDraft, setInvoiceChinaVatRateDraft] = useState<string>('6');
+    const [invoiceChinaIncomeTaxRateDraft, setInvoiceChinaIncomeTaxRateDraft] = useState<string>('10');
     const [invoiceBankChargeDraft, setInvoiceBankChargeDraft] = useState<string>('0');
     const [invoiceBankChargeLabel, setInvoiceBankChargeLabel] = useState<string>('Bank Charge');
     const [invoiceToDraft, setInvoiceToDraft] = useState<string>(store.name || '');
@@ -3580,6 +3656,11 @@ const HQStoreDetail: React.FC<{
     useEffect(() => {
         setInvoiceSummaryMode(defaultInvoiceSummaryMode);
     }, [defaultInvoiceSummaryMode]);
+
+    useEffect(() => {
+        setInvoiceChinaVatRateDraft('6');
+        setInvoiceChinaIncomeTaxRateDraft('10');
+    }, [store.id]);
 
     useEffect(() => {
         setInvoiceToDraft(store.name || '');
@@ -3621,6 +3702,46 @@ const HQStoreDetail: React.FC<{
         }
     };
 
+    const startEditSaleAmount = (sale: Sale) => {
+        if (sale.isClosed) return;
+        const current = saleAmountOverrides[sale.id] ?? sale.totalAmount;
+        setEditingSaleAmountId(sale.id);
+        setEditingSaleAmountDraft(formatDecimalForInput(current));
+        setSaleAmountError(null);
+    };
+
+    const cancelEditSaleAmount = () => {
+        setEditingSaleAmountId(null);
+        setEditingSaleAmountDraft('');
+        setSaleAmountError(null);
+    };
+
+    const saveSaleAmount = async (sale: Sale) => {
+        const nextAmount = parseFloat(editingSaleAmountDraft);
+        if (!Number.isFinite(nextAmount) || nextAmount < 0) {
+            setSaleAmountError('Enter a valid amount (0 or more).');
+            return;
+        }
+        setSaleAmountSaving(true);
+        setSaleAmountError(null);
+        try {
+            const { error } = await supabase
+                .from('sales')
+                .update({ total_amount: nextAmount })
+                .eq('id', sale.id);
+            if (error) throw error;
+            setSaleAmountOverrides((prev) => ({ ...prev, [sale.id]: nextAmount }));
+            setEditingSaleAmountId(null);
+            setEditingSaleAmountDraft('');
+        } catch (e) {
+            console.error('Failed to update sale amount', e);
+            const msg = e instanceof Error ? e.message : 'Failed to update amount.';
+            setSaleAmountError(msg);
+        } finally {
+            setSaleAmountSaving(false);
+        }
+    };
+
     useEffect(() => {
         setRoyaltyDraft(String(store.royaltyPercentage ?? 0));
     }, [store.royaltyPercentage]);
@@ -3628,6 +3749,13 @@ const HQStoreDetail: React.FC<{
     useEffect(() => {
         setCurrencyDraft(store.currency || '');
     }, [store.currency]);
+
+    useEffect(() => {
+        setEditingSaleAmountId(null);
+        setEditingSaleAmountDraft('');
+        setSaleAmountError(null);
+        setSaleAmountOverrides({});
+    }, [store.id]);
 
     const normalizePercentInput = (value: string) => {
         const cleaned = value.replace(/[^\d.]/g, '');
@@ -3866,9 +3994,25 @@ const HQStoreDetail: React.FC<{
         const minimumRoyalty = parseMoneyInput(invoiceMinimumDraft);
         const requestedWithholdingRate = parsePercentInput(invoiceWithholdingTaxRateDraft);
         const withholdingRate = invoiceSummaryMode === 'withholding' ? requestedWithholdingRate : 0;
+        const chinaVatRate = invoiceSummaryMode === 'china_tax' ? parsePercentInput(invoiceChinaVatRateDraft) : 0;
+        const chinaIncomeTaxRate = invoiceSummaryMode === 'china_tax' ? parsePercentInput(invoiceChinaIncomeTaxRateDraft) : 0;
         const bankCharge = parseMoneyInput(invoiceBankChargeDraft);
         const royaltyBase = salesRoyalty === null ? 0 : Math.max(salesRoyalty, minimumRoyalty);
-        const withholdingTax = Math.round((royaltyBase * withholdingRate) / 100);
+        const chinaTaxBase = invoiceSummaryMode === 'china_tax'
+            ? Math.max(0, Math.round(royaltyBase / Math.max(1, 1 + (chinaVatRate / 100))))
+            : 0;
+        const chinaVatTax = invoiceSummaryMode === 'china_tax'
+            ? Math.max(0, royaltyBase - chinaTaxBase)
+            : 0;
+        const chinaIncomeTax = invoiceSummaryMode === 'china_tax'
+            ? Math.max(0, Math.floor((chinaTaxBase * chinaIncomeTaxRate) / 100))
+            : 0;
+        const chinaTaxTotal = invoiceSummaryMode === 'china_tax'
+            ? chinaVatTax + chinaIncomeTax
+            : 0;
+        const withholdingTax = invoiceSummaryMode === 'china_tax'
+            ? chinaTaxTotal
+            : Math.round((royaltyBase * withholdingRate) / 100);
         const totalDue = Math.max(0, royaltyBase - withholdingTax + bankCharge);
         return {
             monthSales,
@@ -3881,6 +4025,12 @@ const HQStoreDetail: React.FC<{
             withholdingTax,
             bankCharge,
             royaltyBase,
+            chinaVatRate,
+            chinaIncomeTaxRate,
+            chinaTaxBase,
+            chinaVatTax,
+            chinaIncomeTax,
+            chinaTaxTotal,
             totalDue,
         };
     }, [
@@ -3893,6 +4043,8 @@ const HQStoreDetail: React.FC<{
         invoiceMinimumDraft,
         invoiceSummaryMode,
         invoiceWithholdingTaxRateDraft,
+        invoiceChinaVatRateDraft,
+        invoiceChinaIncomeTaxRateDraft,
         invoiceBankChargeDraft,
     ]);
 
@@ -3925,8 +4077,9 @@ const HQStoreDetail: React.FC<{
         const totalText = formatAmount(invoiceSummary.totalDue);
         const bankChargeText = formatAmount(invoiceSummary.bankCharge);
         const buyerText = invoiceToDraft.trim() || store.name;
-        const showWithholdingTax = invoiceSummaryMode === 'withholding';
-        const finalAmountLabelText = showWithholdingTax ? 'Remittance Amount' : 'Royalty Amount';
+        const showWithholdingTax = invoiceSummaryMode !== 'royalty_only';
+        const showChinaTaxBreakdown = invoiceSummaryMode === 'china_tax';
+        const finalAmountLabelText = invoiceSummaryMode === 'royalty_only' ? 'Royalty Amount' : 'Remittance Amount';
         const invoiceDateText = formatInvoiceDateDot(issueDate);
         const signatureUrl = `${window.location.origin}/invoice-signature-kasumi.png`;
         const specialNoteHtml = escapeHtml(invoiceSpecialNote.trim()).replace(/\n/g, '<br/>');
@@ -3948,6 +4101,11 @@ const HQStoreDetail: React.FC<{
             showBankCharge: invoiceSummary.bankCharge > 0,
             showWithholdingTax,
             withholdingTaxText,
+            showChinaTaxBreakdown,
+            taxBaseText: formatAmount(invoiceSummary.chinaTaxBase),
+            vatTaxText: formatAmount(invoiceSummary.chinaVatTax),
+            incomeTaxText: formatAmount(invoiceSummary.chinaIncomeTax),
+            taxTotalText: formatAmount(invoiceSummary.chinaTaxTotal),
             finalAmountLabelText,
             finalAmountText: totalText,
             invoiceCurrency,
@@ -4715,11 +4873,12 @@ const HQStoreDetail: React.FC<{
                             <div className="text-[11px] font-bold text-gray-500 mb-1">Summary Format</div>
                             <select
                                 value={invoiceSummaryMode}
-                                onChange={(e) => setInvoiceSummaryMode(e.target.value as 'royalty_only' | 'withholding')}
+                                onChange={(e) => setInvoiceSummaryMode(e.target.value as 'royalty_only' | 'withholding' | 'china_tax')}
                                 className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
                             >
                                 <option value="royalty_only">Royalty Amount only</option>
                                 <option value="withholding">Royalty + Withholding + Remittance</option>
+                                <option value="china_tax">China (VAT 6% + Income Tax 10%)</option>
                             </select>
                         </div>
                         <div>
@@ -4763,6 +4922,28 @@ const HQStoreDetail: React.FC<{
                                     onChange={(e) => setInvoiceWithholdingTaxRateDraft(normalizePercentInput(e.target.value))}
                                     className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
                                     placeholder="15.09"
+                                />
+                            </div>
+                        )}
+                        {invoiceSummaryMode === 'china_tax' && (
+                            <div>
+                                <div className="text-[11px] font-bold text-gray-500 mb-1">VAT Tax (%)</div>
+                                <input
+                                    value={invoiceChinaVatRateDraft}
+                                    onChange={(e) => setInvoiceChinaVatRateDraft(normalizePercentInput(e.target.value))}
+                                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                                    placeholder="6"
+                                />
+                            </div>
+                        )}
+                        {invoiceSummaryMode === 'china_tax' && (
+                            <div>
+                                <div className="text-[11px] font-bold text-gray-500 mb-1">Income Tax (%)</div>
+                                <input
+                                    value={invoiceChinaIncomeTaxRateDraft}
+                                    onChange={(e) => setInvoiceChinaIncomeTaxRateDraft(normalizePercentInput(e.target.value))}
+                                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                                    placeholder="10"
                                 />
                             </div>
                         )}
@@ -4818,8 +4999,24 @@ const HQStoreDetail: React.FC<{
                                 Withholding Tax: <span className="font-bold">{invoiceCurrency} {invoiceSummary.withholdingTax.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
                             </div>
                         )}
+                        {invoiceSummaryMode === 'china_tax' && (
+                            <>
+                                <div>
+                                    Tax Base (Excl. VAT): <span className="font-bold">{invoiceCurrency} {invoiceSummary.chinaTaxBase.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                                </div>
+                                <div>
+                                    VAT Tax: <span className="font-bold">{invoiceCurrency} {invoiceSummary.chinaVatTax.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                                </div>
+                                <div>
+                                    Income Tax: <span className="font-bold">{invoiceCurrency} {invoiceSummary.chinaIncomeTax.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                                </div>
+                                <div>
+                                    Withholding Tax: <span className="font-bold">{invoiceCurrency} {invoiceSummary.chinaTaxTotal.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                                </div>
+                            </>
+                        )}
                         <div>
-                            {invoiceSummaryMode === 'withholding' ? 'Remittance Amount' : 'Royalty Amount'}:{' '}
+                            {invoiceSummaryMode === 'royalty_only' ? 'Royalty Amount' : 'Remittance Amount'}:{' '}
                             <span className="font-bold">{invoiceCurrency} {invoiceSummary.totalDue.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
                         </div>
                     </div>
@@ -5184,11 +5381,38 @@ const HQStoreDetail: React.FC<{
                                         <td className="p-4 text-right font-bold font-mono">
                                             {sale.isClosed ? (
                                                 '-'
+                                            ) : editingSaleAmountId === sale.id ? (
+                                                <div className="flex items-center justify-end gap-2">
+                                                    <input
+                                                        type="text"
+                                                        inputMode="decimal"
+                                                        value={editingSaleAmountDraft}
+                                                        onChange={(e) => setEditingSaleAmountDraft(normalizeDecimalInput(e.target.value, 2))}
+                                                        className="w-32 border border-gray-200 rounded-lg px-2 py-1 text-right text-sm bg-white"
+                                                    />
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => void saveSaleAmount(sale)}
+                                                        disabled={saleAmountSaving}
+                                                        className="text-[11px] font-bold px-2 py-1 rounded-md bg-black text-white disabled:opacity-50"
+                                                    >
+                                                        Save
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={cancelEditSaleAmount}
+                                                        disabled={saleAmountSaving}
+                                                        className="text-[11px] font-bold px-2 py-1 rounded-md border border-gray-200"
+                                                    >
+                                                        Cancel
+                                                    </button>
+                                                </div>
                                             ) : (
                                                 <div className="space-y-1">
-                                                    <div>{`${store.currency} ${sale.totalAmount.toLocaleString()}`}</div>
+                                                    <div>{`${store.currency} ${formatMoneyDisplay(saleAmountOverrides[sale.id] ?? sale.totalAmount)}`}</div>
                                                     {store.currency !== 'JPY' && (() => {
-                                                        const amountJPY = convertToJPY(sale.totalAmount, store.currency, fxRates);
+                                                        const amount = saleAmountOverrides[sale.id] ?? sale.totalAmount;
+                                                        const amountJPY = convertToJPY(amount, store.currency, fxRates);
                                                         if (amountJPY === null) return null;
                                                         return (
                                                             <div className="text-[11px] font-semibold text-gray-500">
@@ -5207,13 +5431,24 @@ const HQStoreDetail: React.FC<{
                                             )}
                                         </td>
                                         <td className="p-4 text-center">
-                                            <button
-                                                type="button"
-                                                onClick={() => toggleSaleDetails(sale.id)}
-                                                className="text-xs font-bold text-gray-700 px-3 py-1 rounded-full border border-gray-200 hover:bg-gray-50 transition"
-                                            >
-                                                {expandedSales.has(sale.id) ? 'Hide' : 'View'}
-                                            </button>
+                                            <div className="flex items-center justify-center gap-2">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => toggleSaleDetails(sale.id)}
+                                                    className="text-xs font-bold text-gray-700 px-3 py-1 rounded-full border border-gray-200 hover:bg-gray-50 transition"
+                                                >
+                                                    {expandedSales.has(sale.id) ? 'Hide' : 'View'}
+                                                </button>
+                                                {!sale.isClosed && editingSaleAmountId !== sale.id && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => startEditSaleAmount(sale)}
+                                                        className="text-xs font-bold text-blue-700 px-3 py-1 rounded-full border border-blue-200 hover:bg-blue-50 transition"
+                                                    >
+                                                        Edit
+                                                    </button>
+                                                )}
+                                            </div>
                                         </td>
                                         <td className="p-4 text-center">
                                             {sale.isClosed || !sale.hasReceipt ? (
@@ -5296,6 +5531,9 @@ const HQStoreDetail: React.FC<{
                 </div>
                 {receiptError && (
                     <div className="mt-3 text-xs text-red-600">{receiptError}</div>
+                )}
+                {saleAmountError && (
+                    <div className="mt-2 text-xs text-red-600">{saleAmountError}</div>
                 )}
             </div>
 
@@ -6472,7 +6710,16 @@ const StoreDashboard: React.FC<{
                                     {recentMonthlyReports.map(sale => (
                                         <div key={sale.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
                                             <div className="font-medium">{sale.date}</div>
-                                            <div className="font-bold">{sale.isClosed ? 'Closed' : `${store.currency} ${sale.totalAmount.toLocaleString()}`}</div>
+                                            <div className="flex items-center gap-3">
+                                                <div className="font-bold">{sale.isClosed ? 'Closed' : `${store.currency} ${formatMoneyDisplay(sale.totalAmount)}`}</div>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => { setReportDate(sale.date); setView('report'); }}
+                                                    className="text-xs font-bold px-3 py-1 rounded-full border border-gray-200 hover:bg-white transition"
+                                                >
+                                                    Edit
+                                                </button>
+                                            </div>
                                         </div>
                                     ))}
                                     {recentMonthlyReports.length === 0 && <div className="text-gray-400 text-sm">No reports in this month.</div>}
