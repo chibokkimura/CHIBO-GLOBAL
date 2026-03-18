@@ -1392,16 +1392,18 @@ function buildInvoiceHtml(params: InvoiceHtmlParams): string {
     .summary-box {
       border: 1px solid #333;
       border-top: none;
-      height: 58mm;
-      padding: 15mm 12mm 8mm 12mm;
+      min-height: 58mm;
+      padding: 10mm 12mm 8mm 12mm;
       box-sizing: border-box;
+      display: flex;
+      flex-direction: column;
     }
     .summary-minimum {
       display: grid;
       grid-template-columns: 1.05fr 1.8fr auto;
       column-gap: 8mm;
       align-items: end;
-      margin-top: 8mm;
+      margin-top: 1mm;
     }
     .summary-minimum .label {
       justify-self: center;
@@ -1420,13 +1422,19 @@ function buildInvoiceHtml(params: InvoiceHtmlParams): string {
       font-size: 10.5pt;
       font-weight: 700;
     }
+    .summary-lines {
+      margin-top: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 3.2mm;
+    }
     .summary-line {
       display: flex;
       justify-content: space-between;
       align-items: end;
       font-size: 10.5pt;
       font-weight: 700;
-      margin-top: 6mm;
+      margin-top: 0;
     }
     .summary-line.red { color: #d11a1a; }
     .summary-line.total {
@@ -1434,7 +1442,7 @@ function buildInvoiceHtml(params: InvoiceHtmlParams): string {
       grid-template-columns: 1fr auto;
       align-items: end;
       padding-left: 56%;
-      margin-top: 12mm;
+      margin-top: 2mm;
     }
     .summary-line.total .label {
       font-size: 11.5pt;
@@ -1556,16 +1564,18 @@ function buildInvoiceHtml(params: InvoiceHtmlParams): string {
           <span class="note">${specialNoteHtml || '&nbsp;'}</span>
           <span class="amount">${escapeHtml(minimumText)}</span>
         </div>
-        <div class="summary-line"><span>Royalty Amount</span><span>${escapeHtml(royaltyAmountText)}</span></div>
-        ${showChinaTaxBreakdown ? `<div class="summary-line"><span>Tax Base (Excl. VAT)</span><span>${escapeHtml(taxBaseText)}</span></div>` : ''}
-        ${showChinaTaxBreakdown ? `<div class="summary-line"><span>VAT (6%)</span><span>${escapeHtml(vatTaxText)}</span></div>` : ''}
-        ${showChinaTaxBreakdown ? `<div class="summary-line"><span>Income Tax (10%)</span><span>${escapeHtml(incomeTaxText)}</span></div>` : ''}
-        ${showChinaTaxBreakdown ? `<div class="summary-line"><span>Tax Total</span><span>${escapeHtml(taxTotalText)}</span></div>` : ''}
-        ${showWithholdingTax ? `<div class="summary-line"><span>Withholding Tax</span><span>${escapeHtml(withholdingTaxText)}</span></div>` : ''}
-        ${showBankCharge ? `<div class="summary-line red"><span>${escapeHtml(bankChargeTitle)}</span><span>${escapeHtml(bankChargeText)}</span></div>` : ''}
-        <div class="summary-line total">
-          <span class="label">${escapeHtml(finalAmountLabelText)}</span>
-          <span class="amount">${escapeHtml(finalAmountText)}</span>
+        <div class="summary-lines">
+          <div class="summary-line"><span>Royalty Amount</span><span>${escapeHtml(royaltyAmountText)}</span></div>
+          ${showChinaTaxBreakdown ? `<div class="summary-line"><span>Tax Base (Excl. VAT)</span><span>${escapeHtml(taxBaseText)}</span></div>` : ''}
+          ${showChinaTaxBreakdown ? `<div class="summary-line"><span>VAT (6%)</span><span>${escapeHtml(vatTaxText)}</span></div>` : ''}
+          ${showChinaTaxBreakdown ? `<div class="summary-line"><span>Income Tax (10%)</span><span>${escapeHtml(incomeTaxText)}</span></div>` : ''}
+          ${showChinaTaxBreakdown ? `<div class="summary-line"><span>Tax Total</span><span>${escapeHtml(taxTotalText)}</span></div>` : ''}
+          ${showWithholdingTax ? `<div class="summary-line"><span>Withholding Tax</span><span>${escapeHtml(withholdingTaxText)}</span></div>` : ''}
+          ${showBankCharge ? `<div class="summary-line red"><span>${escapeHtml(bankChargeTitle)}</span><span>${escapeHtml(bankChargeText)}</span></div>` : ''}
+          <div class="summary-line total">
+            <span class="label">${escapeHtml(finalAmountLabelText)}</span>
+            <span class="amount">${escapeHtml(finalAmountText)}</span>
+          </div>
         </div>
       </div>
 
