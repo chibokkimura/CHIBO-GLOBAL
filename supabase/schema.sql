@@ -506,23 +506,63 @@ using (
 drop policy if exists "set_menus_select_hq_or_own" on public.set_menus;
 create policy "set_menus_select_hq_or_own"
 on public.set_menus for select
-using (public.is_hq() or store_id = public.current_store_id());
+using (
+  public.is_hq()
+  or exists (
+    select 1
+    from public.app_users u
+    where u.user_id = auth.uid()
+      and u.store_id = set_menus.store_id
+  )
+);
 
 drop policy if exists "set_menus_write_hq_or_own" on public.set_menus;
 create policy "set_menus_write_hq_or_own"
 on public.set_menus for insert
-with check (public.is_hq() or store_id = public.current_store_id());
+with check (
+  public.is_hq()
+  or exists (
+    select 1
+    from public.app_users u
+    where u.user_id = auth.uid()
+      and u.store_id = set_menus.store_id
+  )
+);
 
 drop policy if exists "set_menus_update_hq_or_own" on public.set_menus;
 create policy "set_menus_update_hq_or_own"
 on public.set_menus for update
-using (public.is_hq() or store_id = public.current_store_id())
-with check (public.is_hq() or store_id = public.current_store_id());
+using (
+  public.is_hq()
+  or exists (
+    select 1
+    from public.app_users u
+    where u.user_id = auth.uid()
+      and u.store_id = set_menus.store_id
+  )
+)
+with check (
+  public.is_hq()
+  or exists (
+    select 1
+    from public.app_users u
+    where u.user_id = auth.uid()
+      and u.store_id = set_menus.store_id
+  )
+);
 
 drop policy if exists "set_menus_delete_hq_or_own" on public.set_menus;
 create policy "set_menus_delete_hq_or_own"
 on public.set_menus for delete
-using (public.is_hq() or store_id = public.current_store_id());
+using (
+  public.is_hq()
+  or exists (
+    select 1
+    from public.app_users u
+    where u.user_id = auth.uid()
+      and u.store_id = set_menus.store_id
+  )
+);
 
 -- set_menu_items: HQ all; OWNER only own store via set menu join
 drop policy if exists "set_menu_items_select_hq_or_own" on public.set_menu_items;
@@ -530,9 +570,11 @@ create policy "set_menu_items_select_hq_or_own"
 on public.set_menu_items for select
 using (
   public.is_hq() or exists (
-    select 1 from public.set_menus sm
+    select 1
+    from public.set_menus sm
+    join public.app_users u on u.store_id = sm.store_id
     where sm.id = set_menu_items.set_menu_id
-      and sm.store_id = public.current_store_id()
+      and u.user_id = auth.uid()
   )
 );
 
@@ -541,9 +583,11 @@ create policy "set_menu_items_write_hq_or_own"
 on public.set_menu_items for insert
 with check (
   public.is_hq() or exists (
-    select 1 from public.set_menus sm
+    select 1
+    from public.set_menus sm
+    join public.app_users u on u.store_id = sm.store_id
     where sm.id = set_menu_items.set_menu_id
-      and sm.store_id = public.current_store_id()
+      and u.user_id = auth.uid()
   )
 );
 
@@ -552,16 +596,20 @@ create policy "set_menu_items_update_hq_or_own"
 on public.set_menu_items for update
 using (
   public.is_hq() or exists (
-    select 1 from public.set_menus sm
+    select 1
+    from public.set_menus sm
+    join public.app_users u on u.store_id = sm.store_id
     where sm.id = set_menu_items.set_menu_id
-      and sm.store_id = public.current_store_id()
+      and u.user_id = auth.uid()
   )
 )
 with check (
   public.is_hq() or exists (
-    select 1 from public.set_menus sm
+    select 1
+    from public.set_menus sm
+    join public.app_users u on u.store_id = sm.store_id
     where sm.id = set_menu_items.set_menu_id
-      and sm.store_id = public.current_store_id()
+      and u.user_id = auth.uid()
   )
 );
 
@@ -570,9 +618,11 @@ create policy "set_menu_items_delete_hq_or_own"
 on public.set_menu_items for delete
 using (
   public.is_hq() or exists (
-    select 1 from public.set_menus sm
+    select 1
+    from public.set_menus sm
+    join public.app_users u on u.store_id = sm.store_id
     where sm.id = set_menu_items.set_menu_id
-      and sm.store_id = public.current_store_id()
+      and u.user_id = auth.uid()
   )
 );
 
