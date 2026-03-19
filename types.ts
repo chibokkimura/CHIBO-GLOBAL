@@ -87,6 +87,7 @@ export interface Sale {
   hasReceipt?: boolean;
   isClosed?: boolean; // New: Flag for Closed/Rest days
   closedReason?: string; // Optional reason when closed
+  comment?: string; // Optional daily report comment
 }
 
 export interface InventoryLog {
