@@ -2637,7 +2637,10 @@ const SalesReporter: React.FC<{
                 />
               </div>
 
-            <h3 className="font-bold text-lg mb-4">Sales Quantity by Category</h3>
+            <h3 className="font-bold text-lg mb-2">Single Item Quantity by Category</h3>
+            <div className="text-xs text-gray-500 mb-4">
+              Enter only direct item sales here. Set menu sales should be entered in the Set Menu section below.
+            </div>
             <div className="space-y-3">
                 {categories.map(category => {
                 const qty = items.find(i => i.menuId === category)?.quantity || 0;
@@ -2671,7 +2674,10 @@ const SalesReporter: React.FC<{
 
             {setMenus.length > 0 && (
               <>
-                <h3 className="font-bold text-lg mt-8 mb-4">Set Menu Quantity</h3>
+                <h3 className="font-bold text-lg mt-8 mb-2">Set Menu Quantity</h3>
+                <div className="text-xs text-gray-500 mb-4">
+                  Inventory usage is auto-calculated from each set menu's components.
+                </div>
                 <div className="space-y-3">
                   {setMenus.map((setMenu) => {
                     const qty = setMenuItems.find((item) => item.setMenuId === setMenu.id)?.quantity || 0;
