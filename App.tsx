@@ -201,14 +201,27 @@ function isMissingClosedReasonColumnError(error: unknown): boolean {
 }
 
 function isMissingColumnError(error: unknown, columnName: string): boolean {
+  const code = typeof error === 'object' && error && 'code' in error
+    ? String((error as any).code ?? '').trim()
+    : '';
   const message = typeof error === 'object' && error && 'message' in error
     ? String((error as any).message)
     : '';
-  const lower = message.toLowerCase();
+  const details = typeof error === 'object' && error && 'details' in error
+    ? String((error as any).details)
+    : '';
+  const hint = typeof error === 'object' && error && 'hint' in error
+    ? String((error as any).hint)
+    : '';
+  const lower = `${message} ${details} ${hint}`.toLowerCase();
   const target = columnName.toLowerCase();
   return (
+    code === '42703' ||
     lower.includes(`could not find the '${target}' column`) ||
     lower.includes(`column ${target} does not exist`) ||
+    lower.includes(`column ${target} of relation`) ||
+    lower.includes(`column ${target} of table`) ||
+    lower.includes(`.${target}`) && lower.includes('does not exist') ||
     lower.includes(`column \"${target}\" does not exist`) ||
     lower.includes(`column '${target}' does not exist`)
   );
@@ -653,11 +666,9 @@ async function loadSales(daysBack?: number): Promise<Sale[]> {
       .select('id,comment')
       .in('id', saleIds);
     if (commentErr) {
-      if (isMissingColumnError(commentErr, 'comment')) {
-        salesCommentColumnSupported = false;
-      } else {
-        throw commentErr;
-      }
+      // Comments are optional; never fail sales loading because of this sub-query.
+      salesCommentColumnSupported = false;
+      console.warn('Skipping sales comment load', commentErr);
     } else {
       salesCommentColumnSupported = true;
       (commentRows ?? []).forEach((row: any) => {
