@@ -82,6 +82,7 @@ const OWNER_VIEW_STORAGE_PREFIX = 'chibo:owner:view:';
 const HQ_SELECTED_STORE_STORAGE_KEY = 'chibo:hq:selectedStoreId';
 let salesClosedReasonColumnSupported: boolean | null = null;
 let salesIsClosedColumnSupported: boolean | null = null;
+let salesCommentColumnSupported: boolean | null = null;
 let setMenuTableSupported: boolean | null = null;
 let saleSetItemsTableSupported: boolean | null = null;
 const SALES_RECEIPT_IMAGE_RESIZE = { maxWidth: 1800, maxHeight: 1800, quality: 0.85 };
@@ -211,6 +212,35 @@ function isMissingColumnError(error: unknown, columnName: string): boolean {
     lower.includes(`column \"${target}\" does not exist`) ||
     lower.includes(`column '${target}' does not exist`)
   );
+}
+
+function toErrorMessage(error: unknown, fallback: string): string {
+  const parseRecord = (record: Record<string, unknown>): string | null => {
+    const directParts = [record.message, record.details, record.hint, record.code]
+      .map((part) => String(part ?? '').trim())
+      .filter(Boolean);
+    if (directParts.length > 0) {
+      return directParts.join(' | ');
+    }
+    if (record.error && typeof record.error === 'object') {
+      return parseRecord(record.error as Record<string, unknown>);
+    }
+    return null;
+  };
+
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+  if (typeof error === 'object' && error !== null) {
+    const parsed = parseRecord(error as Record<string, unknown>);
+    if (parsed) {
+      return parsed;
+    }
+  }
+  if (typeof error === 'string' && error.trim()) {
+    return error.trim();
+  }
+  return fallback;
 }
 
 function isMissingTableError(error: unknown, tableName: string): boolean {
@@ -616,6 +646,30 @@ async function loadSales(daysBack?: number): Promise<Sale[]> {
     }
   }
 
+  const saleCommentById = new Map<string, string>();
+  if (saleIds.length > 0 && salesCommentColumnSupported !== false) {
+    const { data: commentRows, error: commentErr } = await supabase
+      .from('sales')
+      .select('id,comment')
+      .in('id', saleIds);
+    if (commentErr) {
+      if (isMissingColumnError(commentErr, 'comment')) {
+        salesCommentColumnSupported = false;
+      } else {
+        throw commentErr;
+      }
+    } else {
+      salesCommentColumnSupported = true;
+      (commentRows ?? []).forEach((row: any) => {
+        const saleId = String(row.id ?? '');
+        const comment = String(row.comment ?? '').trim();
+        if (saleId && comment) {
+          saleCommentById.set(saleId, comment);
+        }
+      });
+    }
+  }
+
   let itemData: any[] = [];
   if (saleIds.length > 0) {
     const { data, error: itemErr } = await supabase
@@ -676,6 +730,7 @@ async function loadSales(daysBack?: number): Promise<Sale[]> {
     hasReceipt: receiptIds.has(s.id),
     isClosed: Boolean(s.is_closed),
     closedReason: s.closed_reason ?? undefined,
+    comment: saleCommentById.get(String(s.id)) ?? undefined,
   }));
 
   return dedupeSalesByStoreDate(mappedSales);
@@ -796,7 +851,7 @@ async function saveSetMenu(setMenu: SetMenu) {
       setMenuTableSupported = false;
       throw new Error('Set menu tables are not ready. Run set menu migration SQL first.');
     }
-    throw menuErr;
+    throw new Error(`Failed to save set menu header: ${toErrorMessage(menuErr, 'Unknown set menu error')}`);
   }
   setMenuTableSupported = true;
 
@@ -815,7 +870,7 @@ async function saveSetMenu(setMenu: SetMenu) {
         setMenuTableSupported = false;
         throw new Error('Set menu item table is missing. Run set menu migration SQL first.');
       }
-      throw upsertErr;
+      throw new Error(`Failed to save set menu components: ${toErrorMessage(upsertErr, 'Unknown set menu item error')}`);
     }
   }
 
@@ -824,7 +879,7 @@ async function saveSetMenu(setMenu: SetMenu) {
       .from('set_menu_items')
       .delete()
       .eq('set_menu_id', setMenu.id);
-    if (clearErr) throw clearErr;
+    if (clearErr) throw new Error(`Failed to clear set menu components: ${toErrorMessage(clearErr, 'Unknown clear error')}`);
     return;
   }
 
@@ -832,7 +887,7 @@ async function saveSetMenu(setMenu: SetMenu) {
     .from('set_menu_items')
     .select('menu_id')
     .eq('set_menu_id', setMenu.id);
-  if (currentErr) throw currentErr;
+  if (currentErr) throw new Error(`Failed to load previous set menu components: ${toErrorMessage(currentErr, 'Unknown load error')}`);
 
   const keepSet = new Set(nextRows.map((row) => row.menu_id));
   const toDelete = (currentRows ?? [])
@@ -845,7 +900,7 @@ async function saveSetMenu(setMenu: SetMenu) {
       .delete()
       .eq('set_menu_id', setMenu.id)
       .in('menu_id', toDelete);
-    if (pruneErr) throw pruneErr;
+    if (pruneErr) throw new Error(`Failed to remove old set menu components: ${toErrorMessage(pruneErr, 'Unknown delete error')}`);
   }
 }
 
@@ -979,6 +1034,7 @@ async function addSale(sale: Sale) {
     date: sale.date,
     total_amount: sale.totalAmount,
     receipt_image: receiptPath,
+    comment: sale.comment ?? null,
   };
   const insertPayloadWithIsClosed = {
     ...insertBasePayload,
@@ -992,6 +1048,7 @@ async function addSale(sale: Sale) {
   const updateBasePayload = {
     total_amount: sale.totalAmount,
     receipt_image: receiptPath,
+    comment: sale.comment ?? null,
   };
   const updatePayloadWithIsClosed = {
     ...updateBasePayload,
@@ -1019,23 +1076,42 @@ async function addSale(sale: Sale) {
   let sErr: any = null;
   let writtenPayloadType: 'full' | 'isClosedOnly' | 'legacy' | null = null;
   for (const payload of payloadOrder) {
-    const result = existingSaleId
-      ? await supabase.from('sales').update(payload).eq('id', targetSaleId)
-      : await supabase.from('sales').insert(payload);
-    if (!result.error) {
-      if (payload === insertPayloadWithClosedReason || payload === updatePayloadWithClosedReason) {
-        writtenPayloadType = 'full';
-      } else if (payload === insertPayloadWithIsClosed || payload === updatePayloadWithIsClosed) {
-        writtenPayloadType = 'isClosedOnly';
-      } else {
-        writtenPayloadType = 'legacy';
+    let activePayload: Record<string, unknown> = { ...payload };
+    while (true) {
+      const result = existingSaleId
+        ? await supabase.from('sales').update(activePayload).eq('id', targetSaleId)
+        : await supabase.from('sales').insert(activePayload);
+      if (!result.error) {
+        if (payload === insertPayloadWithClosedReason || payload === updatePayloadWithClosedReason) {
+          writtenPayloadType = 'full';
+        } else if (payload === insertPayloadWithIsClosed || payload === updatePayloadWithIsClosed) {
+          writtenPayloadType = 'isClosedOnly';
+        } else {
+          writtenPayloadType = 'legacy';
+        }
+        salesCommentColumnSupported = Object.prototype.hasOwnProperty.call(activePayload, 'comment');
+        sErr = null;
+        break;
       }
-      sErr = null;
+      sErr = result.error;
+      if (isMissingColumnError(result.error, 'comment') && Object.prototype.hasOwnProperty.call(activePayload, 'comment')) {
+        salesCommentColumnSupported = false;
+        const { comment: _comment, ...withoutComment } = activePayload;
+        activePayload = withoutComment;
+        continue;
+      }
+      const missingClosedReason = isMissingClosedReasonColumnError(result.error);
+      const missingIsClosed = isMissingColumnError(result.error, 'is_closed');
+      if (missingClosedReason || missingIsClosed) {
+        break;
+      }
       break;
     }
-    sErr = result.error;
-    const missingClosedReason = isMissingClosedReasonColumnError(result.error);
-    const missingIsClosed = isMissingColumnError(result.error, 'is_closed');
+    if (!sErr) {
+      break;
+    }
+    const missingClosedReason = isMissingClosedReasonColumnError(sErr);
+    const missingIsClosed = isMissingColumnError(sErr, 'is_closed');
     if (missingClosedReason || missingIsClosed) {
       continue;
     }
@@ -2302,7 +2378,7 @@ const SalesReporter: React.FC<{
       setItems((existingSaleForDate.items ?? []).map((item) => ({ ...item })));
       setSetMenuItems((existingSaleForDate.setItems ?? []).map((item) => ({ ...item })));
       setClosedReason(existingSaleForDate.closedReason ?? '');
-      setComment('');
+      setComment(existingSaleForDate.comment ?? '');
       return;
     }
     setIsClosed(false);
@@ -2464,6 +2540,7 @@ const SalesReporter: React.FC<{
       receiptImage: isClosed ? undefined : receiptImage || undefined,
       hasReceipt: !isClosed && hasAnyReceipt,
       closedReason: isClosed ? reason : undefined,
+      comment: comment.trim() || undefined,
     };
     setSubmitError(null);
     setSubmitting(true);
@@ -2471,7 +2548,7 @@ const SalesReporter: React.FC<{
       await Promise.resolve(onSave(newSale));
     } catch (e) {
       console.error('Failed to submit sales report', e);
-      const message = e instanceof Error ? e.message : 'Failed to submit report.';
+      const message = toErrorMessage(e, 'Failed to submit report.');
       setSubmitError(message);
     } finally {
       setSubmitting(false);
@@ -2810,7 +2887,7 @@ const SetMenuEditor: React.FC<{
             }));
         } catch (e) {
             console.error('Failed to save set menu', e);
-            const message = e instanceof Error ? e.message : 'Failed to save set menu.';
+            const message = toErrorMessage(e, 'Failed to save set menu.');
             setError(message);
         } finally {
             setSaving(false);
@@ -3563,9 +3640,13 @@ const HQStoreDetail: React.FC<{
     const storeSetMenus = setMenus.filter(sm => sm.storeId === store.id);
     const storeEmployees = employees.filter(e => e.storeId === store.id);
     const storeSales = useMemo(() => sales.filter(s => s.storeId === store.id), [sales, store.id]);
-    const sortedStoreSales = useMemo(
-        () => [...storeSales].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()),
+    const canonicalStoreSales = useMemo(
+        () => dedupeSalesByStoreDate(storeSales),
         [storeSales]
+    );
+    const sortedStoreSales = useMemo(
+        () => [...canonicalStoreSales].sort((a, b) => b.date.localeCompare(a.date) || String(b.id).localeCompare(String(a.id))),
+        [canonicalStoreSales]
     );
     const defaultSalesMonthKey = 'all';
     const salesMonthOptions = useMemo(() => {
@@ -3595,7 +3676,7 @@ const HQStoreDetail: React.FC<{
     const missingDates = useMemo(() => getMissingDates(sales, store.id), [sales, store.id]);
     const missingDatesAll = useMemo(() => getMissingDates(sales, store.id, 120), [sales, store.id]);
     const missingDateSet = useMemo(() => new Set(missingDatesAll), [missingDatesAll]);
-    const submittedDateSet = useMemo(() => new Set(storeSales.map(s => s.date)), [storeSales]);
+    const submittedDateSet = useMemo(() => new Set(canonicalStoreSales.map(s => s.date)), [canonicalStoreSales]);
     const [showMissingCalendar, setShowMissingCalendar] = useState(false);
     const [calendarMonth, setCalendarMonth] = useState(() => {
         const d = new Date();
@@ -3660,6 +3741,8 @@ const HQStoreDetail: React.FC<{
     const [invoiceError, setInvoiceError] = useState<string | null>(null);
     const [detailSection, setDetailSection] = useState<'sales' | 'inventory' | 'invoice' | 'menu' | 'staff' | 'accounts'>('sales');
     const [menuSection, setMenuSection] = useState<'items' | 'sets'>('items');
+    const hqNavReadyRef = useRef(false);
+    const hqPopLockRef = useRef(false);
 
     useEffect(() => {
         setSalesMonthFilter(defaultSalesMonthKey);
@@ -3683,8 +3766,102 @@ const HQStoreDetail: React.FC<{
     }, [store.id, store.name]);
 
     useEffect(() => {
-        setDetailSection('sales');
-        setMenuSection('items');
+        if (typeof window === 'undefined') return;
+        const url = new URL(window.location.href);
+        const querySection = url.searchParams.get('hs');
+        const queryMenuSection = url.searchParams.get('hm');
+        const fromQuerySection = (
+            querySection === 'sales' ||
+            querySection === 'inventory' ||
+            querySection === 'invoice' ||
+            querySection === 'menu' ||
+            querySection === 'staff' ||
+            querySection === 'accounts'
+        ) ? querySection : null;
+        const fromQueryMenuSection = queryMenuSection === 'sets' ? 'sets' : (queryMenuSection === 'items' ? 'items' : null);
+
+        const state = window.history.state as { screen?: string; storeId?: string; section?: string; menuSection?: string } | null;
+        const fromState = state && state.screen === 'hq-detail' && state.storeId === store.id
+            ? {
+                section: (
+                    state.section === 'sales' ||
+                    state.section === 'inventory' ||
+                    state.section === 'invoice' ||
+                    state.section === 'menu' ||
+                    state.section === 'staff' ||
+                    state.section === 'accounts'
+                ) ? state.section : null,
+                menuSection: state.menuSection === 'sets' ? 'sets' : (state.menuSection === 'items' ? 'items' : null),
+            }
+            : null;
+
+        const restoredSection = fromQuerySection ?? fromState?.section ?? 'sales';
+        const restoredMenuSection = fromQueryMenuSection ?? fromState?.menuSection ?? 'items';
+
+        hqPopLockRef.current = true;
+        setDetailSection(restoredSection);
+        setMenuSection(restoredMenuSection);
+
+        window.history.replaceState(
+            { ...(window.history.state ?? {}), screen: 'hq-detail', storeId: store.id, section: restoredSection, menuSection: restoredMenuSection },
+            '',
+            `${url.pathname}${url.search}${url.hash}`
+        );
+        hqNavReadyRef.current = true;
+    }, [store.id]);
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        if (!hqNavReadyRef.current) return;
+        if (hqPopLockRef.current) {
+            hqPopLockRef.current = false;
+            return;
+        }
+        window.history.pushState(
+            { ...(window.history.state ?? {}), screen: 'hq-detail', storeId: store.id, section: detailSection, menuSection },
+            ''
+        );
+    }, [store.id, detailSection, menuSection]);
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        if (!hqNavReadyRef.current) return;
+        const url = new URL(window.location.href);
+        url.searchParams.set('hs', detailSection);
+        if (detailSection === 'menu') {
+            url.searchParams.set('hm', menuSection);
+        } else {
+            url.searchParams.delete('hm');
+        }
+        window.history.replaceState(
+            { ...(window.history.state ?? {}), screen: 'hq-detail', storeId: store.id, section: detailSection, menuSection },
+            '',
+            `${url.pathname}${url.search}${url.hash}`
+        );
+    }, [store.id, detailSection, menuSection]);
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        const onPopState = (e: PopStateEvent) => {
+            const state = e.state as { screen?: string; storeId?: string; section?: string; menuSection?: string } | null;
+            if (!state || state.screen !== 'hq-detail' || state.storeId !== store.id) {
+                return;
+            }
+            hqPopLockRef.current = true;
+            setDetailSection(
+                state.section === 'sales' ||
+                state.section === 'inventory' ||
+                state.section === 'invoice' ||
+                state.section === 'menu' ||
+                state.section === 'staff' ||
+                state.section === 'accounts'
+                    ? state.section
+                    : 'sales'
+            );
+            setMenuSection(state.menuSection === 'sets' ? 'sets' : 'items');
+        };
+        window.addEventListener('popstate', onPopState);
+        return () => window.removeEventListener('popstate', onPopState);
     }, [store.id]);
 
     const defaultInvoiceNumber = useMemo(() => {
@@ -4150,13 +4327,17 @@ const HQStoreDetail: React.FC<{
         }
     };
 
+    const salesMetricsEnabled = detailSection === 'sales';
+    const inventoryMetricsEnabled = detailSection === 'sales' || detailSection === 'inventory';
+
     const monthlyRevenueData = useMemo(() => {
+        if (!salesMetricsEnabled) return [];
         const data: { name: string; value: number }[] = [];
         const now = new Date();
         for (let i = 11; i >= 0; i--) {
             const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
             const key = formatDate(d).slice(0, 7);
-            const total = storeSales
+            const total = canonicalStoreSales
                 .filter(s => s.date.startsWith(key))
                 .reduce((sum, s) => sum + s.totalAmount, 0);
             data.push({
@@ -4165,9 +4346,26 @@ const HQStoreDetail: React.FC<{
             });
         }
         return data;
-    }, [storeSales]);
+    }, [canonicalStoreSales, salesMetricsEnabled]);
 
     const performanceSummary = useMemo(() => {
+        const formatMoney = (amount: number) => `${store.currency} ${Math.round(amount).toLocaleString()}`;
+        const formatJPY = (amount: number) => {
+            const converted = convertToJPY(amount, store.currency, fxRates);
+            if (converted === null) return null;
+            return `¥ ${Math.round(converted).toLocaleString()}`;
+        };
+
+        if (!salesMetricsEnabled) {
+            return {
+                monthly: { value: 0, baseline: 0, deltaPct: null as number | null },
+                weekly: { value: 0, baseline: 0, deltaPct: null as number | null },
+                yoy: { value: 0, baseline: 0, deltaPct: null as number | null },
+                formatMoney,
+                formatJPY,
+            };
+        }
+
         const now = new Date();
         const todayKey = formatDate(now);
         const thisMonthKey = formatMonthKey(now);
@@ -4188,12 +4386,12 @@ const HQStoreDetail: React.FC<{
         const prevWeekEndKey = formatDate(prevWeekEnd);
 
         const sumByMonthKey = (monthKey: string) =>
-            storeSales
+            canonicalStoreSales
                 .filter((sale) => sale.date.startsWith(monthKey))
                 .reduce((sum, sale) => sum + (sale.totalAmount || 0), 0);
 
         const sumByDateRange = (fromKey: string, toKey: string) =>
-            storeSales
+            canonicalStoreSales
                 .filter((sale) => sale.date >= fromKey && sale.date <= toKey)
                 .reduce((sum, sale) => sum + (sale.totalAmount || 0), 0);
 
@@ -4206,13 +4404,6 @@ const HQStoreDetail: React.FC<{
         const calcDelta = (current: number, baseline: number) => {
             if (baseline <= 0) return null;
             return ((current - baseline) / baseline) * 100;
-        };
-
-        const formatMoney = (amount: number) => `${store.currency} ${Math.round(amount).toLocaleString()}`;
-        const formatJPY = (amount: number) => {
-            const converted = convertToJPY(amount, store.currency, fxRates);
-            if (converted === null) return null;
-            return `¥ ${Math.round(converted).toLocaleString()}`;
         };
 
         return {
@@ -4234,7 +4425,7 @@ const HQStoreDetail: React.FC<{
             formatMoney,
             formatJPY,
         };
-    }, [storeSales, store.currency, fxRates]);
+    }, [canonicalStoreSales, store.currency, fxRates, salesMetricsEnabled]);
 
     const formatDeltaText = (deltaPct: number | null) => {
         if (deltaPct === null) return 'No baseline data';
@@ -4422,6 +4613,7 @@ const HQStoreDetail: React.FC<{
 
     // Average ingredient usage per category (based on menu recipes)
     const categoryUsageMap = useMemo(() => {
+        if (!inventoryMetricsEnabled) return {} as Record<string, Record<string, number>>;
         const map: Record<string, Record<string, number>> = {};
         categories.forEach(cat => {
             const catMenus = storeMenus.filter(m => m.category === cat);
@@ -4443,10 +4635,11 @@ const HQStoreDetail: React.FC<{
             });
         });
         return map;
-    }, [categories, storeMenus, ingredients, standardIngredients]);
+    }, [categories, storeMenus, ingredients, standardIngredients, inventoryMetricsEnabled]);
 
     // --- Real-time Inventory Calculation Logic ---
     const inventoryStats = useMemo(() => {
+        if (!inventoryMetricsEnabled) return {} as Record<string, { used: number; unit: string; par: number; reorder: number; remaining: number | null; configured: boolean }>;
         const stats: Record<string, { used: number; unit: string; par: number; reorder: number; remaining: number | null; configured: boolean }> = {};
         standardIngredients.forEach(ing => {
             const key = `${ing.name}::${ing.unit}`;
@@ -4458,7 +4651,7 @@ const HQStoreDetail: React.FC<{
         });
 
         // 2. Apply Sales Data to calculate total consumption
-        storeSales.forEach(sale => {
+        canonicalStoreSales.forEach(sale => {
             sale.items.forEach(saleItem => {
                 // In SalesReporter, menuId IS the Category Name
                 const categoryName = saleItem.menuId; 
@@ -4483,7 +4676,7 @@ const HQStoreDetail: React.FC<{
         });
 
         return stats;
-    }, [standardIngredients, categoryUsageMap, storeSales, storeStockMap]);
+    }, [standardIngredients, categoryUsageMap, canonicalStoreSales, storeStockMap, inventoryMetricsEnabled]);
 
     return (
         <div className="p-8 max-w-7xl mx-auto w-full relative">
@@ -5397,6 +5590,11 @@ const HQStoreDetail: React.FC<{
                                                         Closure reason: {sale.closedReason}
                                                     </div>
                                                 )}
+                                                {sale.comment && (
+                                                    <div className="mb-3 text-xs font-semibold text-gray-700">
+                                                        Comment: <span className="font-medium text-gray-600">{sale.comment}</span>
+                                                    </div>
+                                                )}
                                                 <div className="text-xs font-bold text-gray-500 uppercase mb-2">Set Menu Quantities</div>
                                                 {sale.setItems?.length ? (
                                                     <div className="flex flex-wrap gap-2">
@@ -6274,6 +6472,7 @@ const StoreDashboard: React.FC<{
         () => dedupeSalesByStoreDate(storeSales),
         [storeSales]
     );
+    const dashboardMetricsEnabled = view === 'dashboard';
     const dashboardMonthKey = formatMonthKey(new Date());
     const sortedStoreSales = useMemo(
         () => [...canonicalStoreSales].sort((a, b) => b.date.localeCompare(a.date) || String(b.id).localeCompare(String(a.id))),
@@ -6293,10 +6492,10 @@ const StoreDashboard: React.FC<{
         return Array.from(keys).sort((a, b) => b.localeCompare(a));
     }, [recentMonthOptions, dashboardMonthKey]);
     const [recentReportMonth, setRecentReportMonth] = useState<string>(dashboardMonthKey);
-    const recentMonthlyReports = useMemo(
-        () => sortedStoreSales.filter((sale) => extractMonthKey(sale.date) === recentReportMonth),
-        [sortedStoreSales, recentReportMonth]
-    );
+    const recentMonthlyReports = useMemo(() => {
+        if (!dashboardMetricsEnabled) return [];
+        return sortedStoreSales.filter((sale) => extractMonthKey(sale.date) === recentReportMonth);
+    }, [sortedStoreSales, recentReportMonth, dashboardMetricsEnabled]);
     useEffect(() => {
         setRecentReportMonth(dashboardMonthKey);
     }, [store.id, dashboardMonthKey]);
@@ -6338,8 +6537,9 @@ const StoreDashboard: React.FC<{
         return new Date(d.getFullYear(), d.getMonth(), 1);
     });
 
-    // Chart Data Preparation
+    // Chart Data Preparation (deferred when dashboard is not visible)
     const salesData = useMemo(() => {
+        if (!dashboardMetricsEnabled) return [];
         const totalsByDate = new Map<string, number>();
         canonicalStoreSales.forEach((sale) => {
             totalsByDate.set(sale.date, (totalsByDate.get(sale.date) ?? 0) + (sale.totalAmount || 0));
@@ -6357,9 +6557,10 @@ const StoreDashboard: React.FC<{
             });
         }
         return data;
-    }, [canonicalStoreSales]);
+    }, [canonicalStoreSales, dashboardMetricsEnabled]);
 
     const categoryMonthlyData = useMemo(() => {
+        if (!dashboardMetricsEnabled) return [];
         const today = new Date();
         const currentMonthKey = formatMonthKey(today);
         const prevMonthDate = new Date(today.getFullYear(), today.getMonth() - 1, 1);
@@ -6392,10 +6593,13 @@ const StoreDashboard: React.FC<{
             current: currentCounts[name] || 0,
             previous: prevCounts[name] || 0
         }));
-    }, [canonicalStoreSales, globalConfig.categories]);
+    }, [canonicalStoreSales, globalConfig.categories, dashboardMetricsEnabled]);
 
     // Comparison Logic (Current Month vs Previous Month)
     const metricComparison = useMemo(() => {
+        if (!dashboardMetricsEnabled) {
+            return { currentMonthSales: 0, growth: 0 };
+        }
         const today = new Date();
         const currentMonthKey = formatMonthKey(today);
         const prevMonthDate = new Date(today.getFullYear(), today.getMonth() - 1, 1);
@@ -6414,7 +6618,7 @@ const StoreDashboard: React.FC<{
             : 0;
 
         return { currentMonthSales, growth };
-    }, [canonicalStoreSales]);
+    }, [canonicalStoreSales, dashboardMetricsEnabled]);
 
     const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
@@ -6450,31 +6654,43 @@ const StoreDashboard: React.FC<{
 
     useEffect(() => {
         if (typeof window === 'undefined' || navRestoreRef.current) return;
+        const url = new URL(window.location.href);
+        const urlView = url.searchParams.get('ov');
+        const urlReportDate = url.searchParams.get('od');
+        const urlMenuSection = url.searchParams.get('om');
         const historyState = window.history.state;
         const fromHistory = historyState?.screen === 'owner'
             ? {
                 view: (historyState.view as 'dashboard' | 'report' | 'menu' | 'staff' | undefined) ?? 'dashboard',
                 reportDate: (historyState.reportDate as string | null | undefined) ?? null,
+                menuSection: (historyState.menuSection as 'items' | 'sets' | undefined) ?? 'items',
             }
             : null;
-        const fromStorage = safeParseJson<{ view?: 'dashboard' | 'report' | 'menu' | 'staff'; reportDate?: string | null }>(
+        const fromStorage = safeParseJson<{ view?: 'dashboard' | 'report' | 'menu' | 'staff'; reportDate?: string | null; menuSection?: 'items' | 'sets' }>(
             window.localStorage.getItem(ownerViewStorageKey)
         );
 
-        const restoredView = fromHistory?.view ?? fromStorage?.view ?? 'dashboard';
-        const restoredReportDate = fromHistory?.reportDate ?? fromStorage?.reportDate ?? null;
+        const normalizedUrlView = urlView === 'dashboard' || urlView === 'report' || urlView === 'menu' || urlView === 'staff'
+            ? urlView
+            : null;
+        const normalizedUrlMenuSection = urlMenuSection === 'sets' ? 'sets' : (urlMenuSection === 'items' ? 'items' : null);
+
+        const restoredView = normalizedUrlView ?? fromHistory?.view ?? fromStorage?.view ?? 'dashboard';
+        const restoredReportDate = urlReportDate ?? fromHistory?.reportDate ?? fromStorage?.reportDate ?? null;
+        const restoredMenuSection = normalizedUrlMenuSection ?? fromHistory?.menuSection ?? fromStorage?.menuSection ?? 'items';
 
         setView(restoredView);
         setReportDate(restoredReportDate);
-        window.history.replaceState({ screen: 'owner', view: restoredView, reportDate: restoredReportDate }, '');
+        setMenuSection(restoredMenuSection);
+        window.history.replaceState({ screen: 'owner', view: restoredView, reportDate: restoredReportDate, menuSection: restoredMenuSection }, '');
         navReadyRef.current = true;
         navRestoreRef.current = true;
     }, [ownerViewStorageKey]);
 
     useEffect(() => {
         if (typeof window === 'undefined') return;
-        window.localStorage.setItem(ownerViewStorageKey, JSON.stringify({ view, reportDate }));
-    }, [ownerViewStorageKey, view, reportDate]);
+        window.localStorage.setItem(ownerViewStorageKey, JSON.stringify({ view, reportDate, menuSection }));
+    }, [ownerViewStorageKey, view, reportDate, menuSection]);
 
     useEffect(() => {
         if (typeof window === 'undefined') return;
@@ -6483,26 +6699,48 @@ const StoreDashboard: React.FC<{
             popLockRef.current = false;
             return;
         }
-        window.history.pushState({ screen: 'owner', view, reportDate }, '');
-    }, [view, reportDate]);
+        window.history.pushState({ screen: 'owner', view, reportDate, menuSection }, '');
+    }, [view, reportDate, menuSection]);
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        const url = new URL(window.location.href);
+        url.searchParams.set('ov', view);
+        if (reportDate) {
+            url.searchParams.set('od', reportDate);
+        } else {
+            url.searchParams.delete('od');
+        }
+        if (view === 'menu') {
+            url.searchParams.set('om', menuSection);
+        } else {
+            url.searchParams.delete('om');
+        }
+        window.history.replaceState(
+            { ...(window.history.state ?? {}), screen: 'owner', view, reportDate, menuSection },
+            '',
+            `${url.pathname}${url.search}${url.hash}`
+        );
+    }, [view, reportDate, menuSection]);
 
     useEffect(() => {
         if (typeof window === 'undefined') return;
         const onPopState = (e: PopStateEvent) => {
             const state = e.state;
             if (!state || state.screen !== 'owner') {
-                window.history.pushState({ screen: 'owner', view, reportDate }, '');
+                window.history.pushState({ screen: 'owner', view, reportDate, menuSection }, '');
                 return;
             }
             popLockRef.current = true;
             setReportDate(state.reportDate ?? null);
             setView(state.view ?? 'dashboard');
+            setMenuSection(state.menuSection === 'sets' ? 'sets' : 'items');
             setEditingMenu(null);
             setEditingSetMenu(null);
         };
         window.addEventListener('popstate', onPopState);
         return () => window.removeEventListener('popstate', onPopState);
-    }, [view, reportDate]);
+    }, [view, reportDate, menuSection]);
 
     return (
         <div className="min-h-screen bg-gray-50 flex flex-col">

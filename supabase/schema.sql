@@ -93,6 +93,7 @@ create table if not exists public.sales (
   receipt_image text null,
   is_closed boolean not null default false,
   closed_reason text null,
+  comment text null,
   unique (store_id, date)
 );
 
@@ -838,6 +839,9 @@ using (
 
 alter table public.sales
   add column if not exists closed_reason text null;
+
+alter table public.sales
+  add column if not exists comment text null;
 
 create or replace function public.purge_old_receipts(p_days int default 90)
 returns integer
