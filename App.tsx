@@ -1293,6 +1293,8 @@ type InvoiceHtmlParams = {
   invoiceNo: string;
   invoiceDateText: string;
   buyerText: string;
+  showPaymentDueDate: boolean;
+  paymentDueText: string;
   salesCurrencyLabel: string;
   locationText: string;
   salesMonthText: string;
@@ -1317,6 +1319,8 @@ type InvoiceHtmlParams = {
   invoiceCurrency: string;
   signatureUrl: string;
   specialNoteHtml: string;
+  showMinimumLine: boolean;
+  compactSummary: boolean;
 };
 
 const INVOICE_ISSUER = {
@@ -1340,6 +1344,8 @@ function buildInvoiceHtml(params: InvoiceHtmlParams): string {
     invoiceNo,
     invoiceDateText,
     buyerText,
+    showPaymentDueDate,
+    paymentDueText,
     salesCurrencyLabel,
     locationText,
     salesMonthText,
@@ -1364,6 +1370,8 @@ function buildInvoiceHtml(params: InvoiceHtmlParams): string {
     invoiceCurrency,
     signatureUrl,
     specialNoteHtml,
+    showMinimumLine,
+    compactSummary,
   } = params;
   const buyerTextTrimmed = buyerText.trim();
   const buyerLines = buyerTextTrimmed ? buyerTextTrimmed.split(/\r?\n/).map((line) => line.trim()).filter(Boolean) : ['-'];
@@ -1460,6 +1468,12 @@ function buildInvoiceHtml(params: InvoiceHtmlParams): string {
       font-size: 9.4pt;
       font-weight: 700;
     }
+    .due-row {
+      margin-top: 6mm;
+      text-align: right;
+      font-size: 10.2pt;
+      font-weight: 700;
+    }
     .meta-right div { margin-bottom: 2px; }
     table.main {
       width: 100%;
@@ -1515,6 +1529,12 @@ function buildInvoiceHtml(params: InvoiceHtmlParams): string {
       flex-direction: column;
       gap: 3.2mm;
     }
+    .summary-lines.compact {
+      margin-top: 11mm;
+      margin-left: auto;
+      width: 47%;
+      gap: 4.4mm;
+    }
     .summary-line {
       display: flex;
       justify-content: space-between;
@@ -1538,6 +1558,10 @@ function buildInvoiceHtml(params: InvoiceHtmlParams): string {
     .summary-line.total .amount {
       font-size: 14pt;
       font-weight: 700;
+    }
+    .summary-line.compact-total {
+      margin-top: 1.8mm;
+      font-size: 12pt;
     }
     .paybox {
       border: 1px solid #333;
@@ -1613,6 +1637,7 @@ function buildInvoiceHtml(params: InvoiceHtmlParams): string {
           <div><span style="display:inline-block; width:82px;">DATE:</span> ${escapeHtml(invoiceDateText)}</div>
         </div>
       </div>
+      ${showPaymentDueDate ? `<div class="due-row">${escapeHtml(paymentDueText)}</div>` : ''}
 
       <table class="main">
         <colgroup>
@@ -1646,11 +1671,21 @@ function buildInvoiceHtml(params: InvoiceHtmlParams): string {
       </table>
 
       <div class="summary-box">
+        ${showMinimumLine ? `
         <div class="summary-minimum">
           <span class="label">"Minimum Royalty"</span>
           <span class="note">${specialNoteHtml || '&nbsp;'}</span>
           <span class="amount">${escapeHtml(minimumText)}</span>
         </div>
+        ` : ''}
+        ${compactSummary ? `
+        <div class="summary-lines compact">
+          <div class="summary-line"><span>Royalty Amount</span><span>${escapeHtml(royaltyAmountText)}</span></div>
+          ${showWithholdingTax ? `<div class="summary-line"><span>Withholding Tax</span><span>${escapeHtml(withholdingTaxText)}</span></div>` : ''}
+          ${showBankCharge ? `<div class="summary-line red"><span>${escapeHtml(bankChargeTitle)}</span><span>${escapeHtml(bankChargeText)}</span></div>` : ''}
+          <div class="summary-line compact-total"><span>${escapeHtml(finalAmountLabelText)}</span><span>${escapeHtml(finalAmountText)}</span></div>
+        </div>
+        ` : `
         <div class="summary-lines">
           <div class="summary-line"><span>Royalty Amount</span><span>${escapeHtml(royaltyAmountText)}</span></div>
           ${showChinaTaxBreakdown ? `<div class="summary-line"><span>Tax Base (Excl. VAT)</span><span>${escapeHtml(taxBaseText)}</span></div>` : ''}
@@ -1664,6 +1699,7 @@ function buildInvoiceHtml(params: InvoiceHtmlParams): string {
             <span class="amount">${escapeHtml(finalAmountText)}</span>
           </div>
         </div>
+        `}
       </div>
 
       <div class="paybox">
@@ -4292,8 +4328,9 @@ const HQStoreDetail: React.FC<{
         const totalText = formatAmount(invoiceSummary.totalDue);
         const bankChargeText = formatAmount(invoiceSummary.bankCharge);
         const buyerText = invoiceToDraft.trim() || store.name;
+        const useChinaCompactLayout = invoiceSummaryMode === 'china_tax';
         const showWithholdingTax = invoiceSummaryMode !== 'royalty_only';
-        const showChinaTaxBreakdown = invoiceSummaryMode === 'china_tax';
+        const showChinaTaxBreakdown = invoiceSummaryMode === 'china_tax' && !useChinaCompactLayout;
         const finalAmountLabelText = invoiceSummaryMode === 'royalty_only' ? 'Royalty Amount' : 'Remittance Amount';
         const invoiceDateText = formatInvoiceDateDot(issueDate);
         const signatureUrl = `${window.location.origin}/invoice-signature-kasumi.png`;
@@ -4302,6 +4339,8 @@ const HQStoreDetail: React.FC<{
             invoiceNo,
             invoiceDateText,
             buyerText,
+            showPaymentDueDate: useChinaCompactLayout,
+            paymentDueText: 'PAYMENT DUE DATE:End of the following month',
             salesCurrencyLabel,
             locationText,
             salesMonthText,
@@ -4326,6 +4365,8 @@ const HQStoreDetail: React.FC<{
             invoiceCurrency,
             signatureUrl,
             specialNoteHtml,
+            showMinimumLine: !useChinaCompactLayout,
+            compactSummary: useChinaCompactLayout,
         });
 
         const popup = window.open('', '_blank');
