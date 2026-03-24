@@ -542,8 +542,9 @@ async function loadSetMenus(): Promise<SetMenu[]> {
     .select('id,store_id,name,price')
     .order('id');
   if (setErr) {
-    if (isMissingTableError(setErr, 'set_menus')) {
+    if (isMissingTableError(setErr, 'set_menus') || isPermissionDeniedTableError(setErr, 'set_menus')) {
       setMenuTableSupported = false;
+      console.warn('Skipping set_menus load due to table availability/permission issue', setErr);
       return [];
     }
     throw setErr;
@@ -558,8 +559,9 @@ async function loadSetMenus(): Promise<SetMenu[]> {
       .select('set_menu_id,menu_id,quantity')
       .in('set_menu_id', setIds);
     if (error) {
-      if (isMissingTableError(error, 'set_menu_items')) {
+      if (isMissingTableError(error, 'set_menu_items') || isPermissionDeniedTableError(error, 'set_menu_items')) {
         setMenuTableSupported = false;
+        console.warn('Skipping set_menu_items load due to table availability/permission issue', error);
         return [];
       }
       throw error;
@@ -1169,8 +1171,9 @@ async function addSale(sale: Sale) {
       .delete()
       .eq('sale_id', targetSaleId);
     if (clearSetItemsErr) {
-      if (isMissingTableError(clearSetItemsErr, 'sale_set_items')) {
+      if (isSkippableSalesChildTableError(clearSetItemsErr, 'sale_set_items')) {
         saleSetItemsTableSupported = false;
+        console.warn('Skipping clear of sale_set_items due to table availability/permission issue', clearSetItemsErr);
       } else {
         const message = clearSetItemsErr.message || 'Unknown clear set menu items error';
         throw new Error(`Failed to refresh set menu items: ${message}`);
@@ -1189,8 +1192,9 @@ async function addSale(sale: Sale) {
     if (setRows.length > 0) {
       const { error } = await supabase.from('sale_set_items').insert(setRows);
       if (error) {
-        if (isMissingTableError(error, 'sale_set_items')) {
+        if (isSkippableSalesChildTableError(error, 'sale_set_items')) {
           saleSetItemsTableSupported = false;
+          console.warn('Skipping save of sale_set_items due to table availability/permission issue', error);
         } else {
           const message = error.message || 'Unknown sale set items error';
           throw new Error(`Failed to save set menu items: ${message}`);
