@@ -596,8 +596,11 @@ async function loadSales(daysBack?: number): Promise<Sale[]> {
     ? formatDateOnly(new Date(Date.now() - daysBack * 86400000))
     : null;
 
+  const selectWithAll = 'id,store_id,date,total_amount,is_closed,closed_reason,comment';
   const selectWithClosedReason = 'id,store_id,date,total_amount,is_closed,closed_reason';
+  const selectWithIsClosedAndComment = 'id,store_id,date,total_amount,is_closed,comment';
   const selectWithIsClosedOnly = 'id,store_id,date,total_amount,is_closed';
+  const selectLegacyWithComment = 'id,store_id,date,total_amount,comment';
   const selectLegacy = 'id,store_id,date,total_amount';
 
   const runSalesQuery = async (selectClause: string) => {
@@ -614,9 +617,20 @@ async function loadSales(daysBack?: number): Promise<Sale[]> {
 
   const preferClosedReason = salesClosedReasonColumnSupported !== false;
   const preferIsClosed = salesIsClosedColumnSupported !== false;
-  const queryOrder = preferClosedReason
-    ? [selectWithClosedReason, selectWithIsClosedOnly, selectLegacy]
-    : (preferIsClosed ? [selectWithIsClosedOnly, selectLegacy] : [selectLegacy]);
+  const preferComment = salesCommentColumnSupported !== false;
+
+  let queryOrder: string[] = [];
+  if (preferClosedReason) {
+    queryOrder = preferComment
+      ? [selectWithAll, selectWithClosedReason, selectWithIsClosedAndComment, selectWithIsClosedOnly, selectLegacyWithComment, selectLegacy]
+      : [selectWithClosedReason, selectWithIsClosedOnly, selectLegacy];
+  } else if (preferIsClosed) {
+    queryOrder = preferComment
+      ? [selectWithIsClosedAndComment, selectWithIsClosedOnly, selectLegacyWithComment, selectLegacy]
+      : [selectWithIsClosedOnly, selectLegacy];
+  } else {
+    queryOrder = preferComment ? [selectLegacyWithComment, selectLegacy] : [selectLegacy];
+  }
 
   let usedSelect: string | null = null;
   for (const selectClause of queryOrder) {
@@ -638,8 +652,9 @@ async function loadSales(daysBack?: number): Promise<Sale[]> {
   if (!usedSelect) {
     throw (firstError ?? new Error('Failed to load sales.'));
   }
-  salesClosedReasonColumnSupported = usedSelect === selectWithClosedReason;
-  salesIsClosedColumnSupported = usedSelect !== selectLegacy;
+  salesClosedReasonColumnSupported = usedSelect.includes('closed_reason');
+  salesIsClosedColumnSupported = usedSelect.includes('is_closed');
+  salesCommentColumnSupported = usedSelect.includes('comment');
 
   const saleIds = (salesData ?? []).map((s: any) => s.id);
   let receiptIds = new Set<string>();
@@ -658,28 +673,6 @@ async function loadSales(daysBack?: number): Promise<Sale[]> {
       }
     } else {
       receiptIds = new Set((receiptRows ?? []).map((r: any) => r.id as string));
-    }
-  }
-
-  const saleCommentById = new Map<string, string>();
-  if (saleIds.length > 0 && salesCommentColumnSupported !== false) {
-    const { data: commentRows, error: commentErr } = await supabase
-      .from('sales')
-      .select('id,comment')
-      .in('id', saleIds);
-    if (commentErr) {
-      // Comments are optional; never fail sales loading because of this sub-query.
-      salesCommentColumnSupported = false;
-      console.warn('Skipping sales comment load', commentErr);
-    } else {
-      salesCommentColumnSupported = true;
-      (commentRows ?? []).forEach((row: any) => {
-        const saleId = String(row.id ?? '');
-        const comment = String(row.comment ?? '').trim();
-        if (saleId && comment) {
-          saleCommentById.set(saleId, comment);
-        }
-      });
     }
   }
 
@@ -743,7 +736,11 @@ async function loadSales(daysBack?: number): Promise<Sale[]> {
     hasReceipt: receiptIds.has(s.id),
     isClosed: Boolean(s.is_closed),
     closedReason: s.closed_reason ?? undefined,
-    comment: saleCommentById.get(String(s.id)) ?? undefined,
+    comment: (() => {
+      if (salesCommentColumnSupported !== true) return undefined;
+      const raw = String(s.comment ?? '').trim();
+      return raw ? raw : undefined;
+    })(),
   }));
 
   return dedupeSalesByStoreDate(mappedSales);
