@@ -7,8 +7,9 @@ import {
   LayoutDashboard, ClipboardList, Users, UtensilsCrossed, LogOut, 
   AlertTriangle, Plus, Trash2, ChevronRight, FileText, Camera, Save, ArrowLeft, BarChart3, Package, MapPin, CheckCircle2, XCircle, TrendingUp, TrendingDown, Minus, DollarSign, Clock, Image as ImageIcon, Layers, UploadCloud, Settings, X, Search, Info, Grid, Briefcase, User as UserIcon, AlertCircle, Mail, ArrowRight, UserPlus, AlertOctagon, ArrowUpRight, ArrowDownRight, CalendarX
 } from 'lucide-react';
-import { supabase } from './supabaseClient';
+import { isSupabaseConfigured, supabase } from './supabaseClient';
 import { signInWithEmailPassword, signInWithGoogle, signOut, signUpWithEmailPassword } from './auth';
+import { MOCK_EMPLOYEES, MOCK_INGREDIENTS, MOCK_MENUS, MOCK_SALES, MOCK_STORES, MOCK_USERS } from './constants';
 
 
 // --- Supabase Data Layer ---
@@ -71,6 +72,13 @@ const DEFAULT_GLOBAL_CONFIG: GlobalConfig = {
     { name: 'Otafuku Sauce', unit: 'ml', par: 0, reorder: 0 },
     { name: 'Noodles', unit: 'g', par: 0, reorder: 0 }
   ]
+};
+
+const isLocalHqPreviewMode = () => {
+  if (typeof window === 'undefined') return false;
+  const host = window.location.hostname;
+  const isLocalHost = host === 'localhost' || host === '127.0.0.1' || host === '::1';
+  return isLocalHost && new URLSearchParams(window.location.search).get('preview') === 'hq';
 };
 
 const SALES_LOOKBACK_DEFAULT_DAYS = 90;
@@ -596,8 +604,11 @@ async function loadSales(daysBack?: number): Promise<Sale[]> {
     ? formatDateOnly(new Date(Date.now() - daysBack * 86400000))
     : null;
 
+  const selectWithAll = 'id,store_id,date,total_amount,is_closed,closed_reason,comment';
   const selectWithClosedReason = 'id,store_id,date,total_amount,is_closed,closed_reason';
+  const selectWithIsClosedAndComment = 'id,store_id,date,total_amount,is_closed,comment';
   const selectWithIsClosedOnly = 'id,store_id,date,total_amount,is_closed';
+  const selectLegacyWithComment = 'id,store_id,date,total_amount,comment';
   const selectLegacy = 'id,store_id,date,total_amount';
 
   const runSalesQuery = async (selectClause: string) => {
@@ -614,9 +625,20 @@ async function loadSales(daysBack?: number): Promise<Sale[]> {
 
   const preferClosedReason = salesClosedReasonColumnSupported !== false;
   const preferIsClosed = salesIsClosedColumnSupported !== false;
-  const queryOrder = preferClosedReason
-    ? [selectWithClosedReason, selectWithIsClosedOnly, selectLegacy]
-    : (preferIsClosed ? [selectWithIsClosedOnly, selectLegacy] : [selectLegacy]);
+  const preferComment = salesCommentColumnSupported !== false;
+
+  let queryOrder: string[] = [];
+  if (preferClosedReason) {
+    queryOrder = preferComment
+      ? [selectWithAll, selectWithClosedReason, selectWithIsClosedAndComment, selectWithIsClosedOnly, selectLegacyWithComment, selectLegacy]
+      : [selectWithClosedReason, selectWithIsClosedOnly, selectLegacy];
+  } else if (preferIsClosed) {
+    queryOrder = preferComment
+      ? [selectWithIsClosedAndComment, selectWithIsClosedOnly, selectLegacyWithComment, selectLegacy]
+      : [selectWithIsClosedOnly, selectLegacy];
+  } else {
+    queryOrder = preferComment ? [selectLegacyWithComment, selectLegacy] : [selectLegacy];
+  }
 
   let usedSelect: string | null = null;
   for (const selectClause of queryOrder) {
@@ -638,8 +660,9 @@ async function loadSales(daysBack?: number): Promise<Sale[]> {
   if (!usedSelect) {
     throw (firstError ?? new Error('Failed to load sales.'));
   }
-  salesClosedReasonColumnSupported = usedSelect === selectWithClosedReason;
-  salesIsClosedColumnSupported = usedSelect !== selectLegacy;
+  salesClosedReasonColumnSupported = usedSelect.includes('closed_reason');
+  salesIsClosedColumnSupported = usedSelect.includes('is_closed');
+  salesCommentColumnSupported = usedSelect.includes('comment');
 
   const saleIds = (salesData ?? []).map((s: any) => s.id);
   let receiptIds = new Set<string>();
@@ -658,28 +681,6 @@ async function loadSales(daysBack?: number): Promise<Sale[]> {
       }
     } else {
       receiptIds = new Set((receiptRows ?? []).map((r: any) => r.id as string));
-    }
-  }
-
-  const saleCommentById = new Map<string, string>();
-  if (saleIds.length > 0 && salesCommentColumnSupported !== false) {
-    const { data: commentRows, error: commentErr } = await supabase
-      .from('sales')
-      .select('id,comment')
-      .in('id', saleIds);
-    if (commentErr) {
-      // Comments are optional; never fail sales loading because of this sub-query.
-      salesCommentColumnSupported = false;
-      console.warn('Skipping sales comment load', commentErr);
-    } else {
-      salesCommentColumnSupported = true;
-      (commentRows ?? []).forEach((row: any) => {
-        const saleId = String(row.id ?? '');
-        const comment = String(row.comment ?? '').trim();
-        if (saleId && comment) {
-          saleCommentById.set(saleId, comment);
-        }
-      });
     }
   }
 
@@ -743,7 +744,11 @@ async function loadSales(daysBack?: number): Promise<Sale[]> {
     hasReceipt: receiptIds.has(s.id),
     isClosed: Boolean(s.is_closed),
     closedReason: s.closed_reason ?? undefined,
-    comment: saleCommentById.get(String(s.id)) ?? undefined,
+    comment: (() => {
+      if (salesCommentColumnSupported !== true) return undefined;
+      const raw = String(s.comment ?? '').trim();
+      return raw ? raw : undefined;
+    })(),
   }));
 
   return dedupeSalesByStoreDate(mappedSales);
@@ -1321,10 +1326,32 @@ type InvoiceHtmlParams = {
   finalAmountLabelText: string;
   finalAmountText: string;
   invoiceCurrency: string;
+  bankProfile: InvoiceBankProfile;
+  fxSourceText: string;
   signatureUrl: string;
   specialNoteHtml: string;
   showMinimumLine: boolean;
   compactSummary: boolean;
+};
+
+type InvoiceBankProfile = {
+  bankName: string;
+  bankAddress: string;
+  swiftCode: string;
+  accountNumber: string;
+};
+
+type InvoicePrintProfile = {
+  invoiceCurrency: 'JPY' | 'USD';
+  summaryMode: 'royalty_only' | 'withholding' | 'china_tax';
+  withholdingRate: string;
+  minimumRoyalty: string;
+  specialNote: string;
+  bankCharge: string;
+  bankChargeLabel: string;
+  buyerText: string;
+  locationText: string;
+  showPaymentDueDate: boolean;
 };
 
 const INVOICE_ISSUER = {
@@ -1335,13 +1362,221 @@ const INVOICE_ISSUER = {
   fax: '+81-6-6633-2191',
   beneficiaryName: 'CHIBO HOLDINGS CO., LTD.',
   beneficiaryAddress: '1-5-5 DOUTONNBORI, CHUO-KU, OSAKA, 542-0071 JAPAN',
-  bankName: 'RESONA BANK  SENBA BRANCH',
-  bankAddress: '3-6-1 KITAKYUHOJIMACHI, CYUO-KU, OSAKA-SHI,OSAKA 541-0057, JAPAN',
-  swiftCode: 'DIWAJPJT',
-  accountNumber: '0323028',
   preparedByCompany: 'CHIBO HOLDINGS CO.,LTD.',
   preparedByName: 'Kasumi Hemmi',
 } as const;
+
+const INVOICE_BANKS: Record<'JPY' | 'USD', InvoiceBankProfile> = {
+  JPY: {
+    bankName: 'RESONA BANK  SENBA BRANCH',
+    bankAddress: '3-6-1 KITAKYUHOJIMACHI, CYUO-KU, OSAKA-SHI,OSAKA 541-0057, JAPAN',
+    swiftCode: 'DIWAJPJT',
+    accountNumber: '0323028',
+  },
+  USD: {
+    bankName: 'MITSUISUMITOMO BANK  NAMBA BRANCH',
+    bankAddress: '5-1-60,NAMBA CHUO-KU, OSAKA-SHI,OSAKA 541-0076, JAPAN',
+    swiftCode: 'SMBCJPJT',
+    accountNumber: '0250776',
+  },
+};
+
+type FxRatesPayload = {
+  rates: Record<string, number>;
+  fetchedAt: number;
+  sourceText: string;
+};
+
+const FX_CURRENCIES = ['USD', 'JPY', 'KRW', 'PHP', 'CNY', 'VND', 'TWD', 'THB', 'SGD', 'HKD', 'MYR'] as const;
+const MUFG_SUPPORTED_TO_JPY = new Set(['USD', 'EUR', 'CAD', 'GBP', 'CHF', 'DKK', 'NOK', 'SEK', 'AUD', 'NZD', 'HKD', 'MYR', 'SGD', 'SAR', 'AED', 'CNY', 'THB', 'INR', 'PKR', 'KWD', 'QAR', 'IDR', 'MXN', 'KRW', 'PHP', 'ZAR', 'CZK', 'RUB', 'HUF', 'PLN', 'TRY']);
+const MUFG_100_UNIT_CURRENCIES = new Set(['KRW', 'IDR']);
+
+function moneyPartsToNumber(value: any): number | null {
+  if (!value) return null;
+  const units = Number(value.units ?? 0);
+  const nanos = Number(value.nanos ?? 0);
+  if (!Number.isFinite(units) || !Number.isFinite(nanos)) return null;
+  return units + nanos / 1_000_000_000;
+}
+
+function formatFxDate(raw: any): string | null {
+  if (!raw) return null;
+  if (typeof raw === 'string') return raw;
+  const y = raw.year;
+  const m = String(raw.month ?? '').padStart(2, '0');
+  const d = String(raw.day ?? '').padStart(2, '0');
+  return y && m && d ? `${y}-${m}-${d}` : null;
+}
+
+async function fetchMufgJpyPerCurrency(currency: string): Promise<{ rate: number; date: string | null } | null> {
+  if (currency === 'JPY') return { rate: 1, date: null };
+  if (!MUFG_SUPPORTED_TO_JPY.has(currency)) return null;
+  try {
+    const res = await fetch(`https://fx.ianlewis.org/v1/provider/MUFG/quote/${currency}/JPY/latest.json`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    const mid = moneyPartsToNumber(data?.mid);
+    if (!mid || mid <= 0) return null;
+    const unit = MUFG_100_UNIT_CURRENCIES.has(currency) ? 100 : 1;
+    return { rate: mid / unit, date: formatFxDate(data?.date) };
+  } catch {
+    return null;
+  }
+}
+
+async function fetchFrankfurterUsdRates(currencies: readonly string[]): Promise<{ rates: Record<string, number>; date: string | null }> {
+  const quotes = currencies.filter(c => c !== 'USD').join(',');
+  const res = await fetch(`https://api.frankfurter.dev/v2/rates?base=USD&quotes=${encodeURIComponent(quotes)}`);
+  if (!res.ok) throw new Error('Frankfurter FX request failed');
+  const data = await res.json();
+  const rates: Record<string, number> = { USD: 1 };
+  if (Array.isArray(data)) {
+    data.forEach((row) => {
+      if (row?.quote && Number.isFinite(Number(row.rate))) rates[row.quote] = Number(row.rate);
+    });
+    return { rates, date: data[0]?.date ?? null };
+  }
+  Object.entries(data?.rates ?? {}).forEach(([code, value]) => {
+    if (Number.isFinite(Number(value))) rates[code] = Number(value);
+  });
+  return { rates, date: data?.date ?? null };
+}
+
+async function fetchFxRatesPayload(): Promise<FxRatesPayload> {
+  const rates: Record<string, number> = { USD: 1 };
+  const jpyPerCurrency: Record<string, number> = {};
+  const mufgDates = new Set<string>();
+  const fallbackCurrencies: string[] = [];
+
+  for (const currency of FX_CURRENCIES) {
+    const quote = await fetchMufgJpyPerCurrency(currency);
+    if (quote?.rate) {
+      jpyPerCurrency[currency] = quote.rate;
+      if (quote.date) mufgDates.add(quote.date);
+    } else if (currency !== 'JPY' && currency !== 'USD') {
+      fallbackCurrencies.push(currency);
+    }
+  }
+
+  if (jpyPerCurrency.USD && jpyPerCurrency.JPY) {
+    rates.JPY = jpyPerCurrency.USD;
+    Object.entries(jpyPerCurrency).forEach(([currency, jpyPerUnit]) => {
+      if (currency === 'USD') return;
+      rates[currency] = jpyPerCurrency.USD / jpyPerUnit;
+    });
+  }
+
+  if (fallbackCurrencies.length > 0 || !rates.JPY) {
+    const frankfurter = await fetchFrankfurterUsdRates(FX_CURRENCIES);
+    Object.entries(frankfurter.rates).forEach(([currency, value]) => {
+      if (!rates[currency]) rates[currency] = value;
+    });
+  }
+
+  const mufgDateText = [...mufgDates].sort().pop();
+  const sourceText = fallbackCurrencies.length > 0
+    ? `MUFG mid${mufgDateText ? ` ${mufgDateText}` : ''}; ${fallbackCurrencies.join('/')} via Frankfurter`
+    : `MUFG mid${mufgDateText ? ` ${mufgDateText}` : ''}`;
+
+  return { rates: { ...FALLBACK_USD_RATES, ...rates }, fetchedAt: Date.now(), sourceText };
+}
+
+const normalizeInvoiceToken = (value: string) =>
+  value
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9가-힣一-龯ぁ-んァ-ヶ]/g, '');
+
+function getInvoicePrintProfile(store: Store): InvoicePrintProfile {
+  const country = normalizeInvoiceToken(store.country ?? '');
+  const name = normalizeInvoiceToken(store.name ?? '');
+  const isChina = country.includes('china') || country.includes('中国') || country.includes('중국')
+    || name.includes('ningbo') || name.includes('宁波') || name.includes('寧波');
+  const isPhilippines = country.includes('philippines') || name.includes('mitsukoshi') || name.includes('bgc');
+  const isTaiwan = country.includes('taiwan') || country.includes('台湾') || country.includes('대만') || name.includes('hanshin');
+  const isVietnam = country.includes('vietnam') || country.includes('베트남') || name.includes('hanoi') || name.includes('trunghoa');
+  const isKorea = country.includes('southkorea') || country.includes('korea') || country.includes('한국') || country.includes('대한민국') || name.startsWith('kr');
+
+  const base: InvoicePrintProfile = {
+    invoiceCurrency: store.currency === 'USD' ? 'USD' : 'JPY',
+    summaryMode: 'royalty_only',
+    withholdingRate: '0',
+    minimumRoyalty: '0',
+    specialNote: '',
+    bankCharge: '0',
+    bankChargeLabel: 'Bank Charge',
+    buyerText: store.name || '',
+    locationText: `${store.country} / ${store.name}`,
+    showPaymentDueDate: true,
+  };
+
+  if (isChina) {
+    return {
+      ...base,
+      invoiceCurrency: 'JPY',
+      summaryMode: 'china_tax',
+      withholdingRate: '15.09',
+      buyerText: 'NingBo YaoHua Business Management Limited\nDushigongyeyuan Jinzhou District,\nNingBo City, Zhejiang Province, China',
+      locationText: 'NingBo',
+    };
+  }
+
+  if (isPhilippines) {
+    return {
+      ...base,
+      invoiceCurrency: 'JPY',
+      minimumRoyalty: '70000',
+      specialNote: 'smaller than 100 m2',
+      buyerText: 'DINE LINK INC\n5th FLR Unit 504-508P, Pacific Drive EXT., FIVE E COM,BLDG,\nBLK18, Mall Of Asia Complex BRGY 076 Pasay City\nMETROMANILA, PHILIPPINES 1300\nTel: +63-917-300-3333',
+      locationText: 'Chibo Mitsukoshi BGC',
+    };
+  }
+
+  if (isTaiwan) {
+    return {
+      ...base,
+      invoiceCurrency: 'USD',
+      minimumRoyalty: '750',
+      specialNote: '100 m2 or larger and smaller than 200 m2',
+      buyerText: 'Taiwan Chibo Co., Ltd.\n6F.-1, No. 332, Mingcheng 2nd Rd., Zuoying Dist.,\nKaohsiung City 813307, Taiwan (R.O.C.)\n+886 966-029-557',
+      locationText: 'Taiwan',
+    };
+  }
+
+  if (isVietnam) {
+    const isTrungHoa = name.includes('trunghoa') || name.includes('nhanchinh');
+    return {
+      ...base,
+      invoiceCurrency: 'USD',
+      minimumRoyalty: '750',
+      specialNote: '100 m2 or larger and smaller than 200 m2',
+      buyerText: 'SUMIBI VIETNAM JOINT STOCK COMPANY',
+      locationText: isTrungHoa ? 'VTM / Trung Hòa Nhân Chính' : 'VTM / Ha Noi Kim Ma',
+    };
+  }
+
+  if (isKorea) {
+    const isGangnam = name.includes('gangnam') || name.includes('sinsa');
+    const isYongsan = name.includes('yongsan') || name.includes('samgakji') || name.includes('三角地') || name.includes('용산');
+    const isDaejeon = name.includes('daejeon') || name.includes('大田') || name.includes('대전');
+    return {
+      ...base,
+      invoiceCurrency: 'JPY',
+      minimumRoyalty: isDaejeon ? '0' : '150000',
+      buyerText: isGangnam ? 'Kim Jongnam' : 'Goraewa co.',
+      locationText: isGangnam
+        ? 'KR / Gangnam Sinsa'
+        : isYongsan
+          ? 'KR / 龍山三角地店'
+          : isDaejeon
+            ? 'KR / 大田'
+            : `KR / ${store.name}`,
+    };
+  }
+
+  return base;
+}
 
 function buildInvoiceHtml(params: InvoiceHtmlParams): string {
   const {
@@ -1372,6 +1607,8 @@ function buildInvoiceHtml(params: InvoiceHtmlParams): string {
     finalAmountLabelText,
     finalAmountText,
     invoiceCurrency,
+    bankProfile,
+    fxSourceText,
     signatureUrl,
     specialNoteHtml,
     showMinimumLine,
@@ -1388,13 +1625,14 @@ function buildInvoiceHtml(params: InvoiceHtmlParams): string {
   const paymentLinesHtml = [
     `Beneficiary Name : ${escapeHtml(INVOICE_ISSUER.beneficiaryName)}`,
     `Beneficiary Address : ${escapeHtml(INVOICE_ISSUER.beneficiaryAddress)}`,
-    `Beneficiary Bank Name : ${escapeHtml(INVOICE_ISSUER.bankName)}`,
-    `Beneficiary Bank Address : ${escapeHtml(INVOICE_ISSUER.bankAddress)}`,
-    `Swift Code : ${escapeHtml(INVOICE_ISSUER.swiftCode)}`,
-    `Beneficiary Account Number : ${escapeHtml(INVOICE_ISSUER.accountNumber)}&nbsp;&nbsp;<span class="currency-red">${escapeHtml(invoiceCurrency)}</span>`,
+    `Beneficiary Bank Name : ${escapeHtml(bankProfile.bankName)}`,
+    `Beneficiary Bank Address : ${escapeHtml(bankProfile.bankAddress)}`,
+    `Swift Code : ${escapeHtml(bankProfile.swiftCode)}`,
+    `Beneficiary Account Number : ${escapeHtml(bankProfile.accountNumber)}&nbsp;&nbsp;<span class="currency-red">${escapeHtml(invoiceCurrency)}</span>`,
   ]
     .map((line) => `<div>${line}</div>`)
     .join('');
+  const showSeparateFinalLine = showWithholdingTax || showBankCharge || finalAmountLabelText !== 'Royalty Amount';
 
   return `<!doctype html>
 <html>
@@ -1477,6 +1715,13 @@ function buildInvoiceHtml(params: InvoiceHtmlParams): string {
       text-align: right;
       font-size: 10.2pt;
       font-weight: 700;
+    }
+    .fx-note {
+      margin-top: 3mm;
+      text-align: right;
+      font-size: 7.6pt;
+      font-weight: 700;
+      color: #555;
     }
     .meta-right div { margin-bottom: 2px; }
     table.main {
@@ -1588,18 +1833,20 @@ function buildInvoiceHtml(params: InvoiceHtmlParams): string {
       font-weight: 700;
     }
     .signature-wrap {
-      margin-top: 8px;
+      margin-top: 6px;
       display: inline-block;
-      width: 66mm;
+      width: 72mm;
     }
     .signature-wrap img {
       display: block;
       width: 100%;
-      height: auto;
+      height: 24mm;
+      object-fit: contain;
+      object-position: left center;
       mix-blend-mode: multiply;
     }
     .sig-line {
-      margin-top: 2px;
+      margin-top: 0;
       border-top: 1px solid #333;
       padding-top: 3px;
       font-size: 7.8pt;
@@ -1642,6 +1889,7 @@ function buildInvoiceHtml(params: InvoiceHtmlParams): string {
         </div>
       </div>
       ${showPaymentDueDate ? `<div class="due-row">${escapeHtml(paymentDueText)}</div>` : ''}
+      <div class="fx-note">${escapeHtml(fxSourceText)}</div>
 
       <table class="main">
         <colgroup>
@@ -1698,10 +1946,10 @@ function buildInvoiceHtml(params: InvoiceHtmlParams): string {
           ${showChinaTaxBreakdown ? `<div class="summary-line"><span>Tax Total</span><span>${escapeHtml(taxTotalText)}</span></div>` : ''}
           ${showWithholdingTax ? `<div class="summary-line"><span>Withholding Tax</span><span>${escapeHtml(withholdingTaxText)}</span></div>` : ''}
           ${showBankCharge ? `<div class="summary-line red"><span>${escapeHtml(bankChargeTitle)}</span><span>${escapeHtml(bankChargeText)}</span></div>` : ''}
-          <div class="summary-line total">
+          ${showSeparateFinalLine ? `<div class="summary-line total">
             <span class="label">${escapeHtml(finalAmountLabelText)}</span>
             <span class="amount">${escapeHtml(finalAmountText)}</span>
-          </div>
+          </div>` : ''}
         </div>
         `}
       </div>
@@ -1781,6 +2029,35 @@ const convertAmountByUsdRates = (
   const toRate = table[toCurrency];
   if (!fromRate || !toRate) return null;
   return (amount / fromRate) * toRate;
+};
+
+const applyManualFxRate = (
+  rates: Record<string, number> | null,
+  fromCurrency: string,
+  toCurrency: string,
+  manualRate: number | null
+) => {
+  const base = { ...(rates ?? FALLBACK_USD_RATES) };
+  if (!manualRate || manualRate <= 0 || fromCurrency === toCurrency) return base;
+  if (toCurrency === 'JPY') {
+    base.JPY = base.USD === 1 ? base.JPY : base.JPY;
+    base[fromCurrency] = (base.JPY || FALLBACK_USD_RATES.JPY) / manualRate;
+    return base;
+  }
+  if (fromCurrency === 'JPY') {
+    base[toCurrency] = (base.JPY || FALLBACK_USD_RATES.JPY) * manualRate;
+    return base;
+  }
+  base[toCurrency] = base[fromCurrency] * manualRate;
+  return base;
+};
+
+const parseManualFxRate = (raw: string) => {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const n = Number(trimmed.replace(/[^\d.]/g, ''));
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n;
 };
 
 type ImageResizeOptions = {
@@ -1900,11 +2177,18 @@ const FALLBACK_USD_RATES: Record<string, number> = {
   TWD: 31,
 };
 
-const FX_API_URL = (import.meta as any)?.env?.VITE_FX_API_URL || 'https://open.er-api.com/v6/latest/USD';
-const FX_CACHE_KEY = 'chibo_fx_rates_usd_v1';
+const FX_CACHE_KEY = 'chibo_fx_rates_usd_v2';
 const FX_CACHE_TTL_MS = 1000 * 60 * 60 * 6; // 6 hours
+const FALLBACK_FX_SOURCE_TEXT = 'Fallback fixed rates';
 
 type FxRatesStatus = 'loading' | 'ok' | 'stale' | 'error';
+
+const formatFxSourceLabel = (status: FxRatesStatus, sourceText: string) => {
+  if (status === 'loading') return 'FX: Loading';
+  if (status === 'ok') return `FX: ${sourceText}`;
+  if (status === 'stale') return `FX: Cached ${sourceText}`;
+  return `FX: Approx. ${sourceText}`;
+};
 
 const readFxCache = () => {
   if (typeof window === 'undefined') return null;
@@ -1913,16 +2197,16 @@ const readFxCache = () => {
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     if (!parsed?.rates || !parsed?.fetchedAt) return null;
-    return parsed as { rates: Record<string, number>; fetchedAt: number };
+    return parsed as FxRatesPayload;
   } catch {
     return null;
   }
 };
 
-const writeFxCache = (rates: Record<string, number>) => {
+const writeFxCache = (payload: FxRatesPayload) => {
   if (typeof window === 'undefined') return;
   try {
-    window.localStorage.setItem(FX_CACHE_KEY, JSON.stringify({ rates, fetchedAt: Date.now() }));
+    window.localStorage.setItem(FX_CACHE_KEY, JSON.stringify(payload));
   } catch {
     // ignore cache write errors
   }
@@ -1933,25 +2217,36 @@ const useFxRates = () => {
   const [rates, setRates] = useState<Record<string, number> | null>(cached?.rates ?? null);
   const [status, setStatus] = useState<FxRatesStatus>(cached ? 'stale' : 'loading');
   const [lastUpdated, setLastUpdated] = useState<number | null>(cached?.fetchedAt ?? null);
+  const [sourceText, setSourceText] = useState<string>(cached?.sourceText ?? FALLBACK_FX_SOURCE_TEXT);
+
+  const applyPayload = useCallback((payload: FxRatesPayload) => {
+    setRates(payload.rates);
+    setStatus('ok');
+    setLastUpdated(payload.fetchedAt);
+    setSourceText(payload.sourceText);
+    writeFxCache(payload);
+  }, []);
+
+  const refreshNow = useCallback(async () => {
+    const payload = await fetchFxRatesPayload();
+    if (!payload.rates?.JPY) throw new Error('FX rates missing');
+    applyPayload(payload);
+    return payload;
+  }, [applyPayload]);
 
   useEffect(() => {
     let cancelled = false;
 
     const fetchRates = async () => {
       try {
-        const res = await fetch(FX_API_URL);
-        if (!res.ok) throw new Error('FX rates request failed');
-        const data = await res.json();
-        const nextRates = data?.rates || data?.conversion_rates;
-        if (!nextRates || !nextRates.JPY) throw new Error('FX rates missing');
+        const payload = await fetchFxRatesPayload();
+        if (!payload.rates?.JPY) throw new Error('FX rates missing');
         if (cancelled) return;
-        setRates(nextRates);
-        setStatus('ok');
-        setLastUpdated(Date.now());
-        writeFxCache(nextRates);
+        applyPayload(payload);
       } catch (e) {
         if (cancelled) return;
         setStatus(cached ? 'stale' : 'error');
+        setSourceText(cached?.sourceText ?? FALLBACK_FX_SOURCE_TEXT);
         // keep cached rates if any
       }
     };
@@ -1962,9 +2257,9 @@ const useFxRates = () => {
       cancelled = true;
       window.clearInterval(intervalId);
     };
-  }, []);
+  }, [applyPayload]);
 
-  return { rates, status, lastUpdated };
+  return { rates, status, lastUpdated, sourceText, refreshNow };
 };
 
 const convertToJPY = (amount: number, currency: string, rates: Record<string, number> | null) => {
@@ -1986,7 +2281,8 @@ const SalesAnalyticsModal: React.FC<{
     stores: Store[];
     fxRates: Record<string, number> | null;
     fxStatus: FxRatesStatus;
-}> = ({ isOpen, onClose, sales, stores, fxRates, fxStatus }) => {
+    fxSourceText: string;
+}> = ({ isOpen, onClose, sales, stores, fxRates, fxStatus, fxSourceText }) => {
     const [activeTab, setActiveTab] = useState<'period' | 'country' | 'store'>('period');
 
     useEffect(() => {
@@ -2039,7 +2335,7 @@ const SalesAnalyticsModal: React.FC<{
                             <BarChart3 className="w-6 h-6"/> Sales Analytics
                         </h2>
                         <p className="text-sm text-gray-500">
-                            Detailed breakdown of network performance (Normalized to JPY{fxStatus === 'ok' ? '' : ' • Approx.'})
+                            Detailed breakdown of network performance (Normalized to JPY • {formatFxSourceLabel(fxStatus, fxSourceText)})
                         </p>
                     </div>
                     <button onClick={onClose} className="p-2 hover:bg-gray-200 rounded-full transition"><X className="w-6 h-6"/></button>
@@ -2155,7 +2451,7 @@ const NavButton: React.FC<{ active: boolean; onClick: () => void; icon: any; lab
   </button>
 );
 
-const FinancialsTable: React.FC<{ stores: Store[]; sales: Sale[]; fxRates: Record<string, number> | null; fxStatus: FxRatesStatus }> = ({ stores, sales, fxRates, fxStatus }) => {
+const FinancialsTable: React.FC<{ stores: Store[]; sales: Sale[]; fxRates: Record<string, number> | null; fxStatus: FxRatesStatus; fxSourceText: string }> = ({ stores, sales, fxRates, fxStatus, fxSourceText }) => {
   const currentMonthKey = new Date().toISOString().slice(0, 7);
 
   return (
@@ -2207,7 +2503,7 @@ const FinancialsTable: React.FC<{ stores: Store[]; sales: Sale[]; fxRates: Recor
             </table>
         </div>
         <div className="px-6 py-3 text-[10px] text-gray-400 border-t bg-white">
-            {fxStatus === 'ok' ? 'FX: Live rates' : 'FX: Approx. (cached or fallback)'}
+            {formatFxSourceLabel(fxStatus, fxSourceText)}
         </div>
     </div>
   );
@@ -3677,6 +3973,8 @@ const HQStoreDetail: React.FC<{
     positions: string[];
     fxRates: Record<string, number> | null;
     fxStatus: FxRatesStatus;
+    fxSourceText: string;
+    onRefreshFx: () => Promise<FxRatesPayload>;
     salesLookbackLabel: string;
     onLoadMoreSales: () => void;
     onBack: () => void;
@@ -3692,7 +3990,7 @@ const HQStoreDetail: React.FC<{
     onDeleteSetMenu: (id: string) => void;
     onUpdateEmployees: (storeId: string, employees: Employee[]) => void;
     onAddIngredient: (ing: Ingredient) => Promise<void> | void;
-}> = ({ store, sales, menus, setMenus, employees, ingredients, storeStocks, allStores, categories, standardIngredients, currencies, positions, fxRates, fxStatus, salesLookbackLabel, onLoadMoreSales, onBack, onUpdateStore, onSaveStoreStocks, onMergeStores, onDeleteStore, onUpdateMenu, onCreateMenu, onDeleteMenu, onUpdateSetMenu, onCreateSetMenu, onDeleteSetMenu, onUpdateEmployees, onAddIngredient }) => {
+}> = ({ store, sales, menus, setMenus, employees, ingredients, storeStocks, allStores, categories, standardIngredients, currencies, positions, fxRates, fxStatus, fxSourceText, onRefreshFx, salesLookbackLabel, onLoadMoreSales, onBack, onUpdateStore, onSaveStoreStocks, onMergeStores, onDeleteStore, onUpdateMenu, onCreateMenu, onDeleteMenu, onUpdateSetMenu, onCreateSetMenu, onDeleteSetMenu, onUpdateEmployees, onAddIngredient }) => {
     const storeMenus = menus.filter(m => m.storeId === store.id);
     const storeSetMenus = setMenus.filter(sm => sm.storeId === store.id);
     const storeEmployees = employees.filter(e => e.storeId === store.id);
@@ -3771,31 +4069,28 @@ const HQStoreDetail: React.FC<{
     const [unlinkBusy, setUnlinkBusy] = useState<string | null>(null);
     const [unlinkError, setUnlinkError] = useState<string | null>(null);
     const [invoiceMonthKey, setInvoiceMonthKey] = useState<string>(() => formatMonthKey(new Date()));
-    const [invoiceCurrency, setInvoiceCurrency] = useState<'JPY' | 'USD'>('JPY');
-    const isChinaStore = useMemo(() => {
-        const country = String(store.country ?? '').toLowerCase();
-        const name = String(store.name ?? '').toLowerCase();
-        return country.includes('china') || country.includes('中国') || country.includes('중국')
-            || name.includes('ningbo') || name.includes('宁波') || name.includes('寧波');
-    }, [store.id, store.country, store.name]);
+    const invoicePrintProfile = useMemo(() => getInvoicePrintProfile(store), [store.id, store.name, store.country, store.currency]);
+    const [invoiceCurrency, setInvoiceCurrency] = useState<'JPY' | 'USD'>(invoicePrintProfile.invoiceCurrency);
     const defaultInvoiceSummaryMode = useMemo<'royalty_only' | 'withholding' | 'china_tax'>(() => (
-        isChinaStore ? 'china_tax' : 'royalty_only'
-    ), [isChinaStore]);
+        invoicePrintProfile.summaryMode
+    ), [invoicePrintProfile.summaryMode]);
     const [invoiceSummaryMode, setInvoiceSummaryMode] = useState<'royalty_only' | 'withholding' | 'china_tax'>(defaultInvoiceSummaryMode);
     const [invoiceNumber, setInvoiceNumber] = useState<string>('');
     const [invoiceNumberEdited, setInvoiceNumberEdited] = useState(false);
-    const [invoiceMinimumDraft, setInvoiceMinimumDraft] = useState<string>('0');
+    const [invoiceMinimumDraft, setInvoiceMinimumDraft] = useState<string>(invoicePrintProfile.minimumRoyalty);
     const defaultWithholdingRateDraft = useMemo(() => (
-        isChinaStore ? '15.09' : '0'
-    ), [isChinaStore]);
+        invoicePrintProfile.withholdingRate
+    ), [invoicePrintProfile.withholdingRate]);
     const [invoiceWithholdingTaxRateDraft, setInvoiceWithholdingTaxRateDraft] = useState<string>(defaultWithholdingRateDraft);
     const [invoiceChinaVatRateDraft, setInvoiceChinaVatRateDraft] = useState<string>('6');
     const [invoiceChinaIncomeTaxRateDraft, setInvoiceChinaIncomeTaxRateDraft] = useState<string>('10');
-    const [invoiceBankChargeDraft, setInvoiceBankChargeDraft] = useState<string>('0');
-    const [invoiceBankChargeLabel, setInvoiceBankChargeLabel] = useState<string>('Bank Charge');
-    const [invoiceToDraft, setInvoiceToDraft] = useState<string>(store.name || '');
-    const [invoiceSpecialNote, setInvoiceSpecialNote] = useState<string>('');
+    const [invoiceBankChargeDraft, setInvoiceBankChargeDraft] = useState<string>(invoicePrintProfile.bankCharge);
+    const [invoiceBankChargeLabel, setInvoiceBankChargeLabel] = useState<string>(invoicePrintProfile.bankChargeLabel);
+    const [invoiceToDraft, setInvoiceToDraft] = useState<string>(invoicePrintProfile.buyerText);
+    const [invoiceSpecialNote, setInvoiceSpecialNote] = useState<string>(invoicePrintProfile.specialNote);
     const [invoiceError, setInvoiceError] = useState<string | null>(null);
+    const [invoiceGenerating, setInvoiceGenerating] = useState(false);
+    const [invoiceManualFxDraft, setInvoiceManualFxDraft] = useState<string>('');
     const [detailSection, setDetailSection] = useState<'sales' | 'inventory' | 'invoice' | 'menu' | 'staff' | 'accounts'>('sales');
     const [menuSection, setMenuSection] = useState<'items' | 'sets'>('items');
     const hqNavReadyRef = useRef(false);
@@ -3814,13 +4109,15 @@ const HQStoreDetail: React.FC<{
     }, [defaultInvoiceSummaryMode]);
 
     useEffect(() => {
+        setInvoiceCurrency(invoicePrintProfile.invoiceCurrency);
+        setInvoiceMinimumDraft(invoicePrintProfile.minimumRoyalty);
+        setInvoiceBankChargeDraft(invoicePrintProfile.bankCharge);
+        setInvoiceBankChargeLabel(invoicePrintProfile.bankChargeLabel);
+        setInvoiceToDraft(invoicePrintProfile.buyerText);
+        setInvoiceSpecialNote(invoicePrintProfile.specialNote);
         setInvoiceChinaVatRateDraft('6');
         setInvoiceChinaIncomeTaxRateDraft('10');
-    }, [store.id]);
-
-    useEffect(() => {
-        setInvoiceToDraft(store.name || '');
-    }, [store.id, store.name]);
+    }, [store.id, invoicePrintProfile]);
 
     useEffect(() => {
         if (typeof window === 'undefined') return;
@@ -4240,12 +4537,17 @@ const HQStoreDetail: React.FC<{
         }
     }, [invoiceMonthKey, invoiceMonthOptions]);
 
-    const invoiceSummary = useMemo(() => {
+    const computeInvoiceSummary = useCallback((ratesForCalc: Record<string, number> | null) => {
         const monthSales = storeSales.filter(s => s.date.startsWith(invoiceMonthKey));
         const localSalesTotal = monthSales.reduce((sum, sale) => sum + (sale.totalAmount || 0), 0);
-        const convertedSales = convertAmountByUsdRates(localSalesTotal, store.currency, invoiceCurrency, fxRates);
+        const convertedSales = convertAmountByUsdRates(localSalesTotal, store.currency, invoiceCurrency, ratesForCalc);
         const royaltyRate = store.royaltyPercentage || 0;
-        const salesRoyalty = convertedSales === null ? null : Math.round((convertedSales * royaltyRate) / 100);
+        const rawSalesRoyalty = convertedSales === null ? null : (convertedSales * royaltyRate) / 100;
+        const salesRoyalty = rawSalesRoyalty === null
+            ? null
+            : invoiceCurrency === 'USD'
+                ? Math.round(rawSalesRoyalty * 100) / 100
+                : Math.round(rawSalesRoyalty);
         const minimumRoyalty = parseMoneyInput(invoiceMinimumDraft);
         const requestedWithholdingRate = parsePercentInput(invoiceWithholdingTaxRateDraft);
         const withholdingRate = invoiceSummaryMode === 'withholding' ? requestedWithholdingRate : 0;
@@ -4293,7 +4595,6 @@ const HQStoreDetail: React.FC<{
         invoiceMonthKey,
         store.currency,
         invoiceCurrency,
-        fxRates,
         store.royaltyPercentage,
         invoiceMinimumDraft,
         invoiceSummaryMode,
@@ -4303,34 +4604,69 @@ const HQStoreDetail: React.FC<{
         invoiceBankChargeDraft,
     ]);
 
-    const handleGenerateInvoicePdf = () => {
+    const invoiceSummary = useMemo(() => computeInvoiceSummary(
+        applyManualFxRate(fxRates, store.currency, invoiceCurrency, parseManualFxRate(invoiceManualFxDraft))
+    ), [computeInvoiceSummary, fxRates, store.currency, invoiceCurrency, invoiceManualFxDraft]);
+
+    const handleGenerateInvoicePdf = async () => {
         setInvoiceError(null);
+        setInvoiceGenerating(true);
         if (!invoiceMonthKey) {
             setInvoiceError('Select invoice month.');
+            setInvoiceGenerating(false);
             return;
         }
-        if (invoiceSummary.convertedSales === null || invoiceSummary.salesRoyalty === null) {
+
+        let ratesForInvoice = fxRates;
+        let sourceForInvoice = fxSourceText;
+        try {
+            const refreshed = await onRefreshFx();
+            ratesForInvoice = refreshed.rates;
+            sourceForInvoice = refreshed.sourceText;
+        } catch (e) {
+            if (!ratesForInvoice) {
+                setInvoiceError('Failed to refresh FX rates and no cached FX rates are available.');
+                setInvoiceGenerating(false);
+                return;
+            }
+            sourceForInvoice = `Cached ${sourceForInvoice}`;
+        }
+
+        const manualRate = parseManualFxRate(invoiceManualFxDraft);
+        const effectiveRates = applyManualFxRate(ratesForInvoice, store.currency, invoiceCurrency, manualRate);
+        const summaryForInvoice = computeInvoiceSummary(effectiveRates);
+        const sourceLabel = manualRate
+            ? `FX: Manual ${store.currency}/${invoiceCurrency} ${manualRate}`
+            : formatFxSourceLabel('ok', sourceForInvoice);
+
+        if (summaryForInvoice.convertedSales === null || summaryForInvoice.salesRoyalty === null) {
             setInvoiceError(`FX rate not available for ${store.currency} -> ${invoiceCurrency}.`);
+            setInvoiceGenerating(false);
             return;
         }
 
         const issueDate = new Date();
         const invoiceNo = invoiceNumber.trim() || defaultInvoiceNumber;
         const monthLabel = formatInvoiceMonthCell(invoiceMonthKey);
-        const locationText = `${store.country} / ${store.name}`;
+        const locationText = invoicePrintProfile.locationText || `${store.country} / ${store.name}`;
         const amountSymbol = invoiceCurrency === 'JPY' ? '¥' : '$';
         const salesCurrencyLabel = invoiceCurrency === 'JPY' ? 'Sales JPY' : 'Sales USD';
-        const formatAmount = (value: number) => `${amountSymbol}${value.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+        const formatAmount = (value: number) => `${amountSymbol}${value.toLocaleString(undefined, {
+            minimumFractionDigits: invoiceCurrency === 'USD' ? 2 : 0,
+            maximumFractionDigits: invoiceCurrency === 'USD' ? 2 : 0,
+        })}`;
         const bankChargeTitle = invoiceBankChargeLabel.trim() || 'Bank Charge';
         const salesMonthText = monthLabel;
-        const rowAmount = invoiceSummary.salesRoyalty;
-        const salesLocalText = `${store.currency} ${invoiceSummary.localSalesTotal.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
-        const fxSalesText = formatAmount(invoiceSummary.convertedSales);
-        const royaltyRateText = `${invoiceSummary.royaltyRate}%`;
-        const minimumText = formatAmount(invoiceSummary.minimumRoyalty);
-        const withholdingTaxText = formatAmount(invoiceSummary.withholdingTax);
-        const totalText = formatAmount(invoiceSummary.totalDue);
-        const bankChargeText = formatAmount(invoiceSummary.bankCharge);
+        const rowAmount = summaryForInvoice.salesRoyalty;
+        const salesLocalText = `${store.currency} ${summaryForInvoice.localSalesTotal.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+        const fxSalesText = formatAmount(summaryForInvoice.convertedSales);
+        const royaltyRateText = invoiceCurrency === 'USD'
+            ? `${summaryForInvoice.royaltyRate.toFixed(1)}%`
+            : `${summaryForInvoice.royaltyRate}%`;
+        const minimumText = formatAmount(summaryForInvoice.minimumRoyalty);
+        const withholdingTaxText = formatAmount(summaryForInvoice.withholdingTax);
+        const totalText = formatAmount(summaryForInvoice.totalDue);
+        const bankChargeText = formatAmount(summaryForInvoice.bankCharge);
         const buyerText = invoiceToDraft.trim() || store.name;
         const useChinaCompactLayout = invoiceSummaryMode === 'china_tax';
         const showWithholdingTax = invoiceSummaryMode !== 'royalty_only';
@@ -4343,7 +4679,7 @@ const HQStoreDetail: React.FC<{
             invoiceNo,
             invoiceDateText,
             buyerText,
-            showPaymentDueDate: useChinaCompactLayout,
+            showPaymentDueDate: invoicePrintProfile.showPaymentDueDate,
             paymentDueText: 'PAYMENT DUE DATE:End of the following month',
             salesCurrencyLabel,
             locationText,
@@ -4352,30 +4688,33 @@ const HQStoreDetail: React.FC<{
             fxSalesText,
             royaltyRateText,
             rowAmountText: formatAmount(rowAmount),
-            royaltyAmountText: formatAmount(invoiceSummary.royaltyBase),
+            royaltyAmountText: formatAmount(summaryForInvoice.royaltyBase),
             minimumText,
             bankChargeTitle,
             bankChargeText,
-            showBankCharge: invoiceSummary.bankCharge > 0,
+            showBankCharge: summaryForInvoice.bankCharge > 0,
             showWithholdingTax,
             withholdingTaxText,
             showChinaTaxBreakdown,
-            taxBaseText: formatAmount(invoiceSummary.chinaTaxBase),
-            vatTaxText: formatAmount(invoiceSummary.chinaVatTax),
-            incomeTaxText: formatAmount(invoiceSummary.chinaIncomeTax),
-            taxTotalText: formatAmount(invoiceSummary.chinaTaxTotal),
+            taxBaseText: formatAmount(summaryForInvoice.chinaTaxBase),
+            vatTaxText: formatAmount(summaryForInvoice.chinaVatTax),
+            incomeTaxText: formatAmount(summaryForInvoice.chinaIncomeTax),
+            taxTotalText: formatAmount(summaryForInvoice.chinaTaxTotal),
             finalAmountLabelText,
             finalAmountText: totalText,
             invoiceCurrency,
+            bankProfile: INVOICE_BANKS[invoiceCurrency],
+            fxSourceText: sourceLabel,
             signatureUrl,
             specialNoteHtml,
-            showMinimumLine: !useChinaCompactLayout,
+            showMinimumLine: !useChinaCompactLayout && summaryForInvoice.minimumRoyalty > 0,
             compactSummary: useChinaCompactLayout,
         });
 
         const popup = window.open('', '_blank');
         if (!popup) {
             setInvoiceError('Popup blocked. Allow popups and retry.');
+            setInvoiceGenerating(false);
             return;
         }
         try {
@@ -4386,6 +4725,8 @@ const HQStoreDetail: React.FC<{
         } catch (e) {
             console.error('Failed to render invoice window', e);
             setInvoiceError('Failed to render invoice page. Please retry.');
+        } finally {
+            setInvoiceGenerating(false);
         }
     };
 
@@ -5141,9 +5482,10 @@ const HQStoreDetail: React.FC<{
                         <button
                             type="button"
                             onClick={handleGenerateInvoicePdf}
-                            className="px-4 py-2 rounded-xl bg-black text-white text-sm font-bold hover:bg-gray-800"
+                            disabled={invoiceGenerating}
+                            className="px-4 py-2 rounded-xl bg-black text-white text-sm font-bold hover:bg-gray-800 disabled:opacity-50"
                         >
-                            Generate Invoice PDF
+                            {invoiceGenerating ? 'Refreshing FX...' : 'Generate Invoice PDF'}
                         </button>
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-8 gap-3">
@@ -5171,6 +5513,15 @@ const HQStoreDetail: React.FC<{
                                 <option value="JPY">JPY</option>
                                 <option value="USD">USD</option>
                             </select>
+                        </div>
+                        <div>
+                            <div className="text-[11px] font-bold text-gray-500 mb-1">Manual FX Override</div>
+                            <input
+                                value={invoiceManualFxDraft}
+                                onChange={(e) => setInvoiceManualFxDraft(normalizeDecimalInput(e.target.value, 6))}
+                                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                                placeholder={`1 ${store.currency} = ${invoiceCurrency}`}
+                            />
                         </div>
                         <div>
                             <div className="text-[11px] font-bold text-gray-500 mb-1">Summary Format</div>
@@ -5322,6 +5673,11 @@ const HQStoreDetail: React.FC<{
                             {invoiceSummaryMode === 'royalty_only' ? 'Royalty Amount' : 'Remittance Amount'}:{' '}
                             <span className="font-bold">{invoiceCurrency} {invoiceSummary.totalDue.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
                         </div>
+                    </div>
+                    <div className="text-[11px] font-semibold text-gray-500">
+                        {parseManualFxRate(invoiceManualFxDraft)
+                            ? `FX: Manual ${store.currency}/${invoiceCurrency} ${parseManualFxRate(invoiceManualFxDraft)}`
+                            : formatFxSourceLabel(fxStatus, fxSourceText)}
                     </div>
                     {invoiceError && <div className="text-xs text-red-600">{invoiceError}</div>}
                 </div>
@@ -6079,7 +6435,7 @@ const HQDashboard: React.FC<{
   onCreateSetMenu: (setMenu: SetMenu) => void;
   onDeleteSetMenu: (id: string) => void;
   onUpdateEmployees: (storeId: string, employees: Employee[]) => void;
-  onAddIngredient: (ing: Ingredient) => Promise<void> | void;
+    onAddIngredient: (ing: Ingredient) => Promise<void> | void;
 }> = ({ user, onLogout, stores, sales, menus, setMenus, employees, ingredients, storeStocks, globalConfig, salesLookbackLabel, onLoadMoreSales, onUpdateGlobalConfig, onUpdateStore, onSaveStoreStocks, onDeleteStore, onUpdateMenu, onCreateMenu, onDeleteMenu, onUpdateSetMenu, onCreateSetMenu, onDeleteSetMenu, onUpdateEmployees, onAddIngredient }) => {
   const [selectedStore, setSelectedStore] = useState<Store | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -6087,7 +6443,7 @@ const HQDashboard: React.FC<{
   const navReadyRef = useRef(false);
   const navRestoreRef = useRef(false);
   const popLockRef = useRef(false);
-  const { rates: fxRates, status: fxStatus } = useFxRates();
+  const { rates: fxRates, status: fxStatus, sourceText: fxSourceText, refreshNow: refreshFxNow } = useFxRates();
   
   // Tabs for Settings
   const [settingsTab, setSettingsTab] = useState<'general' | 'locations' | 'finance' | 'ops' | 'menu'>('general');
@@ -6218,6 +6574,8 @@ const HQDashboard: React.FC<{
         positions={globalConfig.positions}
         fxRates={fxRates}
         fxStatus={fxStatus}
+        fxSourceText={fxSourceText}
+        onRefreshFx={refreshFxNow}
         salesLookbackLabel={salesLookbackLabel}
         onLoadMoreSales={onLoadMoreSales}
         onBack={() => setSelectedStore(null)}
@@ -6360,6 +6718,7 @@ const HQDashboard: React.FC<{
             stores={stores}
             fxRates={fxRates}
             fxStatus={fxStatus}
+            fxSourceText={fxSourceText}
        />
 
        <div className="flex-1 p-8 overflow-y-auto space-y-8 max-w-7xl mx-auto w-full">
@@ -6396,7 +6755,7 @@ const HQDashboard: React.FC<{
                       </span>
                   </div>
                   <div className="mt-4 text-[10px] text-gray-400 font-bold border-t border-white/10 pt-2">
-                      Basis: Current Month ({metrics.currentMonthName}) • FX: {fxStatus === 'ok' ? 'Live' : 'Approx.'}
+                      Basis: Current Month ({metrics.currentMonthName}) • {formatFxSourceLabel(fxStatus, fxSourceText)}
                   </div>
               </button>
               
@@ -6432,7 +6791,7 @@ const HQDashboard: React.FC<{
                       JPY {metrics.totalRoyaltyCurrentMonth.toLocaleString(undefined, {maximumFractionDigits: 0})}
                   </div>
                   <div className="mt-8 text-[10px] text-gray-400 font-bold border-t border-gray-100 pt-2">
-                      Basis: Est. for {metrics.currentMonthName} • FX: {fxStatus === 'ok' ? 'Live' : 'Approx.'}
+                      Basis: Est. for {metrics.currentMonthName} • {formatFxSourceLabel(fxStatus, fxSourceText)}
                   </div>
               </div>
 
@@ -6455,7 +6814,7 @@ const HQDashboard: React.FC<{
            </div>
 
            {/* Financials Table */}
-           <FinancialsTable stores={stores} sales={sales} fxRates={fxRates} fxStatus={fxStatus} />
+           <FinancialsTable stores={stores} sales={sales} fxRates={fxRates} fxStatus={fxStatus} fxSourceText={fxSourceText} />
            
            {/* Store Grid (Clickable) */}
            <div>
@@ -7217,10 +7576,22 @@ const LoginScreen: React.FC = () => {
         return hasKnownInAppToken || iOSWebView;
     }, []);
 
-    const toFriendlyAuthError = useCallback((message?: string) => {
+    const toFriendlyAuthError = useCallback((message?: string, mode: 'signin' | 'signup' = 'signin') => {
         const raw = String(message ?? '').toLowerCase();
         if (raw.includes('invalid login credentials')) {
             return 'Email or password is incorrect. If you normally use Google, use Continue with Google.';
+        }
+        if (raw.includes('failed to fetch') || raw.includes('networkerror') || raw.includes('network request failed')) {
+            return 'Cannot reach Supabase. Check VITE_SUPABASE_URL in .env.local, then restart the local server.';
+        }
+        if (raw.includes('signup') && (raw.includes('disabled') || raw.includes('not allowed'))) {
+            return 'Email account creation is disabled in Supabase. Ask HQ admin to enable email sign-up or create this account manually.';
+        }
+        if (raw.includes('password') && (raw.includes('weak') || raw.includes('least') || raw.includes('characters'))) {
+            return 'Password is too short or weak. Use at least 6 characters.';
+        }
+        if (raw.includes('invalid email')) {
+            return 'Email format is invalid. For China stores, use an email-style ID such as store-name@chibo-cn.local.';
         }
         if (raw.includes('email not confirmed')) {
             return 'Email is not confirmed yet. Check your inbox or ask HQ admin.';
@@ -7231,7 +7602,12 @@ const LoginScreen: React.FC = () => {
         if (raw.includes('user already registered')) {
             return 'This email is already registered. Please sign in instead.';
         }
-        return 'Sign-in failed. Please try again.';
+        if (raw.includes('database error') || raw.includes('unexpected')) {
+            return mode === 'signup'
+                ? 'Account creation failed because Supabase could not finish creating the user. Ask HQ admin to check Auth settings and database triggers.'
+                : 'Sign-in failed because Supabase returned a database error. Please try again or ask HQ admin.';
+        }
+        return mode === 'signup' ? 'Account creation failed. Please check the email/password and try again.' : 'Sign-in failed. Please try again.';
     }, []);
 
     const toFriendlyOAuthError = useCallback((message?: string) => {
@@ -7351,14 +7727,14 @@ const LoginScreen: React.FC = () => {
                                     }
                                 } catch (e: any) {
                                     console.error('Email auth failed', e);
-                                    setLoginError(toFriendlyAuthError(e?.message));
+                                    setLoginError(toFriendlyAuthError(e?.message, authMode));
                                 } finally {
                                     setLoginBusy(false);
                                 }
                             }}
                             className="w-full inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-black text-white font-semibold disabled:opacity-50"
                         >
-                            {loginBusy ? 'Processing...' : authMode === 'signin' ? 'Sign in with Email' : 'Create Owner Account'}
+                            {loginBusy ? 'Processing...' : authMode === 'signin' ? 'Sign in with Email' : 'Create New Account'}
                         </button>
                         {authMode === 'signin' && isHqGoogleOnlyEmail && (
                             <div className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs leading-relaxed text-blue-800">
@@ -7374,10 +7750,10 @@ const LoginScreen: React.FC = () => {
                             }}
                             className="w-full text-xs font-semibold text-gray-600 hover:text-black"
                         >
-                            {authMode === 'signin' ? 'Need account? Create one' : 'Already have account? Sign in'}
+                            {authMode === 'signin' ? 'Need an account? Create new account' : 'Already have account? Sign in'}
                         </button>
                         <div className="text-[11px] text-gray-500 leading-relaxed">
-                            Password reset is handled by HQ admin in this pilot phase.
+                            Email/password accounts are for stores that cannot use Google login. Password reset is handled by HQ admin.
                         </div>
                     </div>
 
@@ -7615,6 +7991,7 @@ const OnboardingScreen: React.FC<{
 
 
 const App = () => {
+  const localHqPreviewMode = isLocalHqPreviewMode();
   const [user, setUser] = useState<User | null>(null);
   const [sessionEmail, setSessionEmail] = useState<string | null>(null);
 
@@ -7625,6 +8002,7 @@ const App = () => {
   }, []);
 
   useEffect(() => {
+    if (!isSupabaseConfigured || localHqPreviewMode) return;
     supabase.auth.getSession().then(({ data }) => {
       const email = data.session?.user?.email ?? null;
       setSessionEmail(email);
@@ -7634,7 +8012,26 @@ const App = () => {
       setSessionEmail(email);
     });
     return () => sub.subscription.unsubscribe();
-  }, []);
+  }, [localHqPreviewMode]);
+
+  if (!isSupabaseConfigured && !localHqPreviewMode) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
+        <div className="w-full max-w-lg bg-white border border-gray-200 rounded-2xl shadow-sm p-6">
+          <div className="text-xl font-extrabold text-gray-900">Local Supabase config missing</div>
+          <p className="mt-2 text-sm text-gray-600 leading-relaxed">
+            The app loaded, but local login/data cannot run until `.env.local` has your Supabase URL and anon key.
+          </p>
+          <div className="mt-4 rounded-xl bg-gray-50 border border-gray-200 p-3 text-xs font-mono text-gray-700 whitespace-pre-wrap">{`VITE_SUPABASE_URL=...
+VITE_SUPABASE_ANON_KEY=...
+VITE_HQ_BOOTSTRAP_EMAILS=your-hq-email@example.com`}</div>
+          <p className="mt-4 text-xs text-gray-500">
+            Invoice static preview is still available at `/invoice-china-preview.html`.
+          </p>
+        </div>
+      </div>
+    );
+  }
   
   // Data State
   const [stores, setStores] = useState<Store[]>([]);
@@ -8236,7 +8633,53 @@ const handleUpdateGlobalConfig = async (key: string, values: any) => {
   }
 };
 
+if (localHqPreviewMode) {
+  const previewUser = MOCK_USERS.find((mockUser) => mockUser.role === UserRole.HQ) ?? {
+    name: 'HQ Preview',
+    email: 'hq-preview@chibo.local',
+    role: UserRole.HQ,
+  };
+  const previewStoreStocks = DEFAULT_GLOBAL_CONFIG.standardIngredients.flatMap((ingredient, ingredientIndex) =>
+    MOCK_STORES.map((store, storeIndex) => ({
+      storeId: store.id,
+      ingredientName: ingredient.name,
+      unit: ingredient.unit,
+      par: Number(ingredient.par || 0) || 1000 + ingredientIndex * 250 + storeIndex * 50,
+      reorder: Number(ingredient.reorder || 0) || 300,
+    })),
+  );
 
+  return (
+    <HQDashboard
+      user={previewUser}
+      onLogout={() => {
+        window.location.href = window.location.pathname;
+      }}
+      stores={MOCK_STORES}
+      sales={MOCK_SALES}
+      menus={MOCK_MENUS}
+      setMenus={[]}
+      employees={MOCK_EMPLOYEES}
+      ingredients={MOCK_INGREDIENTS}
+      storeStocks={previewStoreStocks}
+      globalConfig={DEFAULT_GLOBAL_CONFIG}
+      salesLookbackLabel="sample data"
+      onLoadMoreSales={() => {}}
+      onUpdateGlobalConfig={() => {}}
+      onUpdateStore={() => {}}
+      onSaveStoreStocks={() => {}}
+      onDeleteStore={async () => {}}
+      onUpdateMenu={() => {}}
+      onCreateMenu={() => {}}
+      onDeleteMenu={() => {}}
+      onUpdateSetMenu={() => {}}
+      onCreateSetMenu={() => {}}
+      onDeleteSetMenu={() => {}}
+      onUpdateEmployees={() => {}}
+      onAddIngredient={() => {}}
+    />
+  );
+}
 
 if (!sessionEmail) return <LoginScreen />;
 
