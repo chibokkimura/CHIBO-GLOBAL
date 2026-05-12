@@ -1,0 +1,272 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>China Invoice Preview</title>
+  <style>
+    @page { size: A4; margin: 0; }
+    body { margin: 0; color: #111; font-family: Arial, sans-serif; background: #e5e7eb; }
+    .toolbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      padding: 10px 14px;
+      background: rgba(255, 255, 255, 0.95);
+      border-bottom: 1px solid #ddd;
+    }
+    .toolbar button {
+      border: 1px solid #111;
+      background: #fff;
+      color: #111;
+      padding: 7px 12px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .toolbar button.primary { background: #111; color: #fff; }
+    .sheet-wrap {
+      width: min(94vw, 900px);
+      margin: 14px auto 24px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+      border: 1px solid #ddd;
+      background: #f7f7f7;
+    }
+    .sheet {
+      position: relative;
+      width: 210mm;
+      height: 297mm;
+      margin: 0 auto;
+      background: #f7f7f7;
+      box-sizing: border-box;
+      padding: 16mm 14mm 12mm 14mm;
+    }
+    .center { text-align: center; }
+    .head-company {
+      color: #c31717;
+      font-weight: 700;
+      font-size: 14pt;
+      letter-spacing: 0.3px;
+      margin-top: 0;
+    }
+    .head-address {
+      font-size: 8.2pt;
+      line-height: 1.35;
+      margin-top: 4px;
+    }
+    .head-invoice {
+      margin-top: 10px;
+      font-size: 17pt;
+      font-weight: 800;
+      letter-spacing: 0.3px;
+    }
+    .meta-row {
+      margin-top: 18mm;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      font-size: 9.4pt;
+      font-weight: 700;
+    }
+    .due-row {
+      margin-top: 6mm;
+      text-align: right;
+      font-size: 10.2pt;
+      font-weight: 700;
+    }
+    .meta-right div { margin-bottom: 2px; }
+    table.main {
+      width: 100%;
+      margin-top: 18mm;
+      border-collapse: collapse;
+      table-layout: fixed;
+      font-size: 8.2pt;
+    }
+    table.main th, table.main td {
+      border: 1px solid #333;
+      padding: 4px 5px;
+      line-height: 1.15;
+    }
+    table.main th { text-align: center; font-weight: 700; }
+    table.main td { text-align: right; font-weight: 700; }
+    table.main td.left { text-align: left; }
+    .summary-box {
+      border: 1px solid #333;
+      border-top: none;
+      min-height: 58mm;
+      padding: 10mm 12mm 8mm 12mm;
+      box-sizing: border-box;
+      display: flex;
+      flex-direction: column;
+    }
+    .summary-lines.compact {
+      margin-top: 11mm;
+      margin-left: auto;
+      width: 47%;
+      display: flex;
+      flex-direction: column;
+      gap: 4.4mm;
+    }
+    .summary-line {
+      display: flex;
+      justify-content: space-between;
+      align-items: end;
+      font-size: 10.5pt;
+      font-weight: 700;
+    }
+    .summary-line.red { color: #d11a1a; }
+    .summary-line.compact-total {
+      margin-top: 1.8mm;
+      font-size: 12pt;
+    }
+    .paybox {
+      border: 1px solid #333;
+      margin-top: 0;
+      padding: 10mm 10mm 8mm 10mm;
+      font-size: 9pt;
+      line-height: 1.55;
+    }
+    .pay-title {
+      font-size: 12pt;
+      font-weight: 700;
+      margin-bottom: 7px;
+    }
+    .currency-red { color: #d11a1a; font-weight: 700; }
+    .footer {
+      margin-top: 15mm;
+      display: flex;
+      justify-content: space-between;
+      font-size: 9.3pt;
+      font-weight: 700;
+    }
+    .signature-wrap {
+      margin-top: 6px;
+      display: inline-block;
+      width: 72mm;
+    }
+    .signature-wrap img {
+      display: block;
+      width: 100%;
+      height: 24mm;
+      object-fit: contain;
+      object-position: left center;
+      mix-blend-mode: multiply;
+    }
+    .sig-line {
+      margin-top: 0;
+      border-top: 1px solid #333;
+      padding-top: 3px;
+      font-size: 7.8pt;
+    }
+    @media print {
+      body { background: #fff; }
+      .toolbar { display: none; }
+      .sheet-wrap {
+        width: 210mm;
+        margin: 0;
+        box-shadow: none;
+        border: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <button class="primary" onclick="window.print()">Save as PDF</button>
+    <button onclick="window.close()">Close</button>
+  </div>
+  <div class="sheet-wrap">
+    <div class="sheet">
+      <div class="center">
+        <div class="head-company">CHIBO HOLDINGS CO., LTD.</div>
+        <div class="head-address">
+          Ontex Namba Bldg. 7F 2-2-45 Minato Machi,<br/>
+          Naniwa-ku Osaka-shi, Osaka, 556-0017,Japan<br/>
+          Phone +81-6-6633-1570<br/>
+          FAX&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;+81-6-6633-2191
+        </div>
+        <div class="head-invoice">INVOICE</div>
+      </div>
+
+      <div class="meta-row">
+        <div><span style="margin-right:8px;">TO :</span> Hankyu Ningbo</div>
+        <div class="meta-right">
+          <div><span style="display:inline-block; width:82px;">INV Number:</span> CHDR-202605-S4</div>
+          <div><span style="display:inline-block; width:82px;">DATE:</span> May.07.2026</div>
+        </div>
+      </div>
+      <div class="due-row">PAYMENT DUE DATE:End of the following month</div>
+
+      <table class="main">
+        <colgroup>
+          <col style="width:23.2%">
+          <col style="width:14.2%">
+          <col style="width:21.6%">
+          <col style="width:14.6%">
+          <col style="width:10.5%">
+          <col style="width:15.9%">
+        </colgroup>
+        <thead>
+          <tr>
+            <th>Location</th>
+            <th>Sales month</th>
+            <th>Sales (Local Currency)</th>
+            <th>Sales JPY</th>
+            <th>Royalty %</th>
+            <th>Amount</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="left">China / Hankyu Ningbo</td>
+            <td style="text-align:center">May-26</td>
+            <td>CNY 248,000</td>
+            <td>¥5,166,667</td>
+            <td style="text-align:center">5%</td>
+            <td>¥258,333</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="summary-box">
+        <div class="summary-lines compact">
+          <div class="summary-line"><span>Royalty Amount</span><span>¥258,333</span></div>
+          <div class="summary-line"><span>Withholding Tax</span><span>¥38,984</span></div>
+          <div class="summary-line red"><span>Bank Charge</span><span>¥0</span></div>
+          <div class="summary-line compact-total"><span>Remittance Amount</span><span>¥219,349</span></div>
+        </div>
+      </div>
+
+      <div class="paybox">
+        <div class="pay-title">Please make payment payable to:</div>
+        <div>Beneficiary Name : CHIBO HOLDINGS CO., LTD.</div>
+        <div>Beneficiary Address : 1-5-5 DOUTONNBORI, CHUO-KU, OSAKA, 542-0071 JAPAN</div>
+        <div>Beneficiary Bank Name : RESONA BANK&nbsp;&nbsp;SENBA BRANCH</div>
+        <div>Beneficiary Bank Address : 3-6-1 KITAKYUHOJIMACHI, CYUO-KU, OSAKA-SHI,OSAKA 541-0057, JAPAN</div>
+        <div>Swift Code : DIWAJPJT</div>
+        <div>Beneficiary Account Number : 0323028&nbsp;&nbsp;<span class="currency-red">JPY</span></div>
+      </div>
+
+      <div class="footer">
+        <div>
+          <div>Buyer:</div>
+          <div>Hankyu Ningbo</div>
+          <div style="width:66mm; border-top:1px solid #333; margin-top:36px;"></div>
+        </div>
+        <div style="text-align:left;">
+          <div>Prepared by</div>
+          <div>CHIBO HOLDINGS CO.,LTD.</div>
+          <div class="signature-wrap">
+            <img src="invoice-signature-kasumi.png" alt="Signature" />
+            <div class="sig-line">Kasumi Hemmi</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
