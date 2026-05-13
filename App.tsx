@@ -7,6 +7,7 @@ import {
   LayoutDashboard, ClipboardList, Users, UtensilsCrossed, LogOut, 
   AlertTriangle, Plus, Trash2, ChevronRight, FileText, Camera, Save, ArrowLeft, BarChart3, Package, MapPin, CheckCircle2, XCircle, TrendingUp, TrendingDown, Minus, DollarSign, Clock, Image as ImageIcon, Layers, UploadCloud, Settings, X, Search, Info, Grid, Briefcase, User as UserIcon, AlertCircle, Mail, ArrowRight, UserPlus, AlertOctagon, ArrowUpRight, ArrowDownRight, CalendarX
 } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import { isSupabaseConfigured, supabase } from './supabaseClient';
 import { signInWithEmailPassword, signInWithGoogle, signOut, signUpWithEmailPassword } from './auth';
 import { MOCK_EMPLOYEES, MOCK_INGREDIENTS, MOCK_MENUS, MOCK_SALES, MOCK_STORES, MOCK_USERS } from './constants';
@@ -2272,6 +2273,229 @@ const convertToJPY = (amount: number, currency: string, rates: Record<string, nu
   return (amount / rateLocal) * rateJPY;
 };
 
+const getFiscalStartYear = (date = new Date()) => {
+  const monthIndex = date.getMonth();
+  return monthIndex >= 3 ? date.getFullYear() : date.getFullYear() - 1;
+};
+
+const buildFiscalMonthKeys = (fiscalStartYear: number) =>
+  Array.from({ length: 12 }, (_, index) => {
+    const monthIndex = (3 + index) % 12;
+    const year = monthIndex >= 3 ? fiscalStartYear : fiscalStartYear + 1;
+    return `${year}-${String(monthIndex + 1).padStart(2, '0')}`;
+  });
+
+const getLocalSalesLabelCurrency = (store: Store) => {
+  const country = normalizeInvoiceToken(store.country ?? '');
+  if (country.includes('taiwan') || country.includes('台湾') || country.includes('대만')) return 'NT$';
+  return store.currency || 'LOCAL';
+};
+
+const getExportCountryLabel = (store: Store) => {
+  const country = normalizeInvoiceToken(store.country ?? '');
+  const settlement = getInvoicePrintProfile(store).invoiceCurrency;
+  if (country.includes('vietnam') || country.includes('ベトナム') || country.includes('베트남')) return `ベトナム     ${settlement}`;
+  if (country.includes('taiwan') || country.includes('台湾') || country.includes('대만')) return `台湾               ${settlement}`;
+  if (country.includes('china') || country.includes('中国') || country.includes('중국')) return `中国                      ${settlement}`;
+  if (country.includes('philippines') || country.includes('フィリピン')) return `フィリピン    ${settlement}`;
+  if (country.includes('korea') || country.includes('韓国') || country.includes('한국')) return `韓国           ${settlement}`;
+  return `${store.country || 'Other'}     ${settlement}`;
+};
+
+const makeFormula = (f: string) => ({ f });
+
+const downloadWorkbook = (workbook: XLSX.WorkBook, filename: string) => {
+  const data = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+  const blob = new Blob([data], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+};
+
+const exportGlobalSalesProgressWorkbook = (
+  stores: Store[],
+  sales: Sale[],
+  fxRates: Record<string, number> | null,
+  fxStatus: FxRatesStatus,
+  fxSourceText: string,
+) => {
+  const rates = fxRates ?? FALLBACK_USD_RATES;
+  const fiscalStartYear = getFiscalStartYear();
+  const fiscalEndYear = fiscalStartYear + 1;
+  const monthKeys = buildFiscalMonthKeys(fiscalStartYear);
+  const monthHeaders = ['4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月', '1月', '2月', '3月'];
+  const worksheetName = `第${fiscalStartYear}年度売上推移表`;
+  const rows: any[][] = [
+    ['グローバル事業本部'],
+    [`${fiscalStartYear}年4月～${fiscalEndYear}年3月HDに計上  海外売上推移表（為替の相場により売上額は変動いたします。）`],
+    [`Generated: ${new Date().toLocaleString()} / ${formatFxSourceLabel(fxStatus, fxSourceText)}`],
+    ['国', '店舗名', '項目', ...monthHeaders, '各項目合計', '', 'Currency', 'Royalty %'],
+  ];
+
+  const salesByStoreMonth = new Map<string, number>();
+  dedupeSalesByStoreDate(sales).forEach((sale) => {
+    const monthKey = extractMonthKey(sale.date);
+    if (!monthKey) return;
+    const key = `${sale.storeId}::${monthKey}`;
+    salesByStoreMonth.set(key, (salesByStoreMonth.get(key) ?? 0) + Number(sale.totalAmount || 0));
+  });
+
+  const sortedStores = [...stores].sort((a, b) =>
+    `${a.country} ${a.city} ${a.name}`.localeCompare(`${b.country} ${b.city} ${b.name}`),
+  );
+
+  sortedStores.forEach((store) => {
+    const sectionStartRow = rows.length + 1;
+    const localCurrencyLabel = getLocalSalesLabelCurrency(store);
+    const localCurrencyCode = store.currency || 'USD';
+    const royaltyRate = Number(store.royaltyPercentage || 0);
+    const localSalesValues = monthKeys.map((monthKey) => {
+      const value = salesByStoreMonth.get(`${store.id}::${monthKey}`);
+      return value ? Math.round(value * 100) / 100 : '';
+    });
+    const customerRowNumber = sectionStartRow;
+    const localRowNumber = sectionStartRow + 1;
+    const jpyRowNumber = sectionStartRow + 2;
+    const usdRowNumber = sectionStartRow + 3;
+    const royaltyRowNumber = sectionStartRow + 4;
+    const formulasForMonths = (rowNumber: number, builder: (col: string) => string) =>
+      monthHeaders.map((_, index) => builder(XLSX.utils.encode_col(3 + index)));
+
+    rows.push([
+      getExportCountryLabel(store),
+      store.name,
+      '客数（手入力）',
+      ...Array(12).fill(''),
+      makeFormula(`SUM(D${customerRowNumber}:O${customerRowNumber})`),
+      '',
+      localCurrencyCode,
+      royaltyRate / 100,
+    ]);
+    rows.push([
+      '',
+      '',
+      `売上（${localCurrencyLabel}）`,
+      ...localSalesValues,
+      makeFormula(`SUM(D${localRowNumber}:O${localRowNumber})`),
+      '',
+      localCurrencyCode,
+      royaltyRate / 100,
+    ]);
+    rows.push([
+      '',
+      '',
+      '売上（JPY）',
+      ...formulasForMonths(jpyRowNumber, (col) => `IF(${col}${localRowNumber}="","",${col}${localRowNumber}*VLOOKUP($R${jpyRowNumber},'FX Rates'!$A:$C,3,FALSE))`).map(makeFormula),
+      makeFormula(`SUM(D${jpyRowNumber}:O${jpyRowNumber})`),
+      '',
+      localCurrencyCode,
+      royaltyRate / 100,
+    ]);
+    rows.push([
+      '',
+      '',
+      '売上（USD）',
+      ...formulasForMonths(usdRowNumber, (col) => `IF(${col}${localRowNumber}="","",${col}${localRowNumber}/VLOOKUP($R${usdRowNumber},'FX Rates'!$A:$B,2,FALSE))`).map(makeFormula),
+      makeFormula(`SUM(D${usdRowNumber}:O${usdRowNumber})`),
+      '',
+      localCurrencyCode,
+      royaltyRate / 100,
+    ]);
+    rows.push([
+      '',
+      '',
+      `Royalty ${royaltyRate}%（JPY）`,
+      ...formulasForMonths(royaltyRowNumber, (col) => `IF(${col}${jpyRowNumber}="","",${col}${jpyRowNumber}*$S${royaltyRowNumber})`).map(makeFormula),
+      makeFormula(`SUM(D${royaltyRowNumber}:O${royaltyRowNumber})`),
+      '',
+      localCurrencyCode,
+      royaltyRate / 100,
+    ]);
+  });
+
+  const summaryStartRow = rows.length + 1;
+  const jpyRows = rows
+    .map((row, index) => ({ row, index: index + 1 }))
+    .filter(({ row }) => row[2] === '売上（JPY）')
+    .map(({ index }) => index);
+  const usdRows = rows
+    .map((row, index) => ({ row, index: index + 1 }))
+    .filter(({ row }) => row[2] === '売上（USD）')
+    .map(({ index }) => index);
+  const royaltyRows = rows
+    .map((row, index) => ({ row, index: index + 1 }))
+    .filter(({ row }) => String(row[2] ?? '').startsWith('Royalty'))
+    .map(({ index }) => index);
+  const sumRefs = (rowNumbers: number[], col: string) =>
+    rowNumbers.length > 0 ? rowNumbers.map((row) => `${col}${row}`).join('+') : '0';
+
+  rows.push(['']);
+  rows.push([
+    '合計',
+    '',
+    '売上合計（JPY）',
+    ...monthHeaders.map((_, index) => makeFormula(sumRefs(jpyRows, XLSX.utils.encode_col(3 + index)))),
+    makeFormula(`SUM(D${summaryStartRow + 1}:O${summaryStartRow + 1})`),
+  ]);
+  rows.push([
+    '',
+    '',
+    '売上合計（USD）',
+    ...monthHeaders.map((_, index) => makeFormula(sumRefs(usdRows, XLSX.utils.encode_col(3 + index)))),
+    makeFormula(`SUM(D${summaryStartRow + 2}:O${summaryStartRow + 2})`),
+  ]);
+  rows.push([
+    '',
+    '',
+    'Royalty合計（JPY）',
+    ...monthHeaders.map((_, index) => makeFormula(sumRefs(royaltyRows, XLSX.utils.encode_col(3 + index)))),
+    makeFormula(`SUM(D${summaryStartRow + 3}:O${summaryStartRow + 3})`),
+  ]);
+
+  const worksheet = XLSX.utils.aoa_to_sheet(rows);
+  worksheet['!merges'] = [
+    { s: { r: 0, c: 0 }, e: { r: 0, c: 15 } },
+    { s: { r: 1, c: 0 }, e: { r: 1, c: 15 } },
+    { s: { r: 2, c: 0 }, e: { r: 2, c: 15 } },
+  ];
+  worksheet['!cols'] = [
+    { wch: 18 },
+    { wch: 38 },
+    { wch: 28 },
+    ...Array(13).fill({ wch: 12 }),
+    { wch: 3 },
+    { wch: 10, hidden: true },
+    { wch: 10, hidden: true },
+  ];
+
+  const currencies = Array.from(new Set(['USD', 'JPY', ...stores.map((store) => store.currency).filter(Boolean)]));
+  const jpyRateRowNumber = currencies.findIndex((currency) => currency === 'JPY') + 2;
+  const rateRows: any[][] = [
+    ['Currency', 'Currency per USD', 'JPY per currency', 'Editable notes'],
+    ...currencies.map((currency, index) => {
+      const rowNumber = index + 2;
+      const rate = rates[currency] || FALLBACK_USD_RATES[currency] || 1;
+      const jpyPerCurrencyFormula = currency === 'JPY' ? '1' : `$B$${jpyRateRowNumber}/B${rowNumber}`;
+      return [currency, rate, makeFormula(jpyPerCurrencyFormula), currency === 'JPY' ? 'JPY base' : 'Edit B to update formulas'];
+    }),
+  ];
+  const ratesSheet = XLSX.utils.aoa_to_sheet(rateRows);
+  ratesSheet['!cols'] = [{ wch: 14 }, { wch: 18 }, { wch: 18 }, { wch: 22 }];
+
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, worksheetName.slice(0, 31));
+  XLSX.utils.book_append_sheet(workbook, ratesSheet, 'FX Rates');
+  const filename = `HD海外売上推移表_${fiscalStartYear}04-${fiscalEndYear}03.xlsx`;
+  downloadWorkbook(workbook, filename);
+};
+
 // --- Components ---
 
 const SalesAnalyticsModal: React.FC<{
@@ -2451,14 +2675,27 @@ const NavButton: React.FC<{ active: boolean; onClick: () => void; icon: any; lab
   </button>
 );
 
-const FinancialsTable: React.FC<{ stores: Store[]; sales: Sale[]; fxRates: Record<string, number> | null; fxStatus: FxRatesStatus; fxSourceText: string }> = ({ stores, sales, fxRates, fxStatus, fxSourceText }) => {
+const FinancialsTable: React.FC<{
+  stores: Store[];
+  sales: Sale[];
+  fxRates: Record<string, number> | null;
+  fxStatus: FxRatesStatus;
+  fxSourceText: string;
+  onExportExcel: () => void;
+}> = ({ stores, sales, fxRates, fxStatus, fxSourceText, onExportExcel }) => {
   const currentMonthKey = new Date().toISOString().slice(0, 7);
 
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
         <div className="p-6 border-b flex justify-between items-center bg-gray-50">
             <h3 className="font-bold text-lg text-gray-800">Financial Performance</h3>
-            <button className="text-xs font-bold bg-white border border-gray-200 px-3 py-1 rounded-lg hover:bg-gray-50 text-gray-600">Export CSV</button>
+            <button
+              type="button"
+              onClick={onExportExcel}
+              className="text-xs font-bold bg-white border border-gray-200 px-3 py-1 rounded-lg hover:bg-gray-50 text-gray-600"
+            >
+              Export Excel
+            </button>
         </div>
         <div className="overflow-x-auto">
             <table className="w-full text-sm text-left">
@@ -6491,6 +6728,10 @@ const HQDashboard: React.FC<{
       };
   }, [sales, stores, fxRates, storeStocks]);
 
+  const handleExportSalesProgress = useCallback(() => {
+    exportGlobalSalesProgressWorkbook(stores, sales, fxRates, fxStatus, fxSourceText);
+  }, [stores, sales, fxRates, fxStatus, fxSourceText]);
+
   useEffect(() => {
     if (typeof window === 'undefined' || navRestoreRef.current) return;
     const historyState = window.history.state;
@@ -6814,7 +7055,14 @@ const HQDashboard: React.FC<{
            </div>
 
            {/* Financials Table */}
-           <FinancialsTable stores={stores} sales={sales} fxRates={fxRates} fxStatus={fxStatus} fxSourceText={fxSourceText} />
+           <FinancialsTable
+             stores={stores}
+             sales={sales}
+             fxRates={fxRates}
+             fxStatus={fxStatus}
+             fxSourceText={fxSourceText}
+             onExportExcel={handleExportSalesProgress}
+           />
            
            {/* Store Grid (Clickable) */}
            <div>
