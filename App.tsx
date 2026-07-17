@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { User, Store, Menu, SetMenu, Sale, Employee, UserRole, Ingredient, SaleItem, SaleSetItem, RecipeItem } from './types';
-import { 
+import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, LineChart, Line, ComposedChart, Cell
 } from 'recharts';
-import { 
-  LayoutDashboard, ClipboardList, Users, UtensilsCrossed, LogOut, 
+import {
+  LayoutDashboard, ClipboardList, Users, UtensilsCrossed, LogOut,
   AlertTriangle, Plus, Trash2, ChevronRight, FileText, Camera, Save, ArrowLeft, BarChart3, Package, MapPin, CheckCircle2, XCircle, TrendingUp, TrendingDown, Minus, DollarSign, Clock, Image as ImageIcon, Layers, UploadCloud, Settings, X, Search, Info, Grid, Briefcase, User as UserIcon, AlertCircle, Mail, ArrowRight, UserPlus, AlertOctagon, ArrowUpRight, ArrowDownRight, CalendarX
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
@@ -2518,35 +2518,111 @@ const SalesAnalyticsModal: React.FC<{
         return () => { document.body.style.overflow = 'unset'; };
     }, [isOpen]);
 
-    // Aggregate Data Logic
+    const salesForAnalytics = useMemo(() => dedupeSalesByStoreDate(sales), [sales]);
+    const storeById = useMemo(() => {
+        const map = new Map<string, Store>();
+        stores.forEach(store => map.set(store.id, store));
+        return map;
+    }, [stores]);
+
+    const monthOptions = useMemo(() => {
+        const keys = new Set<string>();
+        salesForAnalytics.forEach((sale) => {
+            const key = extractMonthKey(sale.date);
+            if (key) keys.add(key);
+        });
+        return Array.from(keys).sort((a, b) => b.localeCompare(a));
+    }, [salesForAnalytics]);
+
+    const [selectedMonth, setSelectedMonth] = useState<string>('latest');
+
+    useEffect(() => {
+        if (!isOpen) return;
+        if (selectedMonth !== 'all' && selectedMonth !== 'latest' && !monthOptions.includes(selectedMonth)) {
+            setSelectedMonth('latest');
+        }
+    }, [isOpen, monthOptions, selectedMonth]);
+
+    const activeMonthKey = selectedMonth === 'latest'
+        ? (monthOptions[0] ?? '')
+        : selectedMonth;
+
+    const formatLocalTotals = (localTotals: Record<string, number>) => {
+        const entries = Object.entries(localTotals)
+            .filter(([, amount]) => Math.abs(amount) > 0)
+            .sort(([a], [b]) => a.localeCompare(b));
+        if (entries.length === 0) return '—';
+        return entries
+            .map(([currency, amount]) => `${currency} ${Math.round(amount).toLocaleString()}`)
+            .join(' / ');
+    };
+
+    const filterSaleByMonth = (sale: Sale) => {
+        if (activeTab === 'period') return true;
+        if (activeMonthKey === 'all') return true;
+        if (!activeMonthKey) return false;
+        return extractMonthKey(sale.date) === activeMonthKey;
+    };
+
     const aggregatedData = useMemo(() => {
-        const data: Record<string, number> = {};
-        
-        sales.forEach(sale => {
-            const store = stores.find(s => s.id === sale.storeId);
+        const data: Record<string, {
+            name: string;
+            value: number;
+            localTotals: Record<string, number>;
+            country?: string;
+            city?: string;
+            reportCount: number;
+        }> = {};
+
+        salesForAnalytics.forEach(sale => {
+            if (!filterSaleByMonth(sale)) return;
+            const store = storeById.get(sale.storeId);
             if (!store) return;
 
-            // Normalize amount to JPY
             const amountJPY = convertToJPY(sale.totalAmount, store.currency, fxRates) ?? 0;
 
             let key = '';
+            let name = '';
             if (activeTab === 'period') {
                 key = sale.date.substring(0, 7); // YYYY-MM
+                name = key;
             } else if (activeTab === 'country') {
                 key = store.country;
+                name = store.country;
             } else if (activeTab === 'store') {
-                key = store.name;
+                key = store.id;
+                name = store.name;
             }
 
             if (key) {
-                data[key] = (data[key] || 0) + amountJPY;
+                if (!data[key]) {
+                    data[key] = {
+                        name,
+                        value: 0,
+                        localTotals: {},
+                        country: store.country,
+                        city: store.city,
+                        reportCount: 0,
+                    };
+                }
+                data[key].value += amountJPY;
+                data[key].localTotals[store.currency] = (data[key].localTotals[store.currency] || 0) + (sale.totalAmount || 0);
+                data[key].reportCount += 1;
             }
         });
 
         return Object.entries(data)
-            .map(([name, value]) => ({ name, value }))
+            .map(([, row]) => row)
             .sort((a, b) => activeTab === 'period' ? a.name.localeCompare(b.name) : b.value - a.value);
-    }, [sales, stores, activeTab, fxRates]);
+    }, [salesForAnalytics, storeById, activeTab, activeMonthKey, fxRates]);
+
+    const selectedMonthLabel = activeTab === 'period'
+        ? 'All months'
+        : activeMonthKey === 'all'
+            ? 'All months'
+            : activeMonthKey
+                ? formatMonthKeyLabel(activeMonthKey)
+                : 'No sales month';
 
     if (!isOpen) return null;
 
@@ -2559,32 +2635,49 @@ const SalesAnalyticsModal: React.FC<{
                             <BarChart3 className="w-6 h-6"/> Sales Analytics
                         </h2>
                         <p className="text-sm text-gray-500">
-                            Detailed breakdown of network performance (Normalized to JPY • {formatFxSourceLabel(fxStatus, fxSourceText)})
+                            Local currency and JPY view ({selectedMonthLabel} • {formatFxSourceLabel(fxStatus, fxSourceText)})
                         </p>
                     </div>
                     <button onClick={onClose} className="p-2 hover:bg-gray-200 rounded-full transition"><X className="w-6 h-6"/></button>
                 </div>
 
                 <div className="p-4 border-b bg-white">
-                    <div className="flex gap-2">
-                        <button 
-                            onClick={() => setActiveTab('period')} 
-                            className={`px-4 py-2 rounded-lg font-bold text-sm transition ${activeTab === 'period' ? 'bg-black text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
-                        >
-                            Monthly Trend
-                        </button>
-                        <button 
-                            onClick={() => setActiveTab('country')} 
-                            className={`px-4 py-2 rounded-lg font-bold text-sm transition ${activeTab === 'country' ? 'bg-black text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
-                        >
-                            By Country
-                        </button>
-                        <button 
-                            onClick={() => setActiveTab('store')} 
-                            className={`px-4 py-2 rounded-lg font-bold text-sm transition ${activeTab === 'store' ? 'bg-black text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
-                        >
-                            By Store
-                        </button>
+                    <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                        <div className="flex flex-wrap gap-2">
+                            <button
+                                onClick={() => setActiveTab('period')}
+                                className={`px-4 py-2 rounded-lg font-bold text-sm transition ${activeTab === 'period' ? 'bg-black text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                            >
+                                Monthly Trend
+                            </button>
+                            <button
+                                onClick={() => setActiveTab('country')}
+                                className={`px-4 py-2 rounded-lg font-bold text-sm transition ${activeTab === 'country' ? 'bg-black text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                            >
+                                By Country
+                            </button>
+                            <button
+                                onClick={() => setActiveTab('store')}
+                                className={`px-4 py-2 rounded-lg font-bold text-sm transition ${activeTab === 'store' ? 'bg-black text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                            >
+                                By Store
+                            </button>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <span className="text-xs font-bold uppercase text-gray-400">Month</span>
+                            <select
+                                value={selectedMonth}
+                                onChange={(e) => setSelectedMonth(e.target.value)}
+                                disabled={activeTab === 'period'}
+                                className="border border-gray-200 rounded-lg px-3 py-2 text-sm font-bold bg-white disabled:bg-gray-100 disabled:text-gray-400"
+                            >
+                                <option value="latest">Latest month</option>
+                                <option value="all">All months</option>
+                                {monthOptions.map(monthKey => (
+                                    <option key={monthKey} value={monthKey}>{formatMonthKeyLabel(monthKey)}</option>
+                                ))}
+                            </select>
+                        </div>
                     </div>
                 </div>
 
@@ -2606,10 +2699,10 @@ const SalesAnalyticsModal: React.FC<{
                                                 <YAxis tick={{fontSize: 12}} axisLine={false} tickLine={false} />
                                             </>
                                         )}
-                                        <Tooltip 
+                                        <Tooltip
                                             cursor={{fill: '#f3f4f6'}}
                                             contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
-                                            formatter={(value: number) => [`JPY ${value.toLocaleString(undefined, {maximumFractionDigits: 0})}`, 'Revenue']}
+                                            formatter={(value: number) => [`JPY ${value.toLocaleString(undefined, {maximumFractionDigits: 0})}`, 'Revenue (JPY Est.)']}
                                         />
                                         <Bar dataKey="value" fill="#111827" radius={[0, 4, 4, 0]} barSize={activeTab === 'store' ? 20 : 40}>
                                             {aggregatedData.map((entry, index) => (
@@ -2625,7 +2718,10 @@ const SalesAnalyticsModal: React.FC<{
                                     <thead className="bg-gray-50 text-gray-500 font-bold uppercase text-xs">
                                         <tr>
                                             <th className="p-4">{activeTab === 'period' ? 'Month' : activeTab === 'country' ? 'Country' : 'Store Name'}</th>
-                                            <th className="p-4 text-right">Total Revenue (JPY Est.)</th>
+                                            {activeTab === 'store' && <th className="p-4">Location</th>}
+                                            <th className="p-4 text-right">Revenue (Local)</th>
+                                            <th className="p-4 text-right">Revenue (JPY Est.)</th>
+                                            <th className="p-4 text-right">Reports</th>
                                             <th className="p-4 text-right">Contribution</th>
                                         </tr>
                                     </thead>
@@ -2635,8 +2731,20 @@ const SalesAnalyticsModal: React.FC<{
                                             const percent = total > 0 ? (item.value / total) * 100 : 0;
                                             return (
                                                 <tr key={idx} className="hover:bg-gray-50">
-                                                    <td className="p-4 font-medium">{item.name}</td>
+                                                    <td className="p-4 font-medium">
+                                                        <div className="font-bold text-gray-900">{activeTab === 'period' ? formatMonthKeyLabel(item.name) : item.name}</div>
+                                                        {activeTab === 'country' && (
+                                                            <div className="text-xs text-gray-500">Country total</div>
+                                                        )}
+                                                    </td>
+                                                    {activeTab === 'store' && (
+                                                        <td className="p-4 text-gray-500 text-xs font-medium">
+                                                            {item.city}, {item.country}
+                                                        </td>
+                                                    )}
+                                                    <td className="p-4 text-right font-mono text-gray-700">{formatLocalTotals(item.localTotals)}</td>
                                                     <td className="p-4 text-right font-bold">JPY {item.value.toLocaleString(undefined, {maximumFractionDigits: 0})}</td>
+                                                    <td className="p-4 text-right text-gray-500">{item.reportCount}</td>
                                                     <td className="p-4 text-right text-gray-500">{percent.toFixed(1)}%</td>
                                                 </tr>
                                             );
@@ -2652,7 +2760,7 @@ const SalesAnalyticsModal: React.FC<{
                         </div>
                     )}
                 </div>
-                
+
                 <div className="p-4 border-t bg-gray-50 flex justify-end">
                     <button onClick={onClose} className="bg-white border border-gray-300 text-black font-bold py-2 px-6 rounded-xl hover:bg-gray-100 transition">
                         Close Analytics
@@ -2683,12 +2791,22 @@ const FinancialsTable: React.FC<{
   fxSourceText: string;
   onExportExcel: () => void;
 }> = ({ stores, sales, fxRates, fxStatus, fxSourceText, onExportExcel }) => {
-  const currentMonthKey = new Date().toISOString().slice(0, 7);
+  const currentMonthKey = useMemo(() => {
+    const monthKeys = dedupeSalesByStoreDate(sales)
+      .map((sale) => extractMonthKey(sale.date))
+      .filter(Boolean)
+      .sort((a, b) => b.localeCompare(a));
+    return monthKeys[0] ?? formatMonthKey(new Date());
+  }, [sales]);
+  const currentMonthLabel = formatMonthKeyLabel(currentMonthKey);
 
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
         <div className="p-6 border-b flex justify-between items-center bg-gray-50">
-            <h3 className="font-bold text-lg text-gray-800">Financial Performance</h3>
+            <div>
+              <h3 className="font-bold text-lg text-gray-800">Financial Performance</h3>
+              <div className="text-xs text-gray-500 font-medium">Basis month: {currentMonthLabel} • local currency and JPY estimate shown together</div>
+            </div>
             <button
               type="button"
               onClick={onExportExcel}
@@ -2702,7 +2820,7 @@ const FinancialsTable: React.FC<{
                 <thead className="bg-white text-gray-400 font-bold uppercase text-xs border-b">
                     <tr>
                         <th className="p-4 font-extrabold tracking-wider">Store</th>
-                        <th className="p-4 text-right font-extrabold tracking-wider">Revenue (Local, This Month)</th>
+                        <th className="p-4 text-right font-extrabold tracking-wider">Revenue (Local, {currentMonthLabel})</th>
                         <th className="p-4 text-right font-extrabold tracking-wider">Revenue (JPY Est.)</th>
                         <th className="p-4 text-right font-extrabold tracking-wider">Royalty (JPY Est.)</th>
                         <th className="p-4 text-center font-extrabold tracking-wider">Health</th>
@@ -2994,7 +3112,7 @@ const SalesReporter: React.FC<{
     const newQty = clean === '' ? 0 : parseInt(clean, 10);
     if (newQty < 0) return;
 
-    
+
     setItems(prev => {
         const existing = prev.find(i => i.menuId === categoryName);
         if (existing) {
@@ -3157,21 +3275,21 @@ const SalesReporter: React.FC<{
         )}
         <div>
           <label className="block text-sm font-bold text-gray-700 mb-2">Report Date</label>
-          <input 
-            type="date" 
-            value={date} 
+          <input
+            type="date"
+            value={date}
             onChange={e => setDate(e.target.value)}
             className="w-full p-3 bg-gray-50 rounded-xl border-none font-medium"
           />
         </div>
 
         <div className="flex items-center gap-3 p-4 bg-gray-50 rounded-xl">
-            <input 
-                type="checkbox" 
-                id="isClosed" 
-                checked={isClosed} 
+            <input
+                type="checkbox"
+                id="isClosed"
+                checked={isClosed}
                 onChange={e => setIsClosed(e.target.checked)}
-                className="w-5 h-5 rounded text-black focus:ring-black" 
+                className="w-5 h-5 rounded text-black focus:ring-black"
             />
             <label htmlFor="isClosed" className="font-bold text-gray-700 select-none cursor-pointer">Store was closed (Rest Day)</label>
         </div>
@@ -3196,11 +3314,11 @@ const SalesReporter: React.FC<{
             <div>
               <div className="mb-8">
                 <label className="block text-sm font-bold text-gray-700 mb-2">Total Daily Revenue ({store.currency})</label>
-                <input 
+                <input
                   type="text"
                   inputMode="decimal"
                   pattern="[0-9]*[.]?[0-9]*"
-                  value={manualRevenue} 
+                  value={manualRevenue}
                   onChange={e => setManualRevenue(normalizeDecimalInput(e.target.value, 2))}
                   placeholder="Enter total sales amount"
                   className="w-full p-4 bg-gray-50 rounded-xl font-bold text-2xl border border-gray-200 focus:border-black outline-none"
@@ -3240,7 +3358,7 @@ const SalesReporter: React.FC<{
                         </div>
                         <div className="flex items-center gap-2">
                             <button onClick={() => handleQuantityChange(category, -1)} className="w-8 h-8 flex items-center justify-center bg-gray-100 rounded-full hover:bg-gray-200 font-bold">-</button>
-                            <input 
+                            <input
                               type="text"
                               inputMode="numeric"
                               pattern="[0-9]*"
@@ -3350,7 +3468,7 @@ const MenuManager: React.FC<{
     <div>
       <div className="flex justify-between items-center mb-6">
         <h2 className="text-2xl font-bold">Menu Management</h2>
-        <button 
+        <button
           onClick={() => onCreate({
             id: createLocalEntityId('M'),
             storeId: store.id,
@@ -3780,7 +3898,7 @@ const RecipeEditor: React.FC<{
                     <h2 className="text-2xl font-bold">Edit Item: {menu.name}</h2>
                     <button onClick={onBack} className="p-2 hover:bg-gray-200 rounded-full transition"><X className="w-6 h-6"/></button>
                 </div>
-            
+
                 <div className="p-6 overflow-y-auto space-y-6">
                     {/* Image Upload */}
                     <div className="mb-6">
@@ -3828,9 +3946,9 @@ const RecipeEditor: React.FC<{
                         </div>
                         <div>
                             <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Category</label>
-                            <select 
-                                value={editedMenu.category} 
-                                onChange={e => setEditedMenu({...editedMenu, category: e.target.value})} 
+                            <select
+                                value={editedMenu.category}
+                                onChange={e => setEditedMenu({...editedMenu, category: e.target.value})}
                                 className="w-full p-3 bg-gray-50 rounded-xl font-bold border border-gray-200 focus:border-black outline-none appearance-none"
                             >
                                 <option value="">Select Category</option>
@@ -3841,15 +3959,15 @@ const RecipeEditor: React.FC<{
                         </div>
                         <div className="col-span-2">
                             <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Price</label>
-                            <input 
-                                type="number" 
-                                value={editedMenu.price.toString()} 
+                            <input
+                                type="number"
+                                value={editedMenu.price.toString()}
                                 onChange={e => {
                                     const val = e.target.value;
                                     setEditedMenu({...editedMenu, price: val === '' ? 0 : parseFloat(val)})
                                 }}
                                 onFocus={e => e.target.select()}
-                                className="w-full p-3 bg-gray-50 rounded-xl font-bold border border-gray-200 focus:border-black outline-none" 
+                                className="w-full p-3 bg-gray-50 rounded-xl font-bold border border-gray-200 focus:border-black outline-none"
                             />
                         </div>
                     </div>
@@ -3858,14 +3976,14 @@ const RecipeEditor: React.FC<{
                         <h3 className="font-bold text-lg mb-4 flex items-center gap-2">
                             <UtensilsCrossed className="w-5 h-5"/> Recipe Configuration
                         </h3>
-                        
+
                         {/* Add Ingredient Form */}
                         <div className="bg-gray-50 p-4 rounded-xl mb-4 border border-gray-200">
                             <div className="text-xs font-bold text-gray-500 uppercase mb-2">Add New Ingredient</div>
-                            
+
                             {/* Standard Ingredient Selection */}
                             <div className="mb-3">
-                                <select 
+                                <select
                                     className="w-full p-2 rounded-lg border border-gray-300 text-sm bg-white focus:border-black outline-none"
                                     onChange={(e) => {
                                         if (!e.target.value) return;
@@ -3883,26 +4001,26 @@ const RecipeEditor: React.FC<{
                             </div>
 
                             <div className="flex gap-2">
-                                <input 
-                                    placeholder="Ingredient Name (e.g. Flour)" 
+                                <input
+                                    placeholder="Ingredient Name (e.g. Flour)"
                                     className="flex-[2] p-2 rounded-lg border border-gray-300 text-sm"
                                     value={newIngName}
                                     onChange={e => setNewIngName(e.target.value)}
                                 />
-                                <input 
-                                    placeholder="Qty" 
+                                <input
+                                    placeholder="Qty"
                                     type="number"
                                     className="flex-1 p-2 rounded-lg border border-gray-300 text-sm"
                                     value={newIngQty}
                                     onChange={e => setNewIngQty(e.target.value)}
                                 />
-                                <input 
-                                    placeholder="Unit (g, ml)" 
+                                <input
+                                    placeholder="Unit (g, ml)"
                                     className="flex-1 p-2 rounded-lg border border-gray-300 text-sm"
                                     value={newIngUnit}
                                     onChange={e => setNewIngUnit(e.target.value)}
                                 />
-                                <button 
+                                <button
                                     onClick={handleAddIngredientToRecipe}
                                     className="bg-black text-white px-4 rounded-lg font-bold text-sm hover:bg-gray-800 disabled:opacity-50"
                                     disabled={!newIngName || !newIngQty || !newIngUnit}
@@ -3925,11 +4043,11 @@ const RecipeEditor: React.FC<{
                                     <div key={item.ingredientId} className="flex justify-between items-center p-3 bg-white border border-gray-100 rounded-xl shadow-sm hover:border-black transition group">
                                         <span className="font-bold text-gray-700">{ingName}</span>
                                         <div className="flex items-center gap-2">
-                                            <input 
-                                                type="number" 
-                                                value={item.quantity} 
+                                            <input
+                                                type="number"
+                                                value={item.quantity}
                                                 onChange={e => updateRecipeQuantity(item.ingredientId, Number(e.target.value))}
-                                                className="w-24 p-2 text-right bg-gray-50 rounded-lg border border-transparent focus:bg-white focus:border-black outline-none font-medium" 
+                                                className="w-24 p-2 text-right bg-gray-50 rounded-lg border border-transparent focus:bg-white focus:border-black outline-none font-medium"
                                             />
                                             <span className="text-xs text-gray-500 w-8 font-medium">{ingUnit}</span>
                                             <button onClick={() => removeIngredient(item.ingredientId)} className="p-2 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-full transition">
@@ -4000,7 +4118,7 @@ const StaffEditor: React.FC<{
 }> = ({ employee, positions, onSave, onBack }) => {
     const [editedEmp, setEditedEmp] = useState(employee);
     const [imageError, setImageError] = useState<string | null>(null);
-    
+
     const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (!file) return;
@@ -4043,19 +4161,19 @@ const StaffEditor: React.FC<{
 
                     <div>
                         <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Full Name</label>
-                        <input 
-                            value={editedEmp.name} 
-                            onChange={e => setEditedEmp({...editedEmp, name: e.target.value})} 
-                            className="w-full p-3 bg-gray-50 rounded-xl font-bold border border-gray-200 focus:border-black outline-none" 
+                        <input
+                            value={editedEmp.name}
+                            onChange={e => setEditedEmp({...editedEmp, name: e.target.value})}
+                            className="w-full p-3 bg-gray-50 rounded-xl font-bold border border-gray-200 focus:border-black outline-none"
                             placeholder="e.g. John Doe"
                         />
                     </div>
 
                     <div>
                          <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Position</label>
-                         <select 
-                            value={editedEmp.position} 
-                            onChange={e => setEditedEmp({...editedEmp, position: e.target.value})} 
+                         <select
+                            value={editedEmp.position}
+                            onChange={e => setEditedEmp({...editedEmp, position: e.target.value})}
                             className="w-full p-3 bg-gray-50 rounded-xl font-bold border border-gray-200 focus:border-black outline-none"
                          >
                             <option value="">Select Position</option>
@@ -4067,8 +4185,8 @@ const StaffEditor: React.FC<{
                 </div>
                 <div className="p-4 border-t bg-gray-50 flex justify-end gap-3">
                     <button onClick={onBack} className="px-6 py-3 font-bold text-gray-500 hover:bg-gray-100 rounded-xl transition">Cancel</button>
-                    <button 
-                        onClick={() => onSave(editedEmp)} 
+                    <button
+                        onClick={() => onSave(editedEmp)}
                         disabled={!editedEmp.name || !editedEmp.position}
                         className="bg-black text-white px-8 py-3 rounded-xl font-bold hover:bg-gray-800 shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
                     >
@@ -4129,7 +4247,7 @@ const EmployeeManager: React.FC<{
     return (
         <div>
             {editingEmp && (
-                <StaffEditor 
+                <StaffEditor
                     employee={editingEmp}
                     positions={positions}
                     onSave={handleSave}
@@ -4138,7 +4256,7 @@ const EmployeeManager: React.FC<{
             )}
             <div className="flex justify-between items-center mb-6">
                 <h2 className="text-2xl font-bold">Staff Management</h2>
-                <button 
+                <button
                     onClick={() => setEditingEmp({
                         id: createLocalEntityId('E'),
                         storeId: store.id,
@@ -4973,7 +5091,10 @@ const HQStoreDetail: React.FC<{
     const monthlyRevenueData = useMemo(() => {
         if (!salesMetricsEnabled) return [];
         const data: { name: string; value: number }[] = [];
-        const now = new Date();
+        const latestSaleDate = canonicalStoreSales.find((sale) => Boolean(sale.date))?.date;
+        const now = latestSaleDate
+            ? new Date(`${latestSaleDate}T00:00:00`)
+            : new Date();
         for (let i = 11; i >= 0; i--) {
             const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
             const key = formatDate(d).slice(0, 7);
@@ -4998,30 +5119,33 @@ const HQStoreDetail: React.FC<{
 
         if (!salesMetricsEnabled) {
             return {
-                monthly: { value: 0, baseline: 0, deltaPct: null as number | null },
-                weekly: { value: 0, baseline: 0, deltaPct: null as number | null },
-                yoy: { value: 0, baseline: 0, deltaPct: null as number | null },
+                monthly: { value: 0, baseline: 0, deltaPct: null as number | null, label: 'No sales data', baselineLabel: 'Last Month' },
+                weekly: { value: 0, baseline: 0, deltaPct: null as number | null, label: 'No sales data', baselineLabel: 'Previous 7 Days' },
+                yoy: { value: 0, baseline: 0, deltaPct: null as number | null, label: 'No sales data', baselineLabel: 'Same Month Last Year' },
                 formatMoney,
                 formatJPY,
             };
         }
 
-        const now = new Date();
-        const todayKey = formatDate(now);
-        const thisMonthKey = formatMonthKey(now);
-        const lastMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        const latestSaleDate = canonicalStoreSales.find((sale) => Boolean(sale.date))?.date;
+        const anchorDate = latestSaleDate
+            ? new Date(`${latestSaleDate}T00:00:00`)
+            : new Date();
+        const todayKey = formatDate(anchorDate);
+        const thisMonthKey = formatMonthKey(anchorDate);
+        const lastMonthDate = new Date(anchorDate.getFullYear(), anchorDate.getMonth() - 1, 1);
         const lastMonthKey = formatMonthKey(lastMonthDate);
-        const sameMonthLastYearDate = new Date(now.getFullYear() - 1, now.getMonth(), 1);
+        const sameMonthLastYearDate = new Date(anchorDate.getFullYear() - 1, anchorDate.getMonth(), 1);
         const sameMonthLastYearKey = formatMonthKey(sameMonthLastYearDate);
 
-        const sevenDaysAgo = new Date(now);
-        sevenDaysAgo.setDate(now.getDate() - 6);
+        const sevenDaysAgo = new Date(anchorDate);
+        sevenDaysAgo.setDate(anchorDate.getDate() - 6);
         const sevenDaysAgoKey = formatDate(sevenDaysAgo);
 
-        const prevWeekStart = new Date(now);
-        prevWeekStart.setDate(now.getDate() - 13);
-        const prevWeekEnd = new Date(now);
-        prevWeekEnd.setDate(now.getDate() - 7);
+        const prevWeekStart = new Date(anchorDate);
+        prevWeekStart.setDate(anchorDate.getDate() - 13);
+        const prevWeekEnd = new Date(anchorDate);
+        prevWeekEnd.setDate(anchorDate.getDate() - 7);
         const prevWeekStartKey = formatDate(prevWeekStart);
         const prevWeekEndKey = formatDate(prevWeekEnd);
 
@@ -5051,16 +5175,22 @@ const HQStoreDetail: React.FC<{
                 value: thisMonthTotal,
                 baseline: lastMonthTotal,
                 deltaPct: calcDelta(thisMonthTotal, lastMonthTotal),
+                label: formatMonthKeyLabel(thisMonthKey),
+                baselineLabel: formatMonthKeyLabel(lastMonthKey),
             },
             weekly: {
                 value: thisWeekTotal,
                 baseline: previousWeekTotal,
                 deltaPct: calcDelta(thisWeekTotal, previousWeekTotal),
+                label: `${sevenDaysAgoKey} - ${todayKey}`,
+                baselineLabel: `${prevWeekStartKey} - ${prevWeekEndKey}`,
             },
             yoy: {
                 value: thisMonthTotal,
                 baseline: sameMonthLastYearTotal,
                 deltaPct: calcDelta(thisMonthTotal, sameMonthLastYearTotal),
+                label: formatMonthKeyLabel(thisMonthKey),
+                baselineLabel: formatMonthKeyLabel(sameMonthLastYearKey),
             },
             formatMoney,
             formatJPY,
@@ -5294,7 +5424,7 @@ const HQStoreDetail: React.FC<{
         canonicalStoreSales.forEach(sale => {
             sale.items.forEach(saleItem => {
                 // In SalesReporter, menuId IS the Category Name
-                const categoryName = saleItem.menuId; 
+                const categoryName = saleItem.menuId;
                 const quantitySold = saleItem.quantity;
                 const avgUsage = categoryUsageMap[categoryName];
 
@@ -5585,7 +5715,7 @@ const HQStoreDetail: React.FC<{
                 </div>
             )}
             {editingMenu && (
-                 <RecipeEditor 
+                 <RecipeEditor
                   menu={editingMenu}
                   ingredients={ingredients}
                   categories={categories}
@@ -5609,11 +5739,11 @@ const HQStoreDetail: React.FC<{
                     onBack={() => setEditingSetMenu(null)}
                 />
             )}
-            
+
             <button onClick={onBack} className="flex items-center gap-2 text-gray-500 hover:text-black mb-6 font-bold">
                 <ArrowLeft className="w-5 h-5"/> Back to Dashboard
             </button>
-            
+
             <div className="flex items-start justify-between mb-8">
                 <div>
                     <h1 className="text-3xl font-extrabold">{store.name}</h1>
@@ -5982,32 +6112,35 @@ const HQStoreDetail: React.FC<{
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
                             <div className="rounded-xl border border-gray-200 bg-gray-50 p-3">
                                 <div className="text-[11px] font-bold uppercase text-gray-500">Monthly Sales</div>
+                                <div className="text-[11px] text-gray-500 mt-0.5">{performanceSummary.monthly.label}</div>
                                 <div className="mt-1 text-lg font-extrabold text-gray-900">{performanceSummary.formatMoney(performanceSummary.monthly.value)}</div>
                                 {store.currency !== 'JPY' && (
                                     <div className="text-xs text-gray-500 mt-1">{performanceSummary.formatJPY(performanceSummary.monthly.value) ?? 'JPY N/A'}</div>
                                 )}
                                 <div className={`mt-2 text-xs font-bold ${deltaToneClass(performanceSummary.monthly.deltaPct)}`}>
-                                    vs Last Month {formatDeltaText(performanceSummary.monthly.deltaPct)}
+                                    vs {performanceSummary.monthly.baselineLabel} {formatDeltaText(performanceSummary.monthly.deltaPct)}
                                 </div>
                             </div>
                             <div className="rounded-xl border border-gray-200 bg-gray-50 p-3">
                                 <div className="text-[11px] font-bold uppercase text-gray-500">Weekly Sales (Last 7 Days)</div>
+                                <div className="text-[11px] text-gray-500 mt-0.5">{performanceSummary.weekly.label}</div>
                                 <div className="mt-1 text-lg font-extrabold text-gray-900">{performanceSummary.formatMoney(performanceSummary.weekly.value)}</div>
                                 {store.currency !== 'JPY' && (
                                     <div className="text-xs text-gray-500 mt-1">{performanceSummary.formatJPY(performanceSummary.weekly.value) ?? 'JPY N/A'}</div>
                                 )}
                                 <div className={`mt-2 text-xs font-bold ${deltaToneClass(performanceSummary.weekly.deltaPct)}`}>
-                                    vs Previous 7 Days {formatDeltaText(performanceSummary.weekly.deltaPct)}
+                                    vs {performanceSummary.weekly.baselineLabel} {formatDeltaText(performanceSummary.weekly.deltaPct)}
                                 </div>
                             </div>
                             <div className="rounded-xl border border-gray-200 bg-gray-50 p-3">
                                 <div className="text-[11px] font-bold uppercase text-gray-500">YoY (This Month)</div>
+                                <div className="text-[11px] text-gray-500 mt-0.5">{performanceSummary.yoy.label}</div>
                                 <div className="mt-1 text-lg font-extrabold text-gray-900">{performanceSummary.formatMoney(performanceSummary.yoy.value)}</div>
                                 {store.currency !== 'JPY' && (
                                     <div className="text-xs text-gray-500 mt-1">{performanceSummary.formatJPY(performanceSummary.yoy.value) ?? 'JPY N/A'}</div>
                                 )}
                                 <div className={`mt-2 text-xs font-bold ${deltaToneClass(performanceSummary.yoy.deltaPct)}`}>
-                                    vs Same Month Last Year {formatDeltaText(performanceSummary.yoy.deltaPct)}
+                                    vs {performanceSummary.yoy.baselineLabel} {formatDeltaText(performanceSummary.yoy.deltaPct)}
                                 </div>
                             </div>
                         </div>
@@ -6087,8 +6220,8 @@ const HQStoreDetail: React.FC<{
                                         </div>
                                     </div>
                                     <div className="h-3 w-full bg-gray-100 rounded-full overflow-hidden relative">
-                                        <div 
-                                            className={`h-full rounded-full ${isLow ? 'bg-red-500' : 'bg-black'}`} 
+                                        <div
+                                            className={`h-full rounded-full ${isLow ? 'bg-red-500' : 'bg-black'}`}
                                             style={{ width: `${percentUsed}%` }}
                                         />
                                     </div>
@@ -6227,7 +6360,7 @@ const HQStoreDetail: React.FC<{
                                             {sale.isClosed || !sale.hasReceipt ? (
                                                 <span className="text-gray-300 text-xs italic">No Image</span>
                                             ) : (
-                                                <button 
+                                                <button
                                                     onClick={() => openReceipt(sale.id)}
                                                     disabled={receiptLoadingId === sale.id}
                                                     className="inline-flex items-center gap-1 text-xs font-bold text-blue-600 hover:bg-blue-50 px-3 py-1 rounded-full transition disabled:opacity-60"
@@ -6342,9 +6475,9 @@ const HQStoreDetail: React.FC<{
                     </div>
 
                     {menuSection === 'items' ? (
-                        <MenuManager 
-                            store={store} 
-                            menus={storeMenus} 
+                        <MenuManager
+                            store={store}
+                            menus={storeMenus}
                             onEdit={setEditingMenu}
                             onCreate={(menu) => setEditingMenu(menu)}
                             onDelete={onDeleteMenu}
@@ -6530,14 +6663,14 @@ const ConfigList: React.FC<{
        <h3 className="font-bold text-gray-700 mb-1">{title}</h3>
        <p className="text-xs text-gray-500 mb-3">{description}</p>
        <div className="flex gap-2 mb-3">
-           <input 
+           <input
                 value={newItem}
                 onChange={e => setNewItem(e.target.value)}
                 className="flex-1 border border-gray-300 rounded-lg p-2 text-sm outline-none focus:border-black bg-white text-black"
                 placeholder={placeholder}
            />
-           <button 
-             onClick={() => { if(newItem) { onAdd(newItem); setNewItem(''); } }} 
+           <button
+             onClick={() => { if(newItem) { onAdd(newItem); setNewItem(''); } }}
              className="bg-black text-white px-4 rounded-lg font-bold text-sm hover:bg-gray-800"
            >
              Add
@@ -6563,7 +6696,7 @@ const IngredientConfigList: React.FC<{
     const [unit, setUnit] = useState('');
     const [par, setPar] = useState('');
     const [reorder, setReorder] = useState('');
-    
+
     const handleAdd = () => {
         if (name && unit) {
             const nextPar = par === '' ? 0 : Number(par);
@@ -6581,17 +6714,17 @@ const IngredientConfigList: React.FC<{
             <h3 className="font-bold text-gray-700 mb-1">Standard Ingredients</h3>
             <p className="text-xs text-gray-500 mb-3">Manage standard ingredients (Name, Unit, Stock, Reorder threshold).</p>
             <div className="flex gap-2 mb-3">
-                <input 
-                    value={name} 
-                    onChange={e => setName(e.target.value)} 
-                    className="flex-[2] border border-gray-300 rounded-lg p-2 text-sm outline-none focus:border-black bg-white text-black" 
-                    placeholder="Name (e.g. Flour)" 
+                <input
+                    value={name}
+                    onChange={e => setName(e.target.value)}
+                    className="flex-[2] border border-gray-300 rounded-lg p-2 text-sm outline-none focus:border-black bg-white text-black"
+                    placeholder="Name (e.g. Flour)"
                 />
-                <input 
-                    value={unit} 
-                    onChange={e => setUnit(e.target.value)} 
-                    className="flex-1 border border-gray-300 rounded-lg p-2 text-sm outline-none focus:border-black bg-white text-black" 
-                    placeholder="Unit (e.g. g)" 
+                <input
+                    value={unit}
+                    onChange={e => setUnit(e.target.value)}
+                    className="flex-1 border border-gray-300 rounded-lg p-2 text-sm outline-none focus:border-black bg-white text-black"
+                    placeholder="Unit (e.g. g)"
                 />
                 <input
                     value={par}
@@ -6681,7 +6814,7 @@ const HQDashboard: React.FC<{
   const navRestoreRef = useRef(false);
   const popLockRef = useRef(false);
   const { rates: fxRates, status: fxStatus, sourceText: fxSourceText, refreshNow: refreshFxNow } = useFxRates();
-  
+
   // Tabs for Settings
   const [settingsTab, setSettingsTab] = useState<'general' | 'locations' | 'finance' | 'ops' | 'menu'>('general');
 
@@ -6690,7 +6823,7 @@ const HQDashboard: React.FC<{
       const today = new Date();
       const currentMonthKey = today.toISOString().slice(0, 7); // e.g. "2023-10"
       const currentMonthName = today.toLocaleString('default', { month: 'long' });
-      
+
       const prevDate = new Date(today);
       prevDate.setMonth(today.getMonth() - 1);
       const prevMonthKey = prevDate.toISOString().slice(0, 7);
@@ -6714,8 +6847,8 @@ const HQDashboard: React.FC<{
           }
       });
 
-      const growthRate = totalSalesLastMonth > 0 
-          ? ((totalSalesCurrentMonth - totalSalesLastMonth) / totalSalesLastMonth) * 100 
+      const growthRate = totalSalesLastMonth > 0
+          ? ((totalSalesCurrentMonth - totalSalesLastMonth) / totalSalesLastMonth) * 100
           : 0;
 
       return {
@@ -6800,7 +6933,7 @@ const HQDashboard: React.FC<{
 
   if (selectedStore) {
     return (
-      <HQStoreDetail 
+      <HQStoreDetail
         store={selectedStore}
         sales={sales}
         menus={menus}
@@ -6867,7 +7000,7 @@ const HQDashboard: React.FC<{
                        <h2 className="text-xl font-bold">Global Configuration</h2>
                        <button onClick={() => setIsSettingsOpen(false)}><XCircle className="w-6 h-6 text-gray-400 hover:text-black"/></button>
                    </div>
-                   
+
                    <div className="flex border-b">
                        <button onClick={() => setSettingsTab('general')} className={`flex-1 py-3 text-sm font-bold border-b-2 ${settingsTab === 'general' ? 'border-black text-black' : 'border-transparent text-gray-500 hover:bg-gray-50'}`}>Store Setup</button>
                        <button onClick={() => setSettingsTab('locations')} className={`flex-1 py-3 text-sm font-bold border-b-2 ${settingsTab === 'locations' ? 'border-black text-black' : 'border-transparent text-gray-500 hover:bg-gray-50'}`}>Locations</button>
@@ -6878,7 +7011,7 @@ const HQDashboard: React.FC<{
 
                    <div className="p-6 overflow-y-auto">
                        {settingsTab === 'general' && (
-                           <ConfigList 
+                           <ConfigList
                              title="Pre-approved Store Names"
                              description="List of store names available for new franchise registrations."
                              items={globalConfig.storeNames}
@@ -6889,7 +7022,7 @@ const HQDashboard: React.FC<{
                        )}
                        {settingsTab === 'locations' && (
                            <>
-                            <ConfigList 
+                            <ConfigList
                                 title="Allowed Countries"
                                 description="Countries where franchise operation is authorized."
                                 items={globalConfig.countries}
@@ -6897,7 +7030,7 @@ const HQDashboard: React.FC<{
                                 onAdd={(item) => onUpdateGlobalConfig('countries', [...globalConfig.countries, item])}
                                 onRemove={(item) => onUpdateGlobalConfig('countries', globalConfig.countries.filter(i => i !== item))}
                             />
-                             <ConfigList 
+                             <ConfigList
                                 title="Available Cities"
                                 description="Cities available for selection during onboarding."
                                 items={globalConfig.cities}
@@ -6908,7 +7041,7 @@ const HQDashboard: React.FC<{
                            </>
                        )}
                        {settingsTab === 'finance' && (
-                           <ConfigList 
+                           <ConfigList
                              title="Supported Currencies"
                              description="Currencies available for store financial reporting."
                              items={globalConfig.currencies}
@@ -6918,7 +7051,7 @@ const HQDashboard: React.FC<{
                            />
                        )}
                        {settingsTab === 'ops' && (
-                           <ConfigList 
+                           <ConfigList
                              title="Standard Staff Positions"
                              description="Job titles available for staff management."
                              items={globalConfig.positions}
@@ -6929,7 +7062,7 @@ const HQDashboard: React.FC<{
                        )}
                        {settingsTab === 'menu' && (
                            <>
-                               <ConfigList 
+                               <ConfigList
                                  title="Menu Categories"
                                  description="Standardized categories for menu items across all franchises."
                                  items={globalConfig.categories}
@@ -6937,14 +7070,14 @@ const HQDashboard: React.FC<{
                                  onAdd={(item) => onUpdateGlobalConfig('categories', [...globalConfig.categories, item])}
                                  onRemove={(item) => onUpdateGlobalConfig('categories', globalConfig.categories.filter(i => i !== item))}
                                />
-                               <IngredientConfigList 
+                               <IngredientConfigList
                                  items={globalConfig.standardIngredients}
                                  onUpdate={(items) => onUpdateGlobalConfig('standardIngredients', items)}
                                />
                            </>
                        )}
                    </div>
-                   
+
                    <div className="p-4 border-t bg-gray-50 rounded-b-2xl text-right">
                        <button onClick={() => setIsSettingsOpen(false)} className="bg-black text-white px-6 py-2 rounded-xl font-bold text-sm hover:bg-gray-800">Done</button>
                    </div>
@@ -6952,9 +7085,9 @@ const HQDashboard: React.FC<{
            </div>
        )}
 
-       <SalesAnalyticsModal 
-            isOpen={isSalesAnalyticsOpen} 
-            onClose={() => setIsSalesAnalyticsOpen(false)} 
+       <SalesAnalyticsModal
+            isOpen={isSalesAnalyticsOpen}
+            onClose={() => setIsSalesAnalyticsOpen(false)}
             sales={sales}
             stores={stores}
             fxRates={fxRates}
@@ -6966,7 +7099,7 @@ const HQDashboard: React.FC<{
            {/* KPI Cards */}
            <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
               {/* Sales Card */}
-              <button 
+              <button
                 type="button"
                 onClick={() => setIsSalesAnalyticsOpen(true)}
                 className="bg-black text-white p-6 rounded-2xl shadow-lg cursor-pointer hover:scale-105 active:scale-95 hover:shadow-2xl transition-all duration-300 group text-left relative overflow-hidden focus:ring-4 focus:ring-black/20 outline-none"
@@ -6974,7 +7107,7 @@ const HQDashboard: React.FC<{
                   <div className="absolute inset-0 bg-white/10 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
                   <div className="flex justify-between items-start relative z-10">
                       <h3 className="text-sm font-bold opacity-70 flex items-center gap-2">
-                          Total Network Sales 
+                          Total Network Sales
                           <ChevronRight className="w-4 h-4 opacity-50 group-hover:opacity-100 group-hover:translate-x-1 transition-all" />
                       </h3>
                       <div className="group/tooltip relative">
@@ -6999,7 +7132,7 @@ const HQDashboard: React.FC<{
                       Basis: Current Month ({metrics.currentMonthName}) • {formatFxSourceLabel(fxStatus, fxSourceText)}
                   </div>
               </button>
-              
+
               {/* Active Franchises Card */}
               <div className="bg-white p-6 rounded-2xl shadow-sm border relative group">
                   <div className="flex justify-between items-start">
@@ -7063,14 +7196,14 @@ const HQDashboard: React.FC<{
              fxSourceText={fxSourceText}
              onExportExcel={handleExportSalesProgress}
            />
-           
+
            {/* Store Grid (Clickable) */}
            <div>
               <h3 className="font-bold text-xl mb-4">Franchise Network</h3>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                   {stores.map(store => (
-                      <div 
-                        key={store.id} 
+                      <div
+                        key={store.id}
                         onClick={() => setSelectedStore(store)}
                         className="bg-white p-5 rounded-xl shadow-sm border border-gray-100 hover:border-black cursor-pointer transition group"
                       >
@@ -7282,8 +7415,8 @@ const StoreDashboard: React.FC<{
             .filter(s => extractMonthKey(s.date) === prevMonthKey)
             .reduce((acc, curr) => acc + curr.totalAmount, 0);
 
-        const growth = prevMonthSales > 0 
-            ? ((currentMonthSales - prevMonthSales) / prevMonthSales) * 100 
+        const growth = prevMonthSales > 0
+            ? ((currentMonthSales - prevMonthSales) / prevMonthSales) * 100
             : 0;
 
         return { currentMonthSales, growth };
@@ -7414,7 +7547,7 @@ const StoreDashboard: React.FC<{
     return (
         <div className="min-h-screen bg-gray-50 flex flex-col">
             {editingMenu && (
-                <RecipeEditor 
+                <RecipeEditor
                     menu={editingMenu}
                     ingredients={ingredients}
                     categories={globalConfig.categories}
@@ -7532,7 +7665,7 @@ const StoreDashboard: React.FC<{
                     </div>
                 </div>
             )}
-            
+
             <div className="bg-white border-b px-6 py-4 flex justify-between items-center sticky top-0 z-40">
                 <div className="flex items-center gap-4">
                     <div className="w-10 h-10 bg-indigo-600 text-white rounded-xl flex items-center justify-center font-bold text-lg shadow-lg shadow-indigo-200">
@@ -7662,7 +7795,7 @@ const StoreDashboard: React.FC<{
                                              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#eee" />
                                              <XAxis dataKey="name" tick={{fontSize: 12}} axisLine={false} tickLine={false} />
                                              <YAxis tick={{fontSize: 12}} axisLine={false} tickLine={false} />
-                                             <Tooltip 
+                                             <Tooltip
                                                 cursor={{fill: '#f9fafb'}}
                                                 contentStyle={{borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'}}
                                              />
@@ -7677,7 +7810,7 @@ const StoreDashboard: React.FC<{
                                              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#eee" />
                                              <XAxis dataKey="name" tick={{ fontSize: 12 }} axisLine={false} tickLine={false} />
                                              <YAxis tick={{ fontSize: 12 }} axisLine={false} tickLine={false} />
-                                             <Tooltip 
+                                             <Tooltip
                                                 cursor={{ fill: '#f9fafb' }}
                                                 contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
                                              />
@@ -7688,7 +7821,7 @@ const StoreDashboard: React.FC<{
                                      </ResponsiveContainer>
                                  </div>
                              </div>
-                             
+
                              <div className="bg-white p-6 rounded-2xl shadow-sm border">
                                 <div className="mb-4 flex items-center justify-between gap-3">
                                     <h3 className="font-bold text-lg">Recent Daily Reports</h3>
@@ -7727,7 +7860,7 @@ const StoreDashboard: React.FC<{
                     )}
 
                     {view === 'report' && (
-                      <SalesReporter 
+                      <SalesReporter
   store={store}
   sales={sales}
   menus={storeMenus}
@@ -7773,7 +7906,7 @@ const StoreDashboard: React.FC<{
                             </div>
 
                             {menuSection === 'items' ? (
-                                <MenuManager 
+                                <MenuManager
                                     store={store}
                                     menus={storeMenus}
                                     onEdit={setEditingMenu}
@@ -7794,7 +7927,7 @@ const StoreDashboard: React.FC<{
                     )}
 
                     {view === 'staff' && (
-                        <EmployeeManager 
+                        <EmployeeManager
                             store={store}
                             employees={storeEmployees}
                             positions={globalConfig.positions}
@@ -8215,7 +8348,7 @@ const OnboardingScreen: React.FC<{
 </select>
 
           </div>
-          
+
         </div>
 
         {error && <div className="mt-4 text-sm text-red-600">{error}</div>}
@@ -8280,7 +8413,7 @@ VITE_HQ_BOOTSTRAP_EMAILS=your-hq-email@example.com`}</div>
       </div>
     );
   }
-  
+
   // Data State
   const [stores, setStores] = useState<Store[]>([]);
   const [sales, setSales] = useState<Sale[]>([]);
@@ -8729,12 +8862,12 @@ VITE_HQ_BOOTSTRAP_EMAILS=your-hq-email@example.com`}</div>
       document.removeEventListener('visibilitychange', onFocusOrVisible);
     };
   }, [sessionEmail, schedulePartialRefresh]);
-  
+
 
   // Handlers
 
-  
-  
+
+
   const handleLogout = async () => {
     try {
       await signOut();
@@ -9005,7 +9138,7 @@ if (!resolvedUser) {
 
   if (user.role === UserRole.HQ) {
       return (
-          <HQDashboard 
+          <HQDashboard
               user={user}
               onLogout={handleLogout}
               stores={stores}
@@ -9174,7 +9307,7 @@ if (!myStore) {
 
 
   return (
-      <StoreDashboard 
+      <StoreDashboard
           user={user}
           store={myStore}
           onLogout={handleLogout}
