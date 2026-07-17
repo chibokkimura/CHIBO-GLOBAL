@@ -7,7 +7,7 @@ import {
   LayoutDashboard, ClipboardList, Users, UtensilsCrossed, LogOut,
   AlertTriangle, Plus, Trash2, ChevronRight, FileText, Camera, Save, ArrowLeft, BarChart3, Package, MapPin, CheckCircle2, XCircle, TrendingUp, TrendingDown, Minus, DollarSign, Clock, Image as ImageIcon, Layers, UploadCloud, Settings, X, Search, Info, Grid, Briefcase, User as UserIcon, AlertCircle, Mail, ArrowRight, UserPlus, AlertOctagon, ArrowUpRight, ArrowDownRight, CalendarX
 } from 'lucide-react';
-import * as XLSX from 'xlsx';
+import * as XLSX from 'xlsx-js-style';
 import { isSupabaseConfigured, supabase } from './supabaseClient';
 import { signInWithEmailPassword, signInWithGoogle, signOut, signUpWithEmailPassword } from './auth';
 import { MOCK_EMPLOYEES, MOCK_INGREDIENTS, MOCK_MENUS, MOCK_SALES, MOCK_STORES, MOCK_USERS } from './constants';
@@ -2319,6 +2319,74 @@ const downloadWorkbook = (workbook: XLSX.WorkBook, filename: string) => {
   URL.revokeObjectURL(url);
 };
 
+type XlsxCellStyle = Record<string, any>;
+
+const EXCEL_REPORT_FONT = 'ＭＳ Ｐゴシック';
+const EXCEL_BLACK = { rgb: '000000' };
+const EXCEL_GRAY_FILL = { rgb: '595959' };
+const EXCEL_ROYALTY_FILL = { rgb: 'FCE4D6' };
+
+const excelBorderSide = (style: 'thin' | 'medium' | 'hair' = 'thin') => ({ style, color: EXCEL_BLACK });
+const excelBorder = (style: 'thin' | 'medium' | 'hair' = 'thin') => ({
+  top: excelBorderSide(style),
+  bottom: excelBorderSide(style),
+  left: excelBorderSide(style),
+  right: excelBorderSide(style),
+});
+
+const excelStyle = (overrides: XlsxCellStyle = {}): XlsxCellStyle => ({
+  font: { name: EXCEL_REPORT_FONT, sz: 11, color: EXCEL_BLACK, ...(overrides.font ?? {}) },
+  alignment: { vertical: 'center', wrapText: true, ...(overrides.alignment ?? {}) },
+  border: overrides.border,
+  fill: overrides.fill,
+  numFmt: overrides.numFmt,
+});
+
+const applyExcelStyle = (worksheet: XLSX.WorkSheet, address: string, style: XlsxCellStyle, numFmt?: string) => {
+  if (!worksheet[address]) worksheet[address] = { t: 's', v: '' } as XLSX.CellObject;
+  (worksheet[address] as any).s = style;
+  if (numFmt) {
+    (worksheet[address] as any).z = numFmt;
+    (worksheet[address] as any).s = { ...(worksheet[address] as any).s, numFmt };
+  }
+};
+
+const getUsdRateForExport = (currency: string, rates: Record<string, number>) => {
+  if (currency === 'USD') return 1;
+  return rates[currency] || FALLBACK_USD_RATES[currency] || 1;
+};
+
+const getJpyPerCurrencyForExport = (currency: string, rates: Record<string, number>) => {
+  if (currency === 'JPY') return 1;
+  const usdRate = getUsdRateForExport(currency, rates);
+  const jpyPerUsd = rates.JPY || FALLBACK_USD_RATES.JPY || 150;
+  return jpyPerUsd / usdRate;
+};
+
+const getExportLocalCurrencyCode = (store: Store) => {
+  const country = normalizeInvoiceToken(store.country ?? '');
+  if (country.includes('taiwan') || country.includes('台湾') || country.includes('대만')) return 'TWD';
+  return store.currency || 'USD';
+};
+
+const getExportLocalCurrencyLabel = (store: Store) => {
+  const code = getExportLocalCurrencyCode(store);
+  if (code === 'TWD') return 'NT$';
+  if (code === 'JPY') return '\\';
+  if (code === 'USD') return '$';
+  return code;
+};
+
+const getExportStoreName = (store: Store) => {
+  const country = normalizeInvoiceToken(store.country ?? '');
+  if (country.includes('taiwan') || country.includes('台湾') || country.includes('대만')) {
+    return store.name.includes('台中') || store.city.toLowerCase().includes('taichung')
+      ? `${store.name}`
+      : `${store.name}`;
+  }
+  return store.name;
+};
+
 const exportGlobalSalesProgressWorkbook = (
   stores: Store[],
   sales: Sale[],
@@ -2327,16 +2395,18 @@ const exportGlobalSalesProgressWorkbook = (
   fxSourceText: string,
 ) => {
   const rates = fxRates ?? FALLBACK_USD_RATES;
+  const jpyPerUsd = rates.JPY || FALLBACK_USD_RATES.JPY || 150;
   const fiscalStartYear = getFiscalStartYear();
   const fiscalEndYear = fiscalStartYear + 1;
+  const fiscalTerm = fiscalStartYear - 2005;
   const monthKeys = buildFiscalMonthKeys(fiscalStartYear);
   const monthHeaders = ['4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月', '1月', '2月', '3月'];
-  const worksheetName = `第${fiscalStartYear}年度売上推移表`;
+  const worksheetName = `第${fiscalTerm}期売上推移表（ロイヤリテー管理）`;
   const rows: any[][] = [
-    ['グローバル事業本部'],
-    [`${fiscalStartYear}年4月～${fiscalEndYear}年3月HDに計上  海外売上推移表（為替の相場により売上額は変動いたします。）`],
-    [`Generated: ${new Date().toLocaleString()} / ${formatFxSourceLabel(fxStatus, fxSourceText)}`],
-    ['国', '店舗名', '項目', ...monthHeaders, '各項目合計', '', 'Currency', 'Royalty %'],
+    ['グローバル事業本部', ...Array(15).fill('')],
+    [`${fiscalStartYear}年4月～${fiscalEndYear}年3月HDに計上  海外売上推移表（為替の相場により売上額は変動いたします。）`, ...Array(15).fill('')],
+    ['', '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
+    ['国', '店舗名', 'Royalty％', ...monthHeaders, '各項目合計'],
   ];
 
   const salesByStoreMonth = new Map<string, number>();
@@ -2351,148 +2421,227 @@ const exportGlobalSalesProgressWorkbook = (
     `${a.country} ${a.city} ${a.name}`.localeCompare(`${b.country} ${b.city} ${b.name}`),
   );
 
+  const storeBlocks: { start: number; end: number; settlement: 'JPY' | 'USD'; royaltyRow: number; usdRow?: number; jpyRow: number }[] = [];
+  const countrySpans: { label: string; start: number; end: number }[] = [];
+  let activeCountryLabel: string | null = null;
+  let activeCountryStart = 0;
+
   sortedStores.forEach((store) => {
-    const sectionStartRow = rows.length + 1;
-    const localCurrencyLabel = getLocalSalesLabelCurrency(store);
-    const localCurrencyCode = store.currency || 'USD';
-    const royaltyRate = Number(store.royaltyPercentage || 0);
+    const countryLabel = getExportCountryLabel(store);
+    const blockStartRow = rows.length + 1;
+    const settlement = getInvoicePrintProfile(store).invoiceCurrency;
+    const localCurrencyCode = getExportLocalCurrencyCode(store);
+    const localCurrencyLabel = getExportLocalCurrencyLabel(store);
+    const royaltyRate = Number(store.royaltyPercentage || 0) / 100;
+    const localRate = getUsdRateForExport(localCurrencyCode, rates);
+    const jpyPerLocal = getJpyPerCurrencyForExport(localCurrencyCode, rates);
     const localSalesValues = monthKeys.map((monthKey) => {
       const value = salesByStoreMonth.get(`${store.id}::${monthKey}`);
       return value ? Math.round(value * 100) / 100 : '';
     });
-    const customerRowNumber = sectionStartRow;
-    const localRowNumber = sectionStartRow + 1;
-    const jpyRowNumber = sectionStartRow + 2;
-    const usdRowNumber = sectionStartRow + 3;
-    const royaltyRowNumber = sectionStartRow + 4;
-    const formulasForMonths = (rowNumber: number, builder: (col: string) => string) =>
-      monthHeaders.map((_, index) => builder(XLSX.utils.encode_col(3 + index)));
+
+    if (countryLabel !== activeCountryLabel) {
+      if (activeCountryLabel && activeCountryStart > 0) {
+        countrySpans.push({ label: activeCountryLabel, start: activeCountryStart, end: rows.length });
+      }
+      activeCountryLabel = countryLabel;
+      activeCountryStart = blockStartRow;
+    }
+
+    const customerRow = blockStartRow;
+    const localRow = blockStartRow + 1;
+    const usdRow = settlement === 'USD' ? blockStartRow + 2 : undefined;
+    const jpyRow = settlement === 'USD' ? blockStartRow + 3 : blockStartRow + 2;
+    const royaltyRow = settlement === 'USD' ? blockStartRow + 4 : blockStartRow + 3;
+    const blockEndRow = royaltyRow;
+    const rowFormulaCells = (rowNumber: number, formulaBuilder: (col: string) => string) =>
+      monthHeaders.map((_, index) => makeFormula(formulaBuilder(XLSX.utils.encode_col(3 + index))));
 
     rows.push([
-      getExportCountryLabel(store),
-      store.name,
-      '客数（手入力）',
+      countryLabel,
+      getExportStoreName(store),
+      '客数',
       ...Array(12).fill(''),
-      makeFormula(`SUM(D${customerRowNumber}:O${customerRowNumber})`),
-      '',
-      localCurrencyCode,
-      royaltyRate / 100,
+      makeFormula(`SUM(D${customerRow}:O${customerRow})`),
     ]);
     rows.push([
       '',
       '',
       `売上（${localCurrencyLabel}）`,
       ...localSalesValues,
-      makeFormula(`SUM(D${localRowNumber}:O${localRowNumber})`),
-      '',
-      localCurrencyCode,
-      royaltyRate / 100,
+      makeFormula(`SUM(D${localRow}:O${localRow})`),
     ]);
+
+    if (settlement === 'USD' && usdRow) {
+      rows.push([
+        '',
+        '',
+        '売上（$）',
+        ...rowFormulaCells(usdRow, (col) =>
+          localCurrencyCode === 'USD'
+            ? `IF(${col}${localRow}="","",${col}${localRow})`
+            : `IF(${col}${localRow}="","",${col}${localRow}/${localRate})`,
+        ),
+        makeFormula(`SUM(D${usdRow}:O${usdRow})`),
+      ]);
+    }
+
     rows.push([
       '',
       '',
-      '売上（JPY）',
-      ...formulasForMonths(jpyRowNumber, (col) => `IF(${col}${localRowNumber}="","",${col}${localRowNumber}*VLOOKUP($R${jpyRowNumber},'FX Rates'!$A:$C,3,FALSE))`).map(makeFormula),
-      makeFormula(`SUM(D${jpyRowNumber}:O${jpyRowNumber})`),
-      '',
-      localCurrencyCode,
-      royaltyRate / 100,
+      '売上（\\）',
+      ...rowFormulaCells(jpyRow, (col) =>
+        localCurrencyCode === 'JPY'
+          ? `IF(${col}${localRow}="","",${col}${localRow})`
+          : `IF(${col}${localRow}="","",${col}${localRow}*${jpyPerLocal})`,
+      ),
+      makeFormula(`SUM(D${jpyRow}:O${jpyRow})`),
     ]);
+
+    const royaltyBaseRow = settlement === 'USD' && usdRow ? usdRow : jpyRow;
     rows.push([
       '',
       '',
-      '売上（USD）',
-      ...formulasForMonths(usdRowNumber, (col) => `IF(${col}${localRowNumber}="","",${col}${localRowNumber}/VLOOKUP($R${usdRowNumber},'FX Rates'!$A:$B,2,FALSE))`).map(makeFormula),
-      makeFormula(`SUM(D${usdRowNumber}:O${usdRowNumber})`),
-      '',
-      localCurrencyCode,
-      royaltyRate / 100,
+      settlement === 'USD'
+        ? `Royalty ${Math.round(royaltyRate * 10000) / 100}%`
+        : `HD⇒HD Royalty (${Math.round(royaltyRate * 10000) / 100}%)`,
+      ...rowFormulaCells(royaltyRow, (col) => `IF(${col}${royaltyBaseRow}="","",${col}${royaltyBaseRow}*${royaltyRate})`),
+      makeFormula(`SUM(D${royaltyRow}:O${royaltyRow})`),
     ]);
-    rows.push([
-      '',
-      '',
-      `Royalty ${royaltyRate}%（JPY）`,
-      ...formulasForMonths(royaltyRowNumber, (col) => `IF(${col}${jpyRowNumber}="","",${col}${jpyRowNumber}*$S${royaltyRowNumber})`).map(makeFormula),
-      makeFormula(`SUM(D${royaltyRowNumber}:O${royaltyRowNumber})`),
-      '',
-      localCurrencyCode,
-      royaltyRate / 100,
-    ]);
+
+    storeBlocks.push({ start: blockStartRow, end: blockEndRow, settlement, royaltyRow, usdRow, jpyRow });
   });
 
+  if (activeCountryLabel && activeCountryStart > 0) {
+    countrySpans.push({ label: activeCountryLabel, start: activeCountryStart, end: rows.length });
+  }
+
   const summaryStartRow = rows.length + 1;
-  const jpyRows = rows
-    .map((row, index) => ({ row, index: index + 1 }))
-    .filter(({ row }) => row[2] === '売上（JPY）')
-    .map(({ index }) => index);
-  const usdRows = rows
-    .map((row, index) => ({ row, index: index + 1 }))
-    .filter(({ row }) => row[2] === '売上（USD）')
-    .map(({ index }) => index);
-  const royaltyRows = rows
-    .map((row, index) => ({ row, index: index + 1 }))
-    .filter(({ row }) => String(row[2] ?? '').startsWith('Royalty'))
-    .map(({ index }) => index);
+  const usdRoyaltyRows = storeBlocks.filter((block) => block.settlement === 'USD').map((block) => block.royaltyRow);
+  const jpyRoyaltyRows = storeBlocks.filter((block) => block.settlement === 'JPY').map((block) => block.royaltyRow);
   const sumRefs = (rowNumbers: number[], col: string) =>
     rowNumbers.length > 0 ? rowNumbers.map((row) => `${col}${row}`).join('+') : '0';
 
-  rows.push(['']);
   rows.push([
-    '合計',
     '',
-    '売上合計（JPY）',
-    ...monthHeaders.map((_, index) => makeFormula(sumRefs(jpyRows, XLSX.utils.encode_col(3 + index)))),
+    '',
+    'USD',
+    ...monthHeaders.map((_, index) => makeFormula(sumRefs(usdRoyaltyRows, XLSX.utils.encode_col(3 + index)))),
+    makeFormula(`SUM(D${summaryStartRow}:O${summaryStartRow})`),
+  ]);
+  rows.push([
+    '',
+    '',
+    'USD→JPY換算',
+    ...monthHeaders.map((_, index) => {
+      const col = XLSX.utils.encode_col(3 + index);
+      return makeFormula(`${col}${summaryStartRow}*${jpyPerUsd}`);
+    }),
     makeFormula(`SUM(D${summaryStartRow + 1}:O${summaryStartRow + 1})`),
   ]);
   rows.push([
     '',
     '',
-    '売上合計（USD）',
-    ...monthHeaders.map((_, index) => makeFormula(sumRefs(usdRows, XLSX.utils.encode_col(3 + index)))),
+    'JPY',
+    ...monthHeaders.map((_, index) => makeFormula(sumRefs(jpyRoyaltyRows, XLSX.utils.encode_col(3 + index)))),
     makeFormula(`SUM(D${summaryStartRow + 2}:O${summaryStartRow + 2})`),
   ]);
   rows.push([
+    '合計(日本円)',
     '',
     '',
-    'Royalty合計（JPY）',
-    ...monthHeaders.map((_, index) => makeFormula(sumRefs(royaltyRows, XLSX.utils.encode_col(3 + index)))),
+    ...monthHeaders.map((_, index) => {
+      const col = XLSX.utils.encode_col(3 + index);
+      return makeFormula(`${col}${summaryStartRow + 1}+${col}${summaryStartRow + 2}`);
+    }),
     makeFormula(`SUM(D${summaryStartRow + 3}:O${summaryStartRow + 3})`),
   ]);
 
   const worksheet = XLSX.utils.aoa_to_sheet(rows);
+  const sheetRange = XLSX.utils.decode_range(worksheet['!ref'] || 'A1:P1');
   worksheet['!merges'] = [
     { s: { r: 0, c: 0 }, e: { r: 0, c: 15 } },
     { s: { r: 1, c: 0 }, e: { r: 1, c: 15 } },
-    { s: { r: 2, c: 0 }, e: { r: 2, c: 15 } },
+    { s: { r: 2, c: 5 }, e: { r: 2, c: 14 } },
+    ...countrySpans.map((span) => ({ s: { r: span.start - 1, c: 0 }, e: { r: span.end - 1, c: 0 } })),
+    ...storeBlocks.map((block) => ({ s: { r: block.start - 1, c: 1 }, e: { r: block.end - 1, c: 1 } })),
+    { s: { r: summaryStartRow + 2, c: 0 }, e: { r: summaryStartRow + 2, c: 1 } },
   ];
   worksheet['!cols'] = [
-    { wch: 18 },
-    { wch: 38 },
-    { wch: 28 },
-    ...Array(13).fill({ wch: 12 }),
-    { wch: 3 },
-    { wch: 10, hidden: true },
-    { wch: 10, hidden: true },
+    { wch: 15.9 },
+    { wch: 18.2 },
+    { wch: 19.1 },
+    ...Array(12).fill(null).map(() => ({ wch: 12.5 })),
+    { wch: 19.5 },
   ];
+  worksheet['!rows'] = rows.map((_, index) => {
+    if (index === 0) return { hpt: 21 };
+    if (index === 1 || index === 2) return { hpt: 22 };
+    if (index === 3) return { hpt: 23.5 };
+    return { hpt: 30 };
+  });
+  (worksheet as any)['!freeze'] = { xSplit: 3, ySplit: 33, topLeftCell: 'D34', activePane: 'bottomRight', state: 'frozen' };
 
-  const currencies = Array.from(new Set(['USD', 'JPY', ...stores.map((store) => store.currency).filter(Boolean)]));
-  const jpyRateRowNumber = currencies.findIndex((currency) => currency === 'JPY') + 2;
-  const rateRows: any[][] = [
-    ['Currency', 'Currency per USD', 'JPY per currency', 'Editable notes'],
-    ...currencies.map((currency, index) => {
-      const rowNumber = index + 2;
-      const rate = rates[currency] || FALLBACK_USD_RATES[currency] || 1;
-      const jpyPerCurrencyFormula = currency === 'JPY' ? '1' : `$B$${jpyRateRowNumber}/B${rowNumber}`;
-      return [currency, rate, makeFormula(jpyPerCurrencyFormula), currency === 'JPY' ? 'JPY base' : 'Edit B to update formulas'];
-    }),
-  ];
-  const ratesSheet = XLSX.utils.aoa_to_sheet(rateRows);
-  ratesSheet['!cols'] = [{ wch: 14 }, { wch: 18 }, { wch: 18 }, { wch: 22 }];
+  const titleStyle = excelStyle({ font: { bold: true, sz: 14 }, alignment: { vertical: 'center' } });
+  const headerStyle = excelStyle({ font: { bold: true, sz: 12 }, alignment: { horizontal: 'center', vertical: 'center', wrapText: true }, border: excelBorder('medium') });
+  const countryStyle = excelStyle({ font: { bold: true, sz: 12 }, alignment: { horizontal: 'center', vertical: 'center', wrapText: true }, border: excelBorder('medium') });
+  const storeStyle = excelStyle({ font: { bold: true, sz: 11 }, alignment: { horizontal: 'center', vertical: 'center', wrapText: true }, border: excelBorder('medium') });
+  const labelStyle = excelStyle({ alignment: { horizontal: 'left', vertical: 'center', wrapText: true }, border: excelBorder('thin') });
+  const valueStyle = excelStyle({ alignment: { horizontal: 'right', vertical: 'center', wrapText: true }, border: excelBorder('thin'), numFmt: '#,##0_);[Red](#,##0)' });
+  const dollarStyle = excelStyle({ alignment: { horizontal: 'right', vertical: 'center', wrapText: true }, border: excelBorder('thin'), numFmt: '[$$-409]#,##0.00;[Red]([$$-409]#,##0.00)' });
+  const yenStyle = excelStyle({ alignment: { horizontal: 'right', vertical: 'center', wrapText: true }, border: excelBorder('thin'), numFmt: '[$¥-411]#,##0;[Red]([$¥-411]#,##0)' });
+  const royaltyLabelStyle = excelStyle({ fill: { patternType: 'solid', fgColor: EXCEL_ROYALTY_FILL }, alignment: { horizontal: 'left', vertical: 'center', wrapText: true }, border: excelBorder('medium') });
+  const royaltyValueUsdStyle = excelStyle({ fill: { patternType: 'solid', fgColor: EXCEL_ROYALTY_FILL }, alignment: { horizontal: 'right', vertical: 'center', wrapText: true }, border: excelBorder('medium'), numFmt: '[$$-409]#,##0.00;[Red]([$$-409]#,##0.00)' });
+  const royaltyValueJpyStyle = excelStyle({ fill: { patternType: 'solid', fgColor: EXCEL_ROYALTY_FILL }, alignment: { horizontal: 'right', vertical: 'center', wrapText: true }, border: excelBorder('medium'), numFmt: '[$¥-411]#,##0;[Red]([$¥-411]#,##0)' });
+  const summaryTitleStyle = excelStyle({ font: { bold: true, sz: 20 }, alignment: { horizontal: 'center', vertical: 'center' }, border: excelBorder('medium') });
+
+  ['A1', 'A2'].forEach((addr) => applyExcelStyle(worksheet, addr, titleStyle));
+  for (let c = 0; c <= 15; c += 1) {
+    applyExcelStyle(worksheet, XLSX.utils.encode_cell({ r: 3, c }), headerStyle);
+  }
+
+  storeBlocks.forEach((block) => {
+    applyExcelStyle(worksheet, `A${block.start}`, countryStyle);
+    applyExcelStyle(worksheet, `B${block.start}`, storeStyle);
+    for (let r = block.start; r <= block.end; r += 1) {
+      const label = String(rows[r - 1][2] ?? '');
+      const isRoyalty = r === block.royaltyRow;
+      applyExcelStyle(worksheet, `C${r}`, isRoyalty ? royaltyLabelStyle : labelStyle);
+      for (let c = 3; c <= 15; c += 1) {
+        const addr = XLSX.utils.encode_cell({ r: r - 1, c });
+        const style = isRoyalty
+          ? block.settlement === 'USD'
+            ? royaltyValueUsdStyle
+            : royaltyValueJpyStyle
+          : label.includes('$')
+            ? dollarStyle
+            : label.includes('\\')
+              ? yenStyle
+              : valueStyle;
+        applyExcelStyle(worksheet, addr, style, style.numFmt);
+      }
+    }
+  });
+
+  for (let r = summaryStartRow; r <= summaryStartRow + 3; r += 1) {
+    for (let c = 0; c <= 15; c += 1) {
+      const addr = XLSX.utils.encode_cell({ r: r - 1, c });
+      const isFinal = r === summaryStartRow + 3;
+      const style = c < 2 && isFinal
+        ? summaryTitleStyle
+        : c >= 3
+          ? (r === summaryStartRow ? dollarStyle : yenStyle)
+          : labelStyle;
+      applyExcelStyle(worksheet, addr, style, style.numFmt);
+    }
+  }
+
+  // Keep generated range fixed to the HD management-table footprint: A:P.
+  worksheet['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: sheetRange.e.r, c: 15 } });
 
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, worksheetName.slice(0, 31));
-  XLSX.utils.book_append_sheet(workbook, ratesSheet, 'FX Rates');
-  const filename = `HD海外売上推移表_${fiscalStartYear}04-${fiscalEndYear}03.xlsx`;
+  const filename = `HD 海外売上推移表(${fiscalStartYear}.4-${fiscalEndYear}.3).xlsx`;
   downloadWorkbook(workbook, filename);
 };
 
