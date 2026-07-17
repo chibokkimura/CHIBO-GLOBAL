@@ -2960,6 +2960,28 @@ const resolveWorkbookSheetPaths = async (zip: any) => {
   return { workbookDocument, sheets };
 };
 
+const removeExcelCalcChain = async (zip: any) => {
+  zip.remove('xl/calcChain.xml');
+
+  const workbookRelsFile = zip.file('xl/_rels/workbook.xml.rels');
+  if (workbookRelsFile) {
+    const relsDocument = parseXmlDocument(await workbookRelsFile.async('text'));
+    getXmlElements(relsDocument, 'Relationship')
+      .filter((relationship) => relationship.getAttribute('Type')?.endsWith('/calcChain'))
+      .forEach((relationship) => relationship.parentNode?.removeChild(relationship));
+    zip.file('xl/_rels/workbook.xml.rels', serializeXmlDocument(relsDocument));
+  }
+
+  const contentTypesFile = zip.file('[Content_Types].xml');
+  if (contentTypesFile) {
+    const contentTypesDocument = parseXmlDocument(await contentTypesFile.async('text'));
+    getXmlElements(contentTypesDocument, 'Override')
+      .filter((override) => override.getAttribute('PartName') === '/xl/calcChain.xml')
+      .forEach((override) => override.parentNode?.removeChild(override));
+    zip.file('[Content_Types].xml', serializeXmlDocument(contentTypesDocument));
+  }
+};
+
 const exportHdTemplateWorkbookPreservingDesign = async (params: {
   rows: any[][];
   storeBlocks: { start: number; end: number; settlement: 'JPY' | 'USD'; royaltyRow: number; usdRow?: number; jpyRow: number }[];
@@ -3090,6 +3112,7 @@ const exportHdTemplateWorkbookPreservingDesign = async (params: {
   }
 
   zip.file('xl/workbook.xml', serializeXmlDocument(workbookDocument));
+  await removeExcelCalcChain(zip);
   const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
   downloadBlob(blob, params.filename);
 };
