@@ -49,7 +49,6 @@ GitHub path:
 
 - `VITE_SUPABASE_URL`
 - `VITE_SUPABASE_ANON_KEY`
-- `VITE_HQ_BOOTSTRAP_EMAILS` (optional, comma-separated HQ emails for first-login HQ bootstrap)
 
 2. Supabase Dashboard → Auth → URL Configuration
 
@@ -92,14 +91,12 @@ Supabase Dashboard → Authentication → URL Configuration
 
 - `VITE_SUPABASE_URL=...`
 - `VITE_SUPABASE_ANON_KEY=...`
-- `VITE_HQ_BOOTSTRAP_EMAILS=hq1@company.com,hq2@company.com` (optional)
 
 #### Vercel
 Vercel → Project → Settings → Environment Variables
 
 - `VITE_SUPABASE_URL`
 - `VITE_SUPABASE_ANON_KEY`
-- `VITE_HQ_BOOTSTRAP_EMAILS` (optional)
 
 추가 후 Redeploy.
 
@@ -107,13 +104,17 @@ Vercel → Project → Settings → Environment Variables
 - `app_users`에 내 계정이 없으면 앱이 자동으로 "최초 설정"을 띄웁니다.
 - 점포를 1개 만들고, 내 계정을 OWNER로 등록합니다.
 
-### 5) HQ 계정 만드는 방법(권장: 수동)
-HQ로 쓰실 Google 계정으로 **한 번 로그인**한 뒤, Supabase SQL Editor에서 아래처럼 넣습니다.
+### 5) HQ 계정
+HQ 관리자 계정은 보안상 아래 1개만 허용합니다.
+
+- `chibo.global.mgsystem@gmail.com`
+
+이 Google 계정으로 **한 번 로그인**한 뒤, Supabase SQL Editor에서 아래처럼 넣습니다.
 (아래의 `user_id`는 Supabase Auth → Users에서 확인)
 
 ```sql
 insert into public.app_users (user_id, email, name, role, store_id)
-values ('AUTH_USER_UUID', 'hq@chibo.com', 'HQ Admin', 'HQ', null)
+values ('AUTH_USER_UUID', 'chibo.global.mgsystem@gmail.com', 'HQ Admin', 'HQ', null)
 on conflict (user_id) do update
 set role='HQ', store_id=null;
 ```

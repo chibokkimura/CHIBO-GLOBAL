@@ -115,6 +115,46 @@ create table if not exists public.sale_set_items (
 -- Helper: role checks
 -- =========================
 
+create or replace function public.current_auth_email()
+returns text
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select lower(coalesce(auth.jwt() ->> 'email', ''));
+$$;
+
+create or replace function public.current_auth_uid_text()
+returns text
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select coalesce(auth.uid()::text, '');
+$$;
+
+create or replace function public.hq_admin_email()
+returns text
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select 'chibo.global.mgsystem@gmail.com'::text;
+$$;
+
+create or replace function public.is_authorized_hq_email(p_email text)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select lower(trim(coalesce(p_email, ''))) = public.hq_admin_email();
+$$;
+
 create or replace function public.is_hq()
 returns boolean
 language sql
@@ -122,10 +162,17 @@ stable
 security definer
 set search_path = public
 as $$
-  select exists (
-    select 1 from public.app_users u
-    where u.user_id = auth.uid() and u.role = 'HQ'
-  );
+  select public.is_authorized_hq_email(public.current_auth_email())
+    and exists (
+      select 1
+      from public.app_users u
+      where (
+          coalesce(u.user_id::text, '') = public.current_auth_uid_text()
+          or lower(trim(coalesce(u.email, ''))) = public.current_auth_email()
+        )
+        and u.role = 'HQ'
+        and public.is_authorized_hq_email(u.email)
+    );
 $$;
 
 create or replace function public.current_store_id()
@@ -307,19 +354,54 @@ using (user_id = auth.uid() or public.is_hq());
 drop policy if exists "app_users_insert_self" on public.app_users;
 create policy "app_users_insert_self"
 on public.app_users for insert
-with check (user_id = auth.uid());
+with check (
+  (
+    coalesce(user_id::text, '') = public.current_auth_uid_text()
+    or lower(trim(coalesce(email, ''))) = public.current_auth_email()
+  )
+  and (
+    role = 'OWNER'
+    or (
+      role = 'HQ'
+      and public.is_authorized_hq_email(email)
+      and public.is_authorized_hq_email(public.current_auth_email())
+    )
+  )
+);
 
 drop policy if exists "app_users_update_self" on public.app_users;
 create policy "app_users_update_self"
 on public.app_users for update
-using (user_id = auth.uid())
-with check (user_id = auth.uid());
+using (
+  coalesce(user_id::text, '') = public.current_auth_uid_text()
+  or lower(trim(coalesce(email, ''))) = public.current_auth_email()
+)
+with check (
+  (
+    coalesce(user_id::text, '') = public.current_auth_uid_text()
+    or lower(trim(coalesce(email, ''))) = public.current_auth_email()
+  )
+  and (
+    role = 'OWNER'
+    or (
+      role = 'HQ'
+      and public.is_authorized_hq_email(email)
+      and public.is_authorized_hq_email(public.current_auth_email())
+    )
+  )
+);
 
 drop policy if exists "app_users_update_hq" on public.app_users;
 create policy "app_users_update_hq"
 on public.app_users for update
 using (public.is_hq())
-with check (public.is_hq());
+with check (
+  role = 'OWNER'
+  or (
+    role = 'HQ'
+    and public.is_authorized_hq_email(email)
+  )
+);
 
 -- global_config: everyone can read; only HQ can write
 drop policy if exists "global_config_select_all" on public.global_config;
