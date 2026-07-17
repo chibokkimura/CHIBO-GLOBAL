@@ -100,16 +100,12 @@ const STAFF_IMAGE_RESIZE = { maxWidth: 640, maxHeight: 640, quality: 0.82 };
 const IMAGE_SIGNED_URL_CACHE_MS = 6 * 60 * 60 * 1000;
 const LEGACY_MEDIA_MIGRATION_LIMIT = 80;
 const signedImageUrlCache = new Map<string, { url: string; expiresAt: number }>();
-const HQ_BOOTSTRAP_EMAILS = (() => {
-  const envRaw = String(import.meta.env.VITE_HQ_BOOTSTRAP_EMAILS ?? '').trim();
-  const envList = envRaw
-    .split(',')
-    .map((v) => v.trim().toLowerCase())
-    .filter(Boolean);
-  const fallback = ['chibo.k.kimura@gmail.com', 'chibo.global.mgsystem@gmail.com'];
-  const source = envList.length > 0 ? envList : fallback;
-  return Array.from(new Set(source));
-})();
+const HQ_ADMIN_EMAIL = 'chibo.global.mgsystem@gmail.com';
+const HQ_BOOTSTRAP_EMAILS = [HQ_ADMIN_EMAIL];
+
+function isHqAdminEmail(email: string | null | undefined): boolean {
+  return (email ?? '').trim().toLowerCase() === HQ_ADMIN_EMAIL;
+}
 
 function createLocalEntityId(prefix: string): string {
   const rand = Math.random().toString(36).slice(2, 10);
@@ -334,6 +330,10 @@ async function upsertMyOwnerProfile(params: { name: string; email: string; store
 }
 
 async function upsertMyHqProfile(params: { name: string; email: string }) {
+  if (!isHqAdminEmail(params.email)) {
+    throw new Error('This email is not authorized for HQ access.');
+  }
+
   const { data: authData } = await supabase.auth.getUser();
   const uid = authData.user?.id;
   if (!uid) throw new Error('No auth user');
@@ -8553,8 +8553,7 @@ const App = () => {
             The app loaded, but local login/data cannot run until `.env.local` has your Supabase URL and anon key.
           </p>
           <div className="mt-4 rounded-xl bg-gray-50 border border-gray-200 p-3 text-xs font-mono text-gray-700 whitespace-pre-wrap">{`VITE_SUPABASE_URL=...
-VITE_SUPABASE_ANON_KEY=...
-VITE_HQ_BOOTSTRAP_EMAILS=your-hq-email@example.com`}</div>
+VITE_SUPABASE_ANON_KEY=...`}</div>
           <p className="mt-4 text-xs text-gray-500">
             Invoice static preview is still available at `/invoice-china-preview.html`.
           </p>
@@ -9038,8 +9037,7 @@ VITE_HQ_BOOTSTRAP_EMAILS=your-hq-email@example.com`}</div>
     }
   };
 
- // Map Supabase session email -> app user (DB + HQ override)
-const HQ_EMAILS = HQ_BOOTSTRAP_EMAILS;
+ // Map Supabase session email -> app user (DB + single HQ override)
 
 const [resolvedUser, setResolvedUser] = useState<User | null>(null);
 const [authLoading, setAuthLoading] = useState<boolean>(true);
@@ -9072,7 +9070,7 @@ const loadResolvedUser = async () => {
   const authTimeoutMs = 12000;
 
   // 1) If HQ email, auto-assign HQ
-  if (HQ_EMAILS.includes(email)) {
+  if (isHqAdminEmail(email)) {
     try {
       setAuthLoading(true);
       setAuthError(null);
@@ -9112,7 +9110,7 @@ const loadResolvedUser = async () => {
       setResolvedUser({
         email: row.email,
         name: row.name || row.email,
-        role: row.role === 'HQ' ? UserRole.HQ : UserRole.OWNER,
+        role: row.role === 'HQ' && isHqAdminEmail(row.email) ? UserRole.HQ : UserRole.OWNER,
         storeId: row.store_id ?? undefined,
       });
     } else {
