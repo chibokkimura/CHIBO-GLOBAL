@@ -2319,6 +2319,17 @@ const downloadWorkbook = (workbook: XLSX.WorkBook, filename: string) => {
   URL.revokeObjectURL(url);
 };
 
+const downloadBlob = (blob: Blob, filename: string) => {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+};
+
 type XlsxCellStyle = Record<string, any>;
 
 const EXCEL_REPORT_FONT = 'ＭＳ Ｐゴシック';
@@ -2642,6 +2653,447 @@ const populateHdTemplateCompanionSheets = (
   }
 };
 
+const calculateHdRoyaltyListRows = (
+  stores: Store[],
+  sales: Sale[],
+  rates: Record<string, number>,
+  fiscalStartYear: number,
+) => {
+  const salesByStoreMonth = new Map<string, number>();
+  dedupeSalesByStoreDate(sales).forEach((sale) => {
+    const monthKey = extractMonthKey(sale.date);
+    if (!monthKey) return;
+    const key = `${sale.storeId}::${monthKey}`;
+    salesByStoreMonth.set(key, (salesByStoreMonth.get(key) ?? 0) + Number(sale.totalAmount || 0));
+  });
+
+  const sortedStores = [...stores].sort((a, b) =>
+    `${a.country} ${a.city} ${a.name}`.localeCompare(`${b.country} ${b.city} ${b.name}`),
+  );
+  const fiscalMonthKeys = buildFiscalMonthKeys(fiscalStartYear);
+
+  const generatedRows: {
+    invoiceDate: string;
+    storeName: string;
+    country: string;
+    royaltyAmount: number;
+  }[] = [];
+
+  fiscalMonthKeys.forEach((monthKey) => {
+    sortedStores.forEach((store) => {
+      const salesAmount = salesByStoreMonth.get(`${store.id}::${monthKey}`) ?? 0;
+      if (!salesAmount) return;
+      const royaltyRate = Number(store.royaltyPercentage || 0) / 100;
+      if (!royaltyRate) return;
+
+      const settlement = getInvoicePrintProfile(store).invoiceCurrency;
+      const localCurrencyCode = getExportLocalCurrencyCode(store);
+      const localRate = getUsdRateForExport(localCurrencyCode, rates);
+      const jpyPerLocal = getJpyPerCurrencyForExport(localCurrencyCode, rates);
+      const settlementSales = settlement === 'USD'
+        ? (localCurrencyCode === 'USD' ? salesAmount : salesAmount / localRate)
+        : (localCurrencyCode === 'JPY' ? salesAmount : salesAmount * jpyPerLocal);
+
+      generatedRows.push({
+        invoiceDate: formatExportInvoiceDate(monthKey),
+        storeName: getExportStoreName(store),
+        country: store.country,
+        royaltyAmount: Math.round(settlementSales * royaltyRate * 100) / 100,
+      });
+    });
+  });
+
+  return generatedRows;
+};
+
+const getXmlElements = (root: ParentNode, localName: string): Element[] =>
+  Array.from(root.querySelectorAll('*')).filter((element) => element.localName === localName);
+
+const getFirstXmlElement = (root: ParentNode, localName: string): Element | undefined =>
+  getXmlElements(root, localName)[0];
+
+const parseXmlDocument = (xml: string) => new DOMParser().parseFromString(xml, 'application/xml');
+
+const serializeXmlDocument = (document: XMLDocument) => {
+  const body = new XMLSerializer().serializeToString(document);
+  return body.startsWith('<?xml') ? body : `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n${body}`;
+};
+
+const columnNameToNumber = (columnName: string) =>
+  columnName.split('').reduce((total, char) => total * 26 + char.charCodeAt(0) - 64, 0);
+
+const numberToColumnName = (number: number) => {
+  let value = number;
+  let result = '';
+  while (value > 0) {
+    const remainder = (value - 1) % 26;
+    result = String.fromCharCode(65 + remainder) + result;
+    value = Math.floor((value - 1) / 26);
+  }
+  return result;
+};
+
+const parseCellAddress = (address: string) => {
+  const match = /^([A-Z]+)(\d+)$/i.exec(address);
+  if (!match) throw new Error(`Invalid Excel cell address: ${address}`);
+  return { col: columnNameToNumber(match[1].toUpperCase()), row: Number(match[2]) };
+};
+
+const getCellColumnNumber = (cell: Element) => {
+  const address = cell.getAttribute('r');
+  if (!address) return 0;
+  return parseCellAddress(address).col;
+};
+
+const getSheetDataElement = (sheetDocument: XMLDocument) => {
+  const sheetData = getFirstXmlElement(sheetDocument, 'sheetData');
+  if (!sheetData) throw new Error('Invalid worksheet XML: sheetData not found');
+  return sheetData;
+};
+
+const getXmlRow = (sheetDocument: XMLDocument, rowNumber: number) =>
+  getXmlElements(getSheetDataElement(sheetDocument), 'row').find((row) => Number(row.getAttribute('r')) === rowNumber);
+
+const getXmlCell = (row: Element | undefined, colNumber: number) =>
+  row ? getXmlElements(row, 'c').find((cell) => getCellColumnNumber(cell) === colNumber) : undefined;
+
+const clearXmlCell = (cell: Element) => {
+  Array.from(cell.childNodes).forEach((child) => cell.removeChild(child));
+  cell.removeAttribute('t');
+};
+
+const copyXmlAttributes = (target: Element, source: Element, keepCellRef: string) => {
+  Array.from(target.attributes).forEach((attribute) => target.removeAttribute(attribute.name));
+  Array.from(source.attributes).forEach((attribute) => {
+    if (attribute.name !== 'r') target.setAttribute(attribute.name, attribute.value);
+  });
+  target.setAttribute('r', keepCellRef);
+};
+
+const cloneRowForXmlSheet = (sheetDocument: XMLDocument, rowNumber: number, sourceRowNumber?: number) => {
+  const sheetData = getSheetDataElement(sheetDocument);
+  const namespace = sheetDocument.documentElement.namespaceURI ?? undefined;
+  const sourceRow = sourceRowNumber ? getXmlRow(sheetDocument, sourceRowNumber) : undefined;
+  const row = sourceRow
+    ? (sourceRow.cloneNode(true) as Element)
+    : sheetDocument.createElementNS(namespace, 'row');
+
+  row.setAttribute('r', String(rowNumber));
+  getXmlElements(row, 'c').forEach((cell) => {
+    const sourceAddress = cell.getAttribute('r') || 'A1';
+    const sourceCol = /^[A-Z]+/i.exec(sourceAddress)?.[0]?.toUpperCase() ?? 'A';
+    cell.setAttribute('r', `${sourceCol}${rowNumber}`);
+    clearXmlCell(cell);
+  });
+
+  const rows = getXmlElements(sheetData, 'row');
+  const nextRow = rows.find((item) => Number(item.getAttribute('r')) > rowNumber);
+  if (nextRow) sheetData.insertBefore(row, nextRow);
+  else sheetData.appendChild(row);
+  return row;
+};
+
+const ensureXmlRow = (sheetDocument: XMLDocument, rowNumber: number, sourceRowNumber?: number) =>
+  getXmlRow(sheetDocument, rowNumber) ?? cloneRowForXmlSheet(sheetDocument, rowNumber, sourceRowNumber);
+
+const ensureXmlCell = (sheetDocument: XMLDocument, row: Element, colNumber: number, sourceRowNumber?: number) => {
+  const existing = getXmlCell(row, colNumber);
+  if (existing) return existing;
+
+  const namespace = sheetDocument.documentElement.namespaceURI ?? undefined;
+  const sourceCell = getXmlCell(sourceRowNumber ? getXmlRow(sheetDocument, sourceRowNumber) : undefined, colNumber);
+  const cell = sourceCell
+    ? (sourceCell.cloneNode(true) as Element)
+    : sheetDocument.createElementNS(namespace, 'c');
+  const address = `${numberToColumnName(colNumber)}${row.getAttribute('r') || '1'}`;
+  if (sourceCell) copyXmlAttributes(cell, sourceCell, address);
+  else cell.setAttribute('r', address);
+  clearXmlCell(cell);
+
+  const cells = getXmlElements(row, 'c');
+  const nextCell = cells.find((item) => getCellColumnNumber(item) > colNumber);
+  if (nextCell) row.insertBefore(cell, nextCell);
+  else row.appendChild(cell);
+  return cell;
+};
+
+const applyXmlRowTemplate = (sheetDocument: XMLDocument, rowNumber: number, sourceRowNumber: number, startCol: number, endCol: number) => {
+  const sourceRow = getXmlRow(sheetDocument, sourceRowNumber);
+  const sourceRowAttributes = sourceRow
+    ? Array.from(sourceRow.attributes)
+        .filter((attribute) => attribute.name !== 'r')
+        .map((attribute) => ({ name: attribute.name, value: attribute.value }))
+    : [];
+  const sourceCellAttributes = new Map<number, { name: string; value: string }[]>();
+  if (sourceRow) {
+    getXmlElements(sourceRow, 'c').forEach((cell) => {
+      const col = getCellColumnNumber(cell);
+      sourceCellAttributes.set(
+        col,
+        Array.from(cell.attributes)
+          .filter((attribute) => attribute.name !== 'r')
+          .map((attribute) => ({ name: attribute.name, value: attribute.value })),
+      );
+    });
+  }
+  const targetRow = ensureXmlRow(sheetDocument, rowNumber, sourceRowNumber);
+  if (sourceRow) {
+    Array.from(targetRow.attributes).forEach((attribute) => targetRow.removeAttribute(attribute.name));
+    sourceRowAttributes.forEach((attribute) => targetRow.setAttribute(attribute.name, attribute.value));
+    targetRow.setAttribute('r', String(rowNumber));
+  }
+
+  for (let col = startCol; col <= endCol; col += 1) {
+    const sourceAttributes = sourceCellAttributes.get(col);
+    const existingTargetCell = getXmlCell(targetRow, col);
+    if (!sourceAttributes && !existingTargetCell) continue;
+    const targetCell = existingTargetCell ?? ensureXmlCell(sheetDocument, targetRow, col);
+    Array.from(targetCell.attributes).forEach((attribute) => targetCell.removeAttribute(attribute.name));
+    sourceAttributes?.forEach((attribute) => targetCell.setAttribute(attribute.name, attribute.value));
+    targetCell.setAttribute('r', `${numberToColumnName(col)}${rowNumber}`);
+    clearXmlCell(targetCell);
+  }
+};
+
+const setXmlCellValue = (sheetDocument: XMLDocument, rowNumber: number, colNumber: number, value: any, sourceRowNumber?: number) => {
+  if (value === '' || value === null || typeof value === 'undefined') {
+    const existingCell = getXmlCell(getXmlRow(sheetDocument, rowNumber), colNumber);
+    if (existingCell) clearXmlCell(existingCell);
+    return;
+  }
+
+  const namespace = sheetDocument.documentElement.namespaceURI ?? undefined;
+  const row = ensureXmlRow(sheetDocument, rowNumber, sourceRowNumber);
+  const cell = ensureXmlCell(sheetDocument, row, colNumber, sourceRowNumber);
+  clearXmlCell(cell);
+
+  if (value && typeof value === 'object' && typeof value.f === 'string') {
+    const formula = sheetDocument.createElementNS(namespace, 'f');
+    formula.textContent = value.f;
+    cell.appendChild(formula);
+    return;
+  }
+
+  if (typeof value === 'number') {
+    cell.removeAttribute('t');
+    const numberValue = sheetDocument.createElementNS(namespace, 'v');
+    numberValue.textContent = Number.isFinite(value) ? String(value) : '0';
+    cell.appendChild(numberValue);
+    return;
+  }
+
+  cell.setAttribute('t', 'inlineStr');
+  const inlineString = sheetDocument.createElementNS(namespace, 'is');
+  const text = sheetDocument.createElementNS(namespace, 't');
+  text.textContent = String(value);
+  if (/^\s|\s$|\s{2,}/.test(String(value))) text.setAttribute('xml:space', 'preserve');
+  inlineString.appendChild(text);
+  cell.appendChild(inlineString);
+};
+
+const clearXmlRange = (sheetDocument: XMLDocument, range: string) => {
+  const [start, end] = range.split(':');
+  const startCell = parseCellAddress(start);
+  const endCell = parseCellAddress(end);
+  for (let row = startCell.row; row <= endCell.row; row += 1) {
+    const xmlRow = getXmlRow(sheetDocument, row);
+    if (!xmlRow) continue;
+    for (let col = startCell.col; col <= endCell.col; col += 1) {
+      const cell = getXmlCell(xmlRow, col);
+      if (cell) clearXmlCell(cell);
+    }
+  }
+};
+
+const replaceXmlMergeCells = (sheetDocument: XMLDocument, ranges: string[]) => {
+  const namespace = sheetDocument.documentElement.namespaceURI ?? undefined;
+  const existing = getFirstXmlElement(sheetDocument, 'mergeCells');
+  const mergeCells = existing ?? sheetDocument.createElementNS(namespace, 'mergeCells');
+  Array.from(mergeCells.childNodes).forEach((child) => mergeCells.removeChild(child));
+  mergeCells.setAttribute('count', String(ranges.length));
+
+  ranges.forEach((range) => {
+    const mergeCell = sheetDocument.createElementNS(namespace, 'mergeCell');
+    mergeCell.setAttribute('ref', range);
+    mergeCells.appendChild(mergeCell);
+  });
+
+  if (!existing) {
+    const sheetData = getSheetDataElement(sheetDocument);
+    sheetData.parentNode?.insertBefore(mergeCells, sheetData.nextSibling);
+  }
+};
+
+const setXmlDimension = (sheetDocument: XMLDocument, range: string) => {
+  const dimension = getFirstXmlElement(sheetDocument, 'dimension');
+  if (dimension) dimension.setAttribute('ref', range);
+};
+
+const resolveWorkbookSheetPaths = async (zip: any) => {
+  const workbookFile = zip.file('xl/workbook.xml');
+  const relsFile = zip.file('xl/_rels/workbook.xml.rels');
+  if (!workbookFile || !relsFile) throw new Error('Invalid workbook template');
+
+  const workbookDocument = parseXmlDocument(await workbookFile.async('text'));
+  const relsDocument = parseXmlDocument(await relsFile.async('text'));
+  const relationships = new Map<string, string>();
+
+  getXmlElements(relsDocument, 'Relationship').forEach((relationship) => {
+    const id = relationship.getAttribute('Id');
+    const target = relationship.getAttribute('Target');
+    if (!id || !target) return;
+    const normalized = target.startsWith('/')
+      ? target.replace(/^\/+/, '')
+      : `xl/${target.replace(/^\.?\//, '')}`;
+    relationships.set(id, normalized);
+  });
+
+  const sheets = getXmlElements(workbookDocument, 'sheet').map((sheet) => {
+    const relationshipId = sheet.getAttribute('r:id') ?? sheet.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'id');
+    return {
+      element: sheet,
+      name: sheet.getAttribute('name') ?? '',
+      path: relationshipId ? relationships.get(relationshipId) : undefined,
+    };
+  });
+
+  return { workbookDocument, sheets };
+};
+
+const exportHdTemplateWorkbookPreservingDesign = async (params: {
+  rows: any[][];
+  storeBlocks: { start: number; end: number; settlement: 'JPY' | 'USD'; royaltyRow: number; usdRow?: number; jpyRow: number }[];
+  countrySpans: { label: string; start: number; end: number }[];
+  summaryStartRow: number;
+  stores: Store[];
+  sales: Sale[];
+  rates: Record<string, number>;
+  fiscalStartYear: number;
+  fiscalEndYear: number;
+  worksheetName: string;
+  filename: string;
+}) => {
+  const response = await fetch(HD_SALES_TEMPLATE_PATH, { cache: 'no-cache' });
+  if (!response.ok) throw new Error(`Template request failed: ${response.status}`);
+  const buffer = await response.arrayBuffer();
+  const mod: any = await import('jszip');
+  const JSZip = mod.default ?? mod;
+  const zip = await JSZip.loadAsync(buffer);
+  const { workbookDocument, sheets } = await resolveWorkbookSheetPaths(zip);
+  const firstSheetInfo = sheets[0];
+  if (!firstSheetInfo?.path) throw new Error('First worksheet not found in template');
+  firstSheetInfo.element.setAttribute('name', params.worksheetName.slice(0, 31));
+
+  const calcPr = getFirstXmlElement(workbookDocument, 'calcPr') ?? workbookDocument.createElementNS(workbookDocument.documentElement.namespaceURI, 'calcPr');
+  calcPr.setAttribute('fullCalcOnLoad', '1');
+  calcPr.setAttribute('forceFullCalc', '1');
+  if (!calcPr.parentNode) workbookDocument.documentElement.appendChild(calcPr);
+
+  const getSheetDocument = async (sheetNameOrIndex: string | number) => {
+    const sheetInfo = typeof sheetNameOrIndex === 'number'
+      ? sheets[sheetNameOrIndex]
+      : sheets.find((sheet) => sheet.name === sheetNameOrIndex);
+    if (!sheetInfo?.path) return null;
+    const sheetFile = zip.file(sheetInfo.path);
+    if (!sheetFile) return null;
+    return { sheetInfo, document: parseXmlDocument(await sheetFile.async('text')) };
+  };
+
+  const sourceRowForGeneratedRow = (rowNumber: number) => {
+    if (rowNumber <= 4) return rowNumber;
+    if (rowNumber >= params.summaryStartRow && rowNumber <= params.summaryStartRow + 3) {
+      return 39 + (rowNumber - params.summaryStartRow);
+    }
+    const block = params.storeBlocks.find((item) => rowNumber >= item.start && rowNumber <= item.end);
+    if (!block) return Math.min(rowNumber, 42);
+    const offset = rowNumber - block.start;
+    return block.settlement === 'USD' ? 5 + offset : 20 + offset;
+  };
+
+  const firstSheet = await getSheetDocument(0);
+  if (!firstSheet) throw new Error('First worksheet XML not found in template');
+  const maxFirstSheetRow = Math.max(params.rows.length, 42);
+  for (let row = 1; row <= maxFirstSheetRow; row += 1) {
+    applyXmlRowTemplate(firstSheet.document, row, sourceRowForGeneratedRow(row), 1, 16);
+  }
+  for (let row = maxFirstSheetRow + 1; row <= 120; row += 1) {
+    const xmlRow = getXmlRow(firstSheet.document, row);
+    if (!xmlRow) continue;
+    for (let col = 1; col <= 16; col += 1) {
+      const cell = getXmlCell(xmlRow, col);
+      if (cell) clearXmlCell(cell);
+    }
+  }
+  params.rows.forEach((row, rowIndex) => {
+    row.slice(0, 16).forEach((value, colIndex) => {
+      setXmlCellValue(firstSheet.document, rowIndex + 1, colIndex + 1, value, sourceRowForGeneratedRow(rowIndex + 1));
+    });
+  });
+  replaceXmlMergeCells(firstSheet.document, [
+    'F3:O3',
+    ...params.countrySpans.map((span) => `A${span.start}:A${span.end}`),
+    ...params.storeBlocks.map((block) => `B${block.start}:B${block.end}`),
+    `A${params.summaryStartRow + 3}:B${params.summaryStartRow + 3}`,
+  ]);
+  setXmlDimension(firstSheet.document, `A1:P${maxFirstSheetRow}`);
+  zip.file(firstSheet.sheetInfo.path, serializeXmlDocument(firstSheet.document));
+
+  const royaltySheet = await getSheetDocument('①海外ロイヤリテー請求一覧');
+  if (royaltySheet) {
+    setXmlCellValue(royaltySheet.document, 1, 2, `海外Royalty請求一覧（HD⇒海外FC）　　${params.fiscalStartYear}.4～${params.fiscalEndYear}.3`);
+    clearXmlRange(royaltySheet.document, 'B4:K150');
+    calculateHdRoyaltyListRows(params.stores, params.sales, params.rates, params.fiscalStartYear)
+      .slice(0, 147)
+      .forEach((row, index) => {
+        const excelRow = index + 4;
+        setXmlCellValue(royaltySheet.document, excelRow, 2, row.invoiceDate, 4);
+        setXmlCellValue(royaltySheet.document, excelRow, 3, null, 4);
+        setXmlCellValue(royaltySheet.document, excelRow, 4, row.storeName, 4);
+        setXmlCellValue(royaltySheet.document, excelRow, 5, row.country, 4);
+        setXmlCellValue(royaltySheet.document, excelRow, 6, row.royaltyAmount, 4);
+        setXmlCellValue(royaltySheet.document, excelRow, 7, null, 4);
+        setXmlCellValue(royaltySheet.document, excelRow, 8, null, 4);
+        setXmlCellValue(royaltySheet.document, excelRow, 10, null, 4);
+        setXmlCellValue(royaltySheet.document, excelRow, 11, null, 4);
+      });
+    zip.file(royaltySheet.sheetInfo.path, serializeXmlDocument(royaltySheet.document));
+  }
+
+  const exportSheet = await getSheetDocument('③海外請求一覧輸出（食材・備品・その他）');
+  if (exportSheet) {
+    setXmlCellValue(exportSheet.document, 1, 2, `海外インボイス一覧（HD⇒海外FCお客様）　${params.fiscalStartYear}.4.1～`);
+    clearXmlRange(exportSheet.document, 'B4:H50');
+    zip.file(exportSheet.sheetInfo.path, serializeXmlDocument(exportSheet.document));
+  }
+
+  const krMeetupSheet = await getSheetDocument('KR Meet Up');
+  if (krMeetupSheet) {
+    clearXmlRange(krMeetupSheet.document, 'A2:G8');
+    zip.file(krMeetupSheet.sheetInfo.path, serializeXmlDocument(krMeetupSheet.document));
+  }
+  const twcSheet = await getSheetDocument('TWC Royalty 相殺 ');
+  if (twcSheet) {
+    clearXmlRange(twcSheet.document, 'B5:H17');
+    zip.file(twcSheet.sheetInfo.path, serializeXmlDocument(twcSheet.document));
+  }
+  const vietnamSheet = await getSheetDocument('ベトナムRoyalty未入金');
+  if (vietnamSheet) {
+    clearXmlRange(vietnamSheet.document, 'C3:G40');
+    zip.file(vietnamSheet.sheetInfo.path, serializeXmlDocument(vietnamSheet.document));
+  }
+
+  const supportSheet = await getSheetDocument('②海外請求一覧（サポート費用）');
+  if (supportSheet) {
+    setXmlCellValue(supportSheet.document, 1, 2, `海外インボイス一覧（HD⇒海外FCお客様）　${params.fiscalStartYear}.4～${params.fiscalEndYear}.3`);
+    clearXmlRange(supportSheet.document, 'B5:H12');
+    zip.file(supportSheet.sheetInfo.path, serializeXmlDocument(supportSheet.document));
+  }
+
+  zip.file('xl/workbook.xml', serializeXmlDocument(workbookDocument));
+  const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
+  downloadBlob(blob, params.filename);
+};
+
 const exportGlobalSalesProgressWorkbook = async (
   stores: Store[],
   sales: Sale[],
@@ -2812,6 +3264,26 @@ const exportGlobalSalesProgressWorkbook = async (
     makeFormula(`SUM(D${summaryStartRow + 3}:O${summaryStartRow + 3})`),
   ]);
 
+  const filename = `HD 海外売上推移表(${fiscalStartYear}.4-${fiscalEndYear}.3).xlsx`;
+  try {
+    await exportHdTemplateWorkbookPreservingDesign({
+      rows,
+      storeBlocks,
+      countrySpans,
+      summaryStartRow,
+      stores,
+      sales,
+      rates,
+      fiscalStartYear,
+      fiscalEndYear,
+      worksheetName,
+      filename,
+    });
+    return;
+  } catch (error) {
+    console.warn('HD template preserving export failed. Falling back to generated workbook export.', error);
+  }
+
   const worksheet = XLSX.utils.aoa_to_sheet(rows);
   const sheetRange = XLSX.utils.decode_range(worksheet['!ref'] || 'A1:P1');
   worksheet['!merges'] = [
@@ -2908,7 +3380,6 @@ const exportGlobalSalesProgressWorkbook = async (
   } else {
     XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
   }
-  const filename = `HD 海外売上推移表(${fiscalStartYear}.4-${fiscalEndYear}.3).xlsx`;
   downloadWorkbook(workbook, filename);
 };
 
