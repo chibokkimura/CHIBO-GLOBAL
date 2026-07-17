@@ -2326,6 +2326,24 @@ const EXCEL_BLACK = { rgb: '000000' };
 const EXCEL_GRAY_FILL = { rgb: '595959' };
 const EXCEL_ROYALTY_FILL = { rgb: 'FCE4D6' };
 const HD_SALES_TEMPLATE_PATH = '/templates/hd-sales-template.xlsx';
+const HD_SALES_PROGRESS_COLUMN_WIDTHS = [
+  15.90625,
+  18.1796875,
+  19.08984375,
+  23.90625,
+  23.90625,
+  13,
+  20.26953125,
+  19.54296875,
+  13,
+  13,
+  13,
+  13,
+  13,
+  13,
+  19.54296875,
+  19.54296875,
+];
 
 const excelBorderSide = (style: 'thin' | 'medium' | 'hair' = 'thin') => ({ style, color: EXCEL_BLACK });
 const excelBorder = (style: 'thin' | 'medium' | 'hair' = 'thin') => ({
@@ -2437,6 +2455,61 @@ const loadHdSalesTemplateWorkbook = async (): Promise<XLSX.WorkBook | null> => {
   } catch (error) {
     console.warn('HD sales template could not be loaded. Falling back to generated single-sheet export.', error);
     return null;
+  }
+};
+
+const copyExcelCellStyle = (target: XLSX.WorkSheet, targetAddress: string, source: XLSX.WorkSheet | undefined, sourceAddress: string) => {
+  if (!source) return;
+  const sourceCell = source[sourceAddress] as XLSX.CellObject | undefined;
+  if (!target[targetAddress]) target[targetAddress] = { t: 's', v: '' } as XLSX.CellObject;
+  if ((sourceCell as any)?.s) {
+    (target[targetAddress] as any).s = JSON.parse(JSON.stringify((sourceCell as any).s));
+  }
+  if ((sourceCell as any)?.z) {
+    (target[targetAddress] as any).z = (sourceCell as any).z;
+  }
+};
+
+const applyHdSalesProgressTemplateStyle = (
+  worksheet: XLSX.WorkSheet,
+  templateWorksheet: XLSX.WorkSheet | undefined,
+  storeBlocks: { start: number; end: number; settlement: 'JPY' | 'USD'; royaltyRow: number; usdRow?: number; jpyRow: number }[],
+  summaryStartRow: number,
+  maxRow: number,
+) => {
+  if (!templateWorksheet) return;
+
+  worksheet['!cols'] = HD_SALES_PROGRESS_COLUMN_WIDTHS.map((width) => ({ width, customwidth: '1' }));
+
+  const sourceRowForGeneratedRow = (rowNumber: number) => {
+    if (rowNumber <= 4) return rowNumber;
+    if (rowNumber >= summaryStartRow && rowNumber <= summaryStartRow + 3) {
+      return 39 + (rowNumber - summaryStartRow);
+    }
+    const block = storeBlocks.find((item) => rowNumber >= item.start && rowNumber <= item.end);
+    if (!block) return Math.min(rowNumber, 42);
+    const offset = rowNumber - block.start;
+    return block.settlement === 'USD' ? 5 + offset : 20 + offset;
+  };
+
+  for (let r = 1; r <= maxRow; r += 1) {
+    const sourceRow = sourceRowForGeneratedRow(r);
+    for (let c = 0; c <= 15; c += 1) {
+      copyExcelCellStyle(
+        worksheet,
+        XLSX.utils.encode_cell({ r: r - 1, c }),
+        templateWorksheet,
+        XLSX.utils.encode_cell({ r: sourceRow - 1, c }),
+      );
+    }
+  }
+
+  if (templateWorksheet['!rows']) {
+    worksheet['!rows'] = Array.from({ length: maxRow }, (_, index) => {
+      const sourceRow = sourceRowForGeneratedRow(index + 1);
+      const sourceRowMeta = templateWorksheet['!rows']?.[sourceRow - 1];
+      return sourceRowMeta ? JSON.parse(JSON.stringify(sourceRowMeta)) : {};
+    });
   }
 };
 
@@ -2742,8 +2815,6 @@ const exportGlobalSalesProgressWorkbook = async (
   const worksheet = XLSX.utils.aoa_to_sheet(rows);
   const sheetRange = XLSX.utils.decode_range(worksheet['!ref'] || 'A1:P1');
   worksheet['!merges'] = [
-    { s: { r: 0, c: 0 }, e: { r: 0, c: 15 } },
-    { s: { r: 1, c: 0 }, e: { r: 1, c: 15 } },
     { s: { r: 2, c: 5 }, e: { r: 2, c: 14 } },
     ...countrySpans.map((span) => ({ s: { r: span.start - 1, c: 0 }, e: { r: span.end - 1, c: 0 } })),
     ...storeBlocks.map((block) => ({ s: { r: block.start - 1, c: 1 }, e: { r: block.end - 1, c: 1 } })),
@@ -2826,6 +2897,8 @@ const exportGlobalSalesProgressWorkbook = async (
   const workbook = templateWorkbook ?? XLSX.utils.book_new();
   if (templateWorkbook) {
     const previousFirstSheetName = workbook.SheetNames[0];
+    const templateFirstSheet = previousFirstSheetName ? templateWorkbook.Sheets[previousFirstSheetName] : undefined;
+    applyHdSalesProgressTemplateStyle(worksheet, templateFirstSheet, storeBlocks, summaryStartRow, rows.length);
     if (previousFirstSheetName && previousFirstSheetName !== sheetName) {
       delete workbook.Sheets[previousFirstSheetName];
     }
