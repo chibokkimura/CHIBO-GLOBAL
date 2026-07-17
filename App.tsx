@@ -2325,6 +2325,7 @@ const EXCEL_REPORT_FONT = 'ＭＳ Ｐゴシック';
 const EXCEL_BLACK = { rgb: '000000' };
 const EXCEL_GRAY_FILL = { rgb: '595959' };
 const EXCEL_ROYALTY_FILL = { rgb: 'FCE4D6' };
+const HD_SALES_TEMPLATE_PATH = '/templates/hd-sales-template.xlsx';
 
 const excelBorderSide = (style: 'thin' | 'medium' | 'hair' = 'thin') => ({ style, color: EXCEL_BLACK });
 const excelBorder = (style: 'thin' | 'medium' | 'hair' = 'thin') => ({
@@ -2348,6 +2349,94 @@ const applyExcelStyle = (worksheet: XLSX.WorkSheet, address: string, style: Xlsx
   if (numFmt) {
     (worksheet[address] as any).z = numFmt;
     (worksheet[address] as any).s = { ...(worksheet[address] as any).s, numFmt };
+  }
+};
+
+const cloneExcelCell = (cell: XLSX.CellObject | undefined): XLSX.CellObject => {
+  if (!cell) return { t: 's', v: '' } as XLSX.CellObject;
+  const clone: XLSX.CellObject = { ...cell };
+  if ((cell as any).s) (clone as any).s = JSON.parse(JSON.stringify((cell as any).s));
+  return clone;
+};
+
+const clearExcelCellValue = (worksheet: XLSX.WorkSheet, address: string) => {
+  const existing = worksheet[address] as XLSX.CellObject | undefined;
+  const blank = cloneExcelCell(existing);
+  blank.t = 's';
+  blank.v = '';
+  delete (blank as any).f;
+  delete (blank as any).w;
+  delete (blank as any).h;
+  delete (blank as any).r;
+  worksheet[address] = blank;
+};
+
+const setExcelCellValue = (worksheet: XLSX.WorkSheet, address: string, value: string | number | Date | null | undefined) => {
+  const existing = worksheet[address] as XLSX.CellObject | undefined;
+  const next = cloneExcelCell(existing);
+  delete (next as any).f;
+  delete (next as any).w;
+  delete (next as any).h;
+  delete (next as any).r;
+  if (value instanceof Date) {
+    next.t = 'd';
+    next.v = value as any;
+  } else if (typeof value === 'number') {
+    next.t = 'n';
+    next.v = Number.isFinite(value) ? value : 0;
+  } else {
+    next.t = 's';
+    next.v = value ?? '';
+  }
+  worksheet[address] = next;
+};
+
+const clearExcelRange = (worksheet: XLSX.WorkSheet | undefined, range: string) => {
+  if (!worksheet) return;
+  const decoded = XLSX.utils.decode_range(range);
+  for (let r = decoded.s.r; r <= decoded.e.r; r += 1) {
+    for (let c = decoded.s.c; c <= decoded.e.c; c += 1) {
+      clearExcelCellValue(worksheet, XLSX.utils.encode_cell({ r, c }));
+    }
+  }
+};
+
+const copyExcelRowStyle = (worksheet: XLSX.WorkSheet, sourceRow: number, targetRow: number, startCol: number, endCol: number) => {
+  for (let c = startCol; c <= endCol; c += 1) {
+    const sourceAddress = XLSX.utils.encode_cell({ r: sourceRow - 1, c });
+    const targetAddress = XLSX.utils.encode_cell({ r: targetRow - 1, c });
+    const source = worksheet[sourceAddress] as XLSX.CellObject | undefined;
+    const target = cloneExcelCell(source);
+    target.t = 's';
+    target.v = '';
+    delete (target as any).f;
+    delete (target as any).w;
+    delete (target as any).h;
+    delete (target as any).r;
+    worksheet[targetAddress] = target;
+  }
+};
+
+const formatExportInvoiceDate = (monthKey: string) => {
+  const [yearText, monthText] = monthKey.split('-');
+  const year = Number(yearText);
+  const month = Number(monthText);
+  if (!year || !month) return '';
+  const invoiceDate = new Date(year, month, 13);
+  const monthLabel = invoiceDate.toLocaleDateString('en-US', { month: 'short' });
+  return `${monthLabel}.${String(invoiceDate.getDate()).padStart(2, '0')}.${invoiceDate.getFullYear()}`;
+};
+
+const loadHdSalesTemplateWorkbook = async (): Promise<XLSX.WorkBook | null> => {
+  if (typeof fetch === 'undefined') return null;
+  try {
+    const response = await fetch(HD_SALES_TEMPLATE_PATH, { cache: 'no-cache' });
+    if (!response.ok) throw new Error(`Template request failed: ${response.status}`);
+    const buffer = await response.arrayBuffer();
+    return XLSX.read(buffer, { type: 'array', cellStyles: true, cellDates: true, cellFormula: true, cellNF: true });
+  } catch (error) {
+    console.warn('HD sales template could not be loaded. Falling back to generated single-sheet export.', error);
+    return null;
   }
 };
 
@@ -2387,13 +2476,106 @@ const getExportStoreName = (store: Store) => {
   return store.name;
 };
 
-const exportGlobalSalesProgressWorkbook = (
+const populateHdTemplateCompanionSheets = (
+  workbook: XLSX.WorkBook,
+  stores: Store[],
+  sales: Sale[],
+  rates: Record<string, number>,
+  fiscalStartYear: number,
+  fiscalEndYear: number,
+) => {
+  const salesByStoreMonth = new Map<string, number>();
+  dedupeSalesByStoreDate(sales).forEach((sale) => {
+    const monthKey = extractMonthKey(sale.date);
+    if (!monthKey) return;
+    const key = `${sale.storeId}::${monthKey}`;
+    salesByStoreMonth.set(key, (salesByStoreMonth.get(key) ?? 0) + Number(sale.totalAmount || 0));
+  });
+
+  const royaltySheet = workbook.Sheets['①海外ロイヤリテー請求一覧'];
+  if (royaltySheet) {
+    setExcelCellValue(royaltySheet, 'B1', `海外Royalty請求一覧（HD⇒海外FC）　　${fiscalStartYear}.4～${fiscalEndYear}.3`);
+    clearExcelRange(royaltySheet, 'B4:K150');
+
+    const generatedRows: {
+      invoiceDate: string;
+      storeName: string;
+      country: string;
+      royaltyAmount: number;
+      settlement: 'JPY' | 'USD';
+    }[] = [];
+
+    const sortedStores = [...stores].sort((a, b) =>
+      `${a.country} ${a.city} ${a.name}`.localeCompare(`${b.country} ${b.city} ${b.name}`),
+    );
+    const fiscalMonthKeys = buildFiscalMonthKeys(fiscalStartYear);
+
+    fiscalMonthKeys.forEach((monthKey) => {
+      sortedStores.forEach((store) => {
+        const salesAmount = salesByStoreMonth.get(`${store.id}::${monthKey}`) ?? 0;
+        if (!salesAmount) return;
+        const royaltyRate = Number(store.royaltyPercentage || 0) / 100;
+        if (!royaltyRate) return;
+
+        const settlement = getInvoicePrintProfile(store).invoiceCurrency;
+        const localCurrencyCode = getExportLocalCurrencyCode(store);
+        const localRate = getUsdRateForExport(localCurrencyCode, rates);
+        const jpyPerLocal = getJpyPerCurrencyForExport(localCurrencyCode, rates);
+        const settlementSales = settlement === 'USD'
+          ? (localCurrencyCode === 'USD' ? salesAmount : salesAmount / localRate)
+          : (localCurrencyCode === 'JPY' ? salesAmount : salesAmount * jpyPerLocal);
+        const royaltyAmount = settlementSales * royaltyRate;
+
+        generatedRows.push({
+          invoiceDate: formatExportInvoiceDate(monthKey),
+          storeName: getExportStoreName(store),
+          country: store.country,
+          royaltyAmount: Math.round(royaltyAmount * 100) / 100,
+          settlement,
+        });
+      });
+    });
+
+    generatedRows.slice(0, 147).forEach((row, index) => {
+      const excelRow = index + 4;
+      if (excelRow > 150) return;
+      copyExcelRowStyle(royaltySheet, 4, excelRow, 1, 10);
+      setExcelCellValue(royaltySheet, `B${excelRow}`, row.invoiceDate);
+      setExcelCellValue(royaltySheet, `C${excelRow}`, '');
+      setExcelCellValue(royaltySheet, `D${excelRow}`, row.storeName);
+      setExcelCellValue(royaltySheet, `E${excelRow}`, row.country);
+      setExcelCellValue(royaltySheet, `F${excelRow}`, row.royaltyAmount);
+      setExcelCellValue(royaltySheet, `G${excelRow}`, '');
+      setExcelCellValue(royaltySheet, `H${excelRow}`, '');
+      setExcelCellValue(royaltySheet, `J${excelRow}`, '');
+      setExcelCellValue(royaltySheet, `K${excelRow}`, '');
+    });
+  }
+
+  const exportSheet = workbook.Sheets['③海外請求一覧輸出（食材・備品・その他）'];
+  if (exportSheet) {
+    setExcelCellValue(exportSheet, 'B1', `海外インボイス一覧（HD⇒海外FCお客様）　${fiscalStartYear}.4.1～`);
+    clearExcelRange(exportSheet, 'B4:H50');
+  }
+
+  clearExcelRange(workbook.Sheets['KR Meet Up'], 'A2:G8');
+  clearExcelRange(workbook.Sheets['TWC Royalty 相殺 '], 'B5:H17');
+  clearExcelRange(workbook.Sheets['ベトナムRoyalty未入金'], 'C3:G40');
+
+  const supportSheet = workbook.Sheets['②海外請求一覧（サポート費用）'];
+  if (supportSheet) {
+    setExcelCellValue(supportSheet, 'B1', `海外インボイス一覧（HD⇒海外FCお客様）　${fiscalStartYear}.4～${fiscalEndYear}.3`);
+    clearExcelRange(supportSheet, 'B5:H12');
+  }
+};
+
+const exportGlobalSalesProgressWorkbook = async (
   stores: Store[],
   sales: Sale[],
   fxRates: Record<string, number> | null,
   fxStatus: FxRatesStatus,
   fxSourceText: string,
-) => {
+): Promise<void> => {
   const rates = fxRates ?? FALLBACK_USD_RATES;
   const jpyPerUsd = rates.JPY || FALLBACK_USD_RATES.JPY || 150;
   const fiscalStartYear = getFiscalStartYear();
@@ -2639,8 +2821,20 @@ const exportGlobalSalesProgressWorkbook = (
   // Keep generated range fixed to the HD management-table footprint: A:P.
   worksheet['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: sheetRange.e.r, c: 15 } });
 
-  const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, worksheet, worksheetName.slice(0, 31));
+  const sheetName = worksheetName.slice(0, 31);
+  const templateWorkbook = await loadHdSalesTemplateWorkbook();
+  const workbook = templateWorkbook ?? XLSX.utils.book_new();
+  if (templateWorkbook) {
+    const previousFirstSheetName = workbook.SheetNames[0];
+    if (previousFirstSheetName && previousFirstSheetName !== sheetName) {
+      delete workbook.Sheets[previousFirstSheetName];
+    }
+    workbook.SheetNames[0] = sheetName;
+    workbook.Sheets[sheetName] = worksheet;
+    populateHdTemplateCompanionSheets(workbook, stores, sales, rates, fiscalStartYear, fiscalEndYear);
+  } else {
+    XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
+  }
   const filename = `HD 海外売上推移表(${fiscalStartYear}.4-${fiscalEndYear}.3).xlsx`;
   downloadWorkbook(workbook, filename);
 };
@@ -7010,8 +7204,13 @@ const HQDashboard: React.FC<{
       };
   }, [sales, stores, fxRates, storeStocks]);
 
-  const handleExportSalesProgress = useCallback(() => {
-    exportGlobalSalesProgressWorkbook(stores, sales, fxRates, fxStatus, fxSourceText);
+  const handleExportSalesProgress = useCallback(async () => {
+    try {
+      await exportGlobalSalesProgressWorkbook(stores, sales, fxRates, fxStatus, fxSourceText);
+    } catch (error) {
+      console.error('Failed to export HD sales workbook', error);
+      alert(`Excel export failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
   }, [stores, sales, fxRates, fxStatus, fxSourceText]);
 
   useEffect(() => {
