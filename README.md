@@ -25,11 +25,25 @@ This repository now includes CI checks:
 
 - `build`: runs `npm run build`
 - `supabase-smoke`: runs DB/Storage smoke test with service role key
+- `test:audit:supabase`: read-only production contract and row-count audit
 
-To enable Supabase smoke test in GitHub Actions, add repository secrets:
+For an operating production database, run the read-only audit before and after every release:
+
+```bash
+npm run test:audit:supabase
+```
+
+The existing `test:smoke:supabase` creates temporary rows and removes them. It is disabled in normal CI and can only be selected manually with Preview Supabase secrets.
+
+To enable the read-only production audit in GitHub Actions, add repository secrets:
 
 - `SUPABASE_URL`
 - `SUPABASE_SERVICE_ROLE_KEY`
+
+To enable the manually selected write/delete smoke test, configure the `preview` environment with:
+
+- `PREVIEW_SUPABASE_URL`
+- `PREVIEW_SUPABASE_SERVICE_ROLE_KEY`
 
 GitHub path:
 

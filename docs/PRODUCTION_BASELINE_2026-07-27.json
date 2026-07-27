@@ -1,0 +1,27 @@
+{
+  "checkedAt": "2026-07-27T16:50:24+09:00",
+  "project": "CHIBO global MG",
+  "projectRef": "kplnxkmktsylrmudhezz",
+  "counts": {
+    "app_users": 22,
+    "stores": 7,
+    "ingredients": 4,
+    "employees": 33,
+    "menus": 41,
+    "menu_recipe_items": 23,
+    "set_menus": 4,
+    "set_menu_items": 6,
+    "sales": 447,
+    "sale_items": 971,
+    "sale_set_items": 118,
+    "store_ingredient_stock": 4,
+    "global_config": 1
+  },
+  "invariants": {
+    "duplicateStoreDates": 0,
+    "orphanSaleItems": 0,
+    "orphanSaleSetItems": 0,
+    "unauthorizedHqAccounts": 0,
+    "hqAccountRows": 1
+  }
+}
