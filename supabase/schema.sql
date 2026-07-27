@@ -119,18 +119,18 @@ create or replace function public.current_auth_email()
 returns text
 language sql
 stable
-security definer
-set search_path = public
+security invoker
+set search_path = ''
 as $$
-  select lower(coalesce(auth.jwt() ->> 'email', ''));
+  select lower(trim(coalesce(auth.jwt() ->> 'email', '')));
 $$;
 
 create or replace function public.current_auth_uid_text()
 returns text
 language sql
 stable
-security definer
-set search_path = public
+security invoker
+set search_path = ''
 as $$
   select coalesce(auth.uid()::text, '');
 $$;
@@ -139,8 +139,8 @@ create or replace function public.hq_admin_email()
 returns text
 language sql
 stable
-security definer
-set search_path = public
+security invoker
+set search_path = ''
 as $$
   select 'chibo.global.mgsystem@gmail.com'::text;
 $$;
@@ -149,8 +149,8 @@ create or replace function public.is_authorized_hq_email(p_email text)
 returns boolean
 language sql
 stable
-security definer
-set search_path = public
+security invoker
+set search_path = ''
 as $$
   select lower(trim(coalesce(p_email, ''))) = public.hq_admin_email();
 $$;
@@ -162,14 +162,13 @@ stable
 security definer
 set search_path = public
 as $$
-  select public.is_authorized_hq_email(public.current_auth_email())
+  select auth.uid() is not null
+    and public.is_authorized_hq_email(public.current_auth_email())
     and exists (
       select 1
       from public.app_users u
-      where (
-          coalesce(u.user_id::text, '') = public.current_auth_uid_text()
-          or lower(trim(coalesce(u.email, ''))) = public.current_auth_email()
-        )
+      where u.user_id = auth.uid()
+        and lower(trim(u.email)) = public.current_auth_email()
         and u.role = 'HQ'
         and public.is_authorized_hq_email(u.email)
     );
@@ -184,13 +183,33 @@ set search_path = public
 as $$
   select u.store_id
   from public.app_users u
-  where u.user_id = auth.uid()
+  where auth.uid() is not null
+    and u.user_id = auth.uid()
+    and lower(trim(u.email)) = public.current_auth_email()
+    and u.role = 'OWNER'
     and u.store_id is not null
-  order by
-    case when u.role = 'OWNER' then 0 else 1 end,
-    lower(coalesce(u.email, '')),
-    u.store_id
   limit 1;
+$$;
+
+create or replace function public.is_store_member(p_store_id text)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select auth.uid() is not null
+    and (
+      public.is_hq()
+      or exists (
+        select 1
+        from public.app_users u
+        where u.user_id = auth.uid()
+          and lower(trim(u.email)) = public.current_auth_email()
+          and u.role = 'OWNER'
+          and u.store_id = p_store_id
+      )
+    );
 $$;
 
 create or replace function public.find_store_for_onboarding(
@@ -259,15 +278,23 @@ grant execute on function public.merge_stores(text, text) to authenticated;
 
 create or replace function public.list_store_accounts(p_store_id text)
 returns table (user_id uuid, email text, name text, store_id text)
-language sql
+language plpgsql
 stable
 security definer
 set search_path = public
 as $$
+begin
+  if not public.is_hq() then
+    raise exception 'Not authorized'
+      using errcode = '42501';
+  end if;
+
+  return query
   select u.user_id, u.email, u.name, u.store_id
   from public.app_users u
   where u.store_id = p_store_id
   order by u.email;
+end;
 $$;
 
 grant execute on function public.list_store_accounts(text) to authenticated;
@@ -349,22 +376,25 @@ alter table public.sale_set_items enable row level security;
 drop policy if exists "app_users_select_own_or_hq" on public.app_users;
 create policy "app_users_select_own_or_hq"
 on public.app_users for select
-using (user_id = auth.uid() or public.is_hq());
+to authenticated
+using (
+  user_id = (select auth.uid())
+  or (select public.is_hq())
+);
 
 drop policy if exists "app_users_insert_self" on public.app_users;
 create policy "app_users_insert_self"
 on public.app_users for insert
+to authenticated
 with check (
-  (
-    coalesce(user_id::text, '') = public.current_auth_uid_text()
-    or lower(trim(coalesce(email, ''))) = public.current_auth_email()
-  )
+  user_id = (select auth.uid())
+  and lower(trim(email)) = (select public.current_auth_email())
   and (
     role = 'OWNER'
     or (
       role = 'HQ'
       and public.is_authorized_hq_email(email)
-      and public.is_authorized_hq_email(public.current_auth_email())
+      and public.is_authorized_hq_email((select public.current_auth_email()))
     )
   )
 );
@@ -372,21 +402,17 @@ with check (
 drop policy if exists "app_users_update_self" on public.app_users;
 create policy "app_users_update_self"
 on public.app_users for update
-using (
-  coalesce(user_id::text, '') = public.current_auth_uid_text()
-  or lower(trim(coalesce(email, ''))) = public.current_auth_email()
-)
+to authenticated
+using (user_id = (select auth.uid()))
 with check (
-  (
-    coalesce(user_id::text, '') = public.current_auth_uid_text()
-    or lower(trim(coalesce(email, ''))) = public.current_auth_email()
-  )
+  user_id = (select auth.uid())
+  and lower(trim(email)) = (select public.current_auth_email())
   and (
     role = 'OWNER'
     or (
       role = 'HQ'
       and public.is_authorized_hq_email(email)
-      and public.is_authorized_hq_email(public.current_auth_email())
+      and public.is_authorized_hq_email((select public.current_auth_email()))
     )
   )
 );
@@ -394,7 +420,8 @@ with check (
 drop policy if exists "app_users_update_hq" on public.app_users;
 create policy "app_users_update_hq"
 on public.app_users for update
-using (public.is_hq())
+to authenticated
+using ((select public.is_hq()))
 with check (
   role = 'OWNER'
   or (
@@ -407,18 +434,21 @@ with check (
 drop policy if exists "global_config_select_all" on public.global_config;
 create policy "global_config_select_all"
 on public.global_config for select
-using (auth.role() = 'authenticated');
+to authenticated
+using (true);
 
 drop policy if exists "global_config_insert_hq" on public.global_config;
 create policy "global_config_insert_hq"
 on public.global_config for insert
-with check (public.is_hq());
+to authenticated
+with check ((select public.is_hq()));
 
 drop policy if exists "global_config_update_hq" on public.global_config;
 create policy "global_config_update_hq"
 on public.global_config for update
-using (public.is_hq())
-with check (public.is_hq());
+to authenticated
+using ((select public.is_hq()))
+with check ((select public.is_hq()));
 
 -- stores: HQ all; OWNER only their store
 drop policy if exists "stores_select_hq_or_own" on public.stores;
@@ -446,6 +476,7 @@ using (public.is_hq());
 drop policy if exists "ingredients_select_all" on public.ingredients;
 create policy "ingredients_select_all"
 on public.ingredients for select
+to authenticated
 using (true);
 
 drop policy if exists "ingredients_write_hq" on public.ingredients;
@@ -453,18 +484,21 @@ drop policy if exists "ingredients_write_hq_or_standard" on public.ingredients;
 drop policy if exists "ingredients_insert_authenticated" on public.ingredients;
 create policy "ingredients_insert_authenticated"
 on public.ingredients for insert
-with check (auth.role() = 'authenticated');
+to authenticated
+with check (true);
 
 drop policy if exists "ingredients_update_hq" on public.ingredients;
 create policy "ingredients_update_hq"
 on public.ingredients for update
-using (public.is_hq())
-with check (public.is_hq());
+to authenticated
+using ((select public.is_hq()))
+with check ((select public.is_hq()));
 
 drop policy if exists "ingredients_delete_hq" on public.ingredients;
 create policy "ingredients_delete_hq"
 on public.ingredients for delete
-using (public.is_hq());
+to authenticated
+using ((select public.is_hq()));
 
 -- store_ingredient_stock: HQ all; OWNER only own store
 drop policy if exists "store_ingredient_stock_select_hq_or_own" on public.store_ingredient_stock;
@@ -1014,3 +1048,98 @@ $$;
 
 revoke all on function public.purge_old_receipts(int) from public;
 grant execute on function public.purge_old_receipts(int) to service_role;
+
+-- =========================
+-- Browser API privilege hardening
+-- =========================
+
+-- RLS remains the row-level boundary, while table grants prevent anonymous
+-- access and remove operations the browser application never performs.
+revoke all privileges on all tables in schema public from public, anon, authenticated;
+
+grant select, insert, update on table public.app_users to authenticated;
+grant select, insert, update on table public.global_config to authenticated;
+grant select, insert, update, delete on table public.stores to authenticated;
+grant select, insert, update, delete on table public.ingredients to authenticated;
+grant select, insert, update, delete on table public.store_ingredient_stock to authenticated;
+grant select, insert, update, delete on table public.employees to authenticated;
+grant select, insert, update, delete on table public.menus to authenticated;
+grant select, insert, update, delete on table public.menu_recipe_items to authenticated;
+grant select, insert, update, delete on table public.set_menus to authenticated;
+grant select, insert, update, delete on table public.set_menu_items to authenticated;
+grant select, insert, update, delete on table public.sales to authenticated;
+grant select, insert, update, delete on table public.sale_items to authenticated;
+grant select, insert, update, delete on table public.sale_set_items to authenticated;
+
+revoke execute on all functions in schema public from public, anon, authenticated;
+
+grant execute on function public.current_auth_email() to authenticated;
+grant execute on function public.current_auth_uid_text() to authenticated;
+grant execute on function public.hq_admin_email() to authenticated;
+grant execute on function public.is_authorized_hq_email(text) to authenticated;
+grant execute on function public.is_hq() to authenticated;
+grant execute on function public.current_store_id() to authenticated;
+grant execute on function public.is_store_member(text) to authenticated;
+grant execute on function public.find_store_for_onboarding(text, text, text, text) to authenticated;
+grant execute on function public.merge_stores(text, text) to authenticated;
+grant execute on function public.list_store_accounts(text) to authenticated;
+grant execute on function public.link_account_to_store(text, text) to authenticated;
+grant execute on function public.unlink_account_from_store(text, text) to authenticated;
+grant execute on function public.purge_old_receipts(int) to service_role;
+
+-- All browser-facing policies require an authenticated session.
+do $$
+declare
+  policy_row record;
+begin
+  for policy_row in
+    select schemaname, tablename, policyname
+    from pg_policies
+    where schemaname = 'public'
+  loop
+    execute format(
+      'alter policy %I on %I.%I to authenticated',
+      policy_row.policyname,
+      policy_row.schemaname,
+      policy_row.tablename
+    );
+  end loop;
+end
+$$;
+
+alter policy "receipts_select_hq_or_own" on storage.objects to authenticated;
+alter policy "receipts_insert_hq_or_own" on storage.objects to authenticated;
+alter policy "receipts_update_hq_or_own" on storage.objects to authenticated;
+alter policy "receipts_delete_hq_or_own" on storage.objects to authenticated;
+
+-- Cache row-independent identity checks once per statement on the largest
+-- directly store-scoped tables.
+alter policy "employees_select_hq_or_own" on public.employees
+  using ((select public.is_hq()) or store_id = (select public.current_store_id()));
+alter policy "employees_write_hq_or_own" on public.employees
+  with check ((select public.is_hq()) or store_id = (select public.current_store_id()));
+alter policy "employees_update_hq_or_own" on public.employees
+  using ((select public.is_hq()) or store_id = (select public.current_store_id()))
+  with check ((select public.is_hq()) or store_id = (select public.current_store_id()));
+alter policy "employees_delete_hq_or_own" on public.employees
+  using ((select public.is_hq()) or store_id = (select public.current_store_id()));
+
+alter policy "menus_select_hq_or_own" on public.menus
+  using ((select public.is_hq()) or store_id = (select public.current_store_id()));
+alter policy "menus_write_hq_or_own" on public.menus
+  with check ((select public.is_hq()) or store_id = (select public.current_store_id()));
+alter policy "menus_update_hq_or_own" on public.menus
+  using ((select public.is_hq()) or store_id = (select public.current_store_id()))
+  with check ((select public.is_hq()) or store_id = (select public.current_store_id()));
+alter policy "menus_delete_hq_or_own" on public.menus
+  using ((select public.is_hq()) or store_id = (select public.current_store_id()));
+
+alter policy "store_ingredient_stock_select_hq_or_own" on public.store_ingredient_stock
+  using ((select public.is_hq()) or store_id = (select public.current_store_id()));
+alter policy "store_ingredient_stock_write_hq_or_own" on public.store_ingredient_stock
+  with check ((select public.is_hq()) or store_id = (select public.current_store_id()));
+alter policy "store_ingredient_stock_update_hq_or_own" on public.store_ingredient_stock
+  using ((select public.is_hq()) or store_id = (select public.current_store_id()))
+  with check ((select public.is_hq()) or store_id = (select public.current_store_id()));
+alter policy "store_ingredient_stock_delete_hq_or_own" on public.store_ingredient_stock
+  using ((select public.is_hq()) or store_id = (select public.current_store_id()));
