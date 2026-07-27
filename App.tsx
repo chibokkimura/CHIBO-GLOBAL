@@ -82,6 +82,13 @@ const isLocalHqPreviewMode = () => {
   return isLocalHost && new URLSearchParams(window.location.search).get('preview') === 'hq';
 };
 
+const isLocalOwnerPreviewMode = () => {
+  if (typeof window === 'undefined') return false;
+  const host = window.location.hostname;
+  const isLocalHost = host === 'localhost' || host === '127.0.0.1' || host === '::1';
+  return isLocalHost && new URLSearchParams(window.location.search).get('preview') === 'owner';
+};
+
 const SALES_LOOKBACK_DEFAULT_DAYS = 90;
 const SALES_LOOKBACK_STEP_DAYS = 90;
 const RECEIPT_BUCKET = 'receipts';
@@ -1245,6 +1252,45 @@ const formatMonthKeyLabel = (monthKey: string) => {
 const extractMonthKey = (dateText: string) => {
   if (!dateText || dateText.length < 7) return '';
   return dateText.slice(0, 7);
+};
+
+const getReportingDatesForMonth = (monthKey: string, now = new Date()) => {
+  const [year, month] = monthKey.split('-').map((value) => Number(value));
+  if (!year || !month || month < 1 || month > 12) return [];
+
+  const monthStart = new Date(year, month - 1, 1);
+  const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  if (monthStart.getTime() > currentMonthStart.getTime()) return [];
+
+  const monthEnd = new Date(year, month, 0);
+  const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+  const reportingEnd = monthStart.getTime() === currentMonthStart.getTime()
+    ? yesterday
+    : monthEnd;
+  if (reportingEnd.getTime() < monthStart.getTime()) return [];
+
+  const dates: string[] = [];
+  const cursor = new Date(monthStart);
+  while (cursor.getTime() <= reportingEnd.getTime()) {
+    dates.push(formatDate(cursor));
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return dates;
+};
+
+const getStoreMonthReportStatus = (sales: Sale[], storeId: string, monthKey: string) => {
+  const expectedDates = getReportingDatesForMonth(monthKey);
+  const submittedDates = new Set(
+    dedupeSalesByStoreDate(sales)
+      .filter((sale) => sale.storeId === storeId && extractMonthKey(sale.date) === monthKey)
+      .map((sale) => sale.date),
+  );
+  const missingDates = expectedDates.filter((date) => !submittedDates.has(date));
+  return {
+    expected: expectedDates.length,
+    submitted: expectedDates.filter((date) => submittedDates.has(date)).length,
+    missingDates,
+  };
 };
 
 const scoreSaleCompleteness = (entry: Sale) => {
@@ -3708,15 +3754,17 @@ const FinancialsTable: React.FC<{
   fxRates: Record<string, number> | null;
   fxStatus: FxRatesStatus;
   fxSourceText: string;
+  monthKey?: string;
   onExportExcel: () => void;
-}> = ({ stores, sales, fxRates, fxStatus, fxSourceText, onExportExcel }) => {
+}> = ({ stores, sales, fxRates, fxStatus, fxSourceText, monthKey, onExportExcel }) => {
   const currentMonthKey = useMemo(() => {
+    if (monthKey) return monthKey;
     const monthKeys = dedupeSalesByStoreDate(sales)
       .map((sale) => extractMonthKey(sale.date))
       .filter(Boolean)
       .sort((a, b) => b.localeCompare(a));
     return monthKeys[0] ?? formatMonthKey(new Date());
-  }, [sales]);
+  }, [sales, monthKey]);
   const currentMonthLabel = formatMonthKeyLabel(currentMonthKey);
 
   return (
@@ -3751,6 +3799,8 @@ const FinancialsTable: React.FC<{
                         const totalRevenue = storeSales.reduce((sum, s) => sum + s.totalAmount, 0);
                         const totalJPY = convertToJPY(totalRevenue, store.currency, fxRates);
                         const royaltyJPY = totalJPY !== null ? totalJPY * (store.royaltyPercentage / 100) : null;
+                        const reportStatus = getStoreMonthReportStatus(sales, store.id, currentMonthKey);
+                        const isComplete = reportStatus.expected > 0 && reportStatus.missingDates.length === 0;
 
                         return (
                             <tr key={store.id} className="hover:bg-gray-50 transition-colors">
@@ -3768,7 +3818,19 @@ const FinancialsTable: React.FC<{
                                     {royaltyJPY === null ? '—' : `JPY ${royaltyJPY.toLocaleString(undefined, {maximumFractionDigits: 0})}`}
                                 </td>
                                 <td className="p-4 text-center">
-                                    <span className="bg-emerald-100 text-emerald-700 px-2 py-1 rounded-full text-[10px] font-black uppercase tracking-wide">Good</span>
+                                    {reportStatus.expected === 0 ? (
+                                        <span className="bg-gray-100 text-gray-600 px-2 py-1 rounded-full text-[10px] font-black uppercase tracking-wide">
+                                            No due dates
+                                        </span>
+                                    ) : (
+                                        <span className={`px-2 py-1 rounded-full text-[10px] font-black uppercase tracking-wide ${
+                                            isComplete
+                                                ? 'bg-emerald-100 text-emerald-700'
+                                                : 'bg-red-100 text-red-700'
+                                        }`}>
+                                            {isComplete ? 'Complete' : `${reportStatus.missingDates.length} missing`}
+                                        </span>
+                                    )}
                                 </td>
                             </tr>
                         );
@@ -4386,7 +4448,10 @@ const MenuManager: React.FC<{
   return (
     <div>
       <div className="flex justify-between items-center mb-6">
-        <h2 className="text-2xl font-bold">Menu Management</h2>
+        <div>
+          <h2 className="text-2xl font-bold">Single Items & Recipes</h2>
+          <p className="text-sm text-gray-500 mt-1">Register each individually sold menu item and the ingredients used in one serving.</p>
+        </div>
         <button
           onClick={() => onCreate({
             id: createLocalEntityId('M'),
@@ -4635,9 +4700,12 @@ const SetMenuManager: React.FC<{
     const menuById = useMemo(() => new Map(menus.map((menu) => [menu.id, menu])), [menus]);
 
     return (
-        <div className="mt-10">
+        <div>
             <div className="flex justify-between items-center mb-6">
-                <h2 className="text-2xl font-bold">Set Menu Management</h2>
+                <div>
+                    <h2 className="text-2xl font-bold">Courses & Set Menus</h2>
+                    <p className="text-sm text-gray-500 mt-1">Build a course or set from registered single items and specify the quantity of each component.</p>
+                </div>
                 <button
                     onClick={() => onCreate({
                         id: createLocalEntityId('SM'),
@@ -5234,6 +5302,7 @@ const EmployeeManager: React.FC<{
 
 const HQStoreDetail: React.FC<{
     store: Store;
+    initialMonthKey: string;
     sales: Sale[];
     menus: Menu[];
     setMenus: SetMenu[];
@@ -5264,7 +5333,7 @@ const HQStoreDetail: React.FC<{
     onDeleteSetMenu: (id: string) => void;
     onUpdateEmployees: (storeId: string, employees: Employee[]) => void;
     onAddIngredient: (ing: Ingredient) => Promise<void> | void;
-}> = ({ store, sales, menus, setMenus, employees, ingredients, storeStocks, allStores, categories, standardIngredients, currencies, positions, fxRates, fxStatus, fxSourceText, onRefreshFx, salesLookbackLabel, onLoadMoreSales, onBack, onUpdateStore, onSaveStoreStocks, onMergeStores, onDeleteStore, onUpdateMenu, onCreateMenu, onDeleteMenu, onUpdateSetMenu, onCreateSetMenu, onDeleteSetMenu, onUpdateEmployees, onAddIngredient }) => {
+}> = ({ store, initialMonthKey, sales, menus, setMenus, employees, ingredients, storeStocks, allStores, categories, standardIngredients, currencies, positions, fxRates, fxStatus, fxSourceText, onRefreshFx, salesLookbackLabel, onLoadMoreSales, onBack, onUpdateStore, onSaveStoreStocks, onMergeStores, onDeleteStore, onUpdateMenu, onCreateMenu, onDeleteMenu, onUpdateSetMenu, onCreateSetMenu, onDeleteSetMenu, onUpdateEmployees, onAddIngredient }) => {
     const storeMenus = menus.filter(m => m.storeId === store.id);
     const storeSetMenus = setMenus.filter(sm => sm.storeId === store.id);
     const storeEmployees = employees.filter(e => e.storeId === store.id);
@@ -5277,15 +5346,15 @@ const HQStoreDetail: React.FC<{
         () => [...canonicalStoreSales].sort((a, b) => b.date.localeCompare(a.date) || String(b.id).localeCompare(String(a.id))),
         [canonicalStoreSales]
     );
-    const defaultSalesMonthKey = 'all';
+    const defaultSalesMonthKey = initialMonthKey || formatMonthKey(new Date());
     const salesMonthOptions = useMemo(() => {
-        const keys = new Set<string>();
+        const keys = new Set<string>([defaultSalesMonthKey]);
         sortedStoreSales.forEach((sale) => {
             const key = extractMonthKey(sale.date);
             if (key) keys.add(key);
         });
         return Array.from(keys).sort((a, b) => b.localeCompare(a));
-    }, [sortedStoreSales]);
+    }, [sortedStoreSales, defaultSalesMonthKey]);
     const [salesMonthFilter, setSalesMonthFilter] = useState<string>(defaultSalesMonthKey);
     const visibleStoreSales = useMemo(() => {
         if (salesMonthFilter === 'all') return sortedStoreSales;
@@ -7729,23 +7798,86 @@ const HQDashboard: React.FC<{
   const [selectedStore, setSelectedStore] = useState<Store | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isSalesAnalyticsOpen, setIsSalesAnalyticsOpen] = useState(false);
-  const navReadyRef = useRef(false);
+  const hqMonthOptions = useMemo(() => {
+    const keys = new Set<string>([formatMonthKey(new Date())]);
+    dedupeSalesByStoreDate(sales).forEach((sale) => {
+      const key = extractMonthKey(sale.date);
+      if (key) keys.add(key);
+    });
+    return Array.from(keys).sort((a, b) => b.localeCompare(a));
+  }, [sales]);
+  const [selectedMonthKey, setSelectedMonthKey] = useState(() => formatMonthKey(new Date()));
+  const hqCountries = useMemo<string[]>(
+    () => Array.from(new Set<string>(stores.map((store) => store.country))).sort((a, b) => a.localeCompare(b)),
+    [stores],
+  );
+  const [selectedCountry, setSelectedCountry] = useState<string>('all');
+  const filteredStores = useMemo(
+    () => selectedCountry === 'all'
+      ? stores
+      : stores.filter((store) => store.country === selectedCountry),
+    [stores, selectedCountry],
+  );
   const navRestoreRef = useRef(false);
-  const popLockRef = useRef(false);
   const { rates: fxRates, status: fxStatus, sourceText: fxSourceText, refreshNow: refreshFxNow } = useFxRates();
 
   // Tabs for Settings
   const [settingsTab, setSettingsTab] = useState<'general' | 'locations' | 'finance' | 'ops' | 'menu'>('general');
 
+  useEffect(() => {
+    if (!hqMonthOptions.includes(selectedMonthKey)) {
+      setSelectedMonthKey(hqMonthOptions[0] ?? formatMonthKey(new Date()));
+    }
+  }, [hqMonthOptions, selectedMonthKey]);
+
+  useEffect(() => {
+    if (selectedCountry !== 'all' && !hqCountries.includes(selectedCountry)) {
+      setSelectedCountry('all');
+    }
+  }, [hqCountries, selectedCountry]);
+
+  const countryPerformance = useMemo(() => hqCountries.map((country) => {
+    const countryStores = stores.filter((store) => store.country === country);
+    const storeIds = new Set(countryStores.map((store) => store.id));
+    const localTotals: Record<string, number> = {};
+    let totalJPY = 0;
+    let missingReports = 0;
+
+    dedupeSalesByStoreDate(sales).forEach((sale) => {
+      if (!storeIds.has(sale.storeId) || extractMonthKey(sale.date) !== selectedMonthKey) return;
+      const store = countryStores.find((row) => row.id === sale.storeId);
+      if (!store) return;
+      localTotals[store.currency] = (localTotals[store.currency] ?? 0) + Number(sale.totalAmount || 0);
+      totalJPY += convertToJPY(sale.totalAmount, store.currency, fxRates) ?? 0;
+    });
+    countryStores.forEach((store) => {
+      missingReports += getStoreMonthReportStatus(sales, store.id, selectedMonthKey).missingDates.length;
+    });
+
+    return {
+      country,
+      stores: countryStores.length,
+      localTotals,
+      totalJPY,
+      missingReports,
+    };
+  }), [hqCountries, stores, sales, selectedMonthKey, fxRates]);
+
+  const formatCountryLocalTotals = (totals: Record<string, number>) => {
+    const entries = Object.entries(totals).sort(([a], [b]) => a.localeCompare(b));
+    if (entries.length === 0) return 'No sales reported';
+    return entries
+      .map(([currency, amount]) => `${currency} ${Math.round(amount).toLocaleString()}`)
+      .join(' / ');
+  };
+
   // --- Real-time Metrics Calculation ---
   const metrics = useMemo(() => {
-      const today = new Date();
-      const currentMonthKey = today.toISOString().slice(0, 7); // e.g. "2023-10"
-      const currentMonthName = today.toLocaleString('default', { month: 'long' });
-
-      const prevDate = new Date(today);
-      prevDate.setMonth(today.getMonth() - 1);
-      const prevMonthKey = prevDate.toISOString().slice(0, 7);
+      const [selectedYear, selectedMonth] = selectedMonthKey.split('-').map(Number);
+      const prevDate = new Date(selectedYear, selectedMonth - 2, 1);
+      const prevMonthKey = formatMonthKey(prevDate);
+      const currentMonthName = formatMonthKeyLabel(selectedMonthKey);
+      const selectedStoreIds = new Set(filteredStores.map((store) => store.id));
 
       let totalSalesCurrentMonth = 0;
       let totalRoyaltyCurrentMonth = 0;
@@ -7753,12 +7885,12 @@ const HQDashboard: React.FC<{
 
       sales.forEach(sale => {
           const store = stores.find(s => s.id === sale.storeId);
-          if (!store) return;
+          if (!store || !selectedStoreIds.has(store.id)) return;
 
           const amountJPY = convertToJPY(sale.totalAmount, store.currency, fxRates) ?? 0;
           const monthKey = sale.date.slice(0, 7);
 
-          if (monthKey === currentMonthKey) {
+          if (monthKey === selectedMonthKey) {
               totalSalesCurrentMonth += amountJPY;
               totalRoyaltyCurrentMonth += amountJPY * (store.royaltyPercentage / 100);
           } else if (monthKey === prevMonthKey) {
@@ -7766,19 +7898,27 @@ const HQDashboard: React.FC<{
           }
       });
 
-      const growthRate = totalSalesLastMonth > 0
+      const growthRate: number | null = totalSalesLastMonth > 0
           ? ((totalSalesCurrentMonth - totalSalesLastMonth) / totalSalesLastMonth) * 100
-          : 0;
+          : null;
 
       return {
           totalSalesCurrentMonth,
           totalRoyaltyCurrentMonth,
           growthRate,
           currentMonthName,
-          activeStores: stores.length,
-          inventoryAlerts: storeStocks.filter(row => row.reorder > 0 && row.par <= row.reorder).length
+          activeStores: filteredStores.length,
+          inventorySetupGaps: filteredStores.reduce((gapCount, store) => (
+              gapCount + globalConfig.standardIngredients.filter((ingredient) => {
+                  const stock = storeStocks.find((row) => (
+                      row.storeId === store.id
+                      && row.ingredientName.trim().toLowerCase() === ingredient.name.trim().toLowerCase()
+                  ));
+                  return !stock || stock.par <= 0 || stock.reorder <= 0;
+              }).length
+          ), 0)
       };
-  }, [sales, stores, fxRates, storeStocks]);
+  }, [sales, stores, filteredStores, selectedMonthKey, fxRates, storeStocks, globalConfig.standardIngredients]);
 
   const handleExportSalesProgress = useCallback(async () => {
     try {
@@ -7823,6 +7963,32 @@ const HQDashboard: React.FC<{
     if (state?.screen === 'hq' && state.overlay === 'settings') {
       window.history.replaceState({ ...state, settingsTab: tab }, '');
     }
+  }, []);
+
+  const openHqStore = useCallback((store: Store) => {
+    if (typeof window !== 'undefined') {
+      window.history.pushState(
+        {
+          screen: 'hq-detail',
+          storeId: store.id,
+          section: 'sales',
+          menuSection: 'items',
+        },
+        ''
+      );
+    }
+    setSelectedStore(store);
+  }, []);
+
+  const closeHqStore = useCallback(() => {
+    if (typeof window !== 'undefined') {
+      const state = window.history.state as { screen?: string; storeId?: string } | null;
+      if (state?.screen === 'hq-detail') {
+        window.history.back();
+        return;
+      }
+    }
+    setSelectedStore(null);
   }, []);
 
   useEffect(() => {
@@ -7881,7 +8047,6 @@ const HQDashboard: React.FC<{
           },
       ''
     );
-    navReadyRef.current = true;
     navRestoreRef.current = true;
   }, [stores]);
 
@@ -7896,31 +8061,6 @@ const HQDashboard: React.FC<{
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    if (!navReadyRef.current) return;
-    if (popLockRef.current) {
-      popLockRef.current = false;
-      return;
-    }
-    window.history.pushState(
-      selectedStore
-        ? {
-            screen: 'hq-detail',
-            storeId: selectedStore.id,
-            section: 'sales',
-            menuSection: 'items',
-          }
-        : {
-            screen: 'hq',
-            selectedStoreId: null,
-            overlay: null,
-            settingsTab: 'general',
-          },
-      ''
-    );
-  }, [selectedStore?.id]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
     const onPopState = (e: PopStateEvent) => {
       const state = e.state as {
         screen?: string;
@@ -7932,7 +8072,6 @@ const HQDashboard: React.FC<{
       if (!state || (state.screen !== 'hq' && state.screen !== 'hq-detail')) {
         return;
       }
-      popLockRef.current = true;
       setIsSettingsOpen(state.screen === 'hq' && state.overlay === 'settings');
       setIsSalesAnalyticsOpen(state.screen === 'hq' && state.overlay === 'sales-analytics');
       if (
@@ -7968,6 +8107,7 @@ const HQDashboard: React.FC<{
     return (
       <HQStoreDetail
         store={selectedStore}
+        initialMonthKey={selectedMonthKey}
         sales={sales}
         menus={menus}
         setMenus={setMenus}
@@ -7985,7 +8125,7 @@ const HQDashboard: React.FC<{
         onRefreshFx={refreshFxNow}
         salesLookbackLabel={salesLookbackLabel}
         onLoadMoreSales={onLoadMoreSales}
-        onBack={() => setSelectedStore(null)}
+        onBack={closeHqStore}
         onUpdateStore={onUpdateStore}
         onSaveStoreStocks={onSaveStoreStocks}
         onMergeStores={async (sourceId, targetId) => { await supabase.rpc('merge_stores', { p_source_id: sourceId, p_target_id: targetId }); await refreshAll(); }}
@@ -8129,6 +8269,77 @@ const HQDashboard: React.FC<{
        />
 
        <div className="flex-1 p-8 overflow-y-auto space-y-8 max-w-7xl mx-auto w-full">
+           <section className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+              <div className="p-6 border-b bg-gray-50">
+                  <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
+                      <div>
+                          <div className="text-xs font-black uppercase tracking-[0.18em] text-gray-400">Management path</div>
+                          <h2 className="text-2xl font-extrabold mt-1">Country → Store → Month</h2>
+                          <p className="text-sm text-gray-500 mt-1">Choose a country and reporting month before opening a store.</p>
+                      </div>
+                      <label className="block min-w-[220px]">
+                          <span className="text-xs font-bold uppercase text-gray-500">Reporting month</span>
+                          <select
+                              value={selectedMonthKey}
+                              onChange={(event) => setSelectedMonthKey(event.target.value)}
+                              className="mt-1 w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm font-bold"
+                          >
+                              {hqMonthOptions.map((monthKey) => (
+                                  <option key={monthKey} value={monthKey}>{formatMonthKeyLabel(monthKey)}</option>
+                              ))}
+                          </select>
+                      </label>
+                  </div>
+              </div>
+              <div className="p-4 sm:p-6">
+                  <div className="flex gap-3 overflow-x-auto pb-2">
+                      <button
+                          type="button"
+                          onClick={() => setSelectedCountry('all')}
+                          className={`min-w-[180px] rounded-xl border p-4 text-left transition ${
+                              selectedCountry === 'all'
+                                  ? 'border-black bg-black text-white shadow-lg'
+                                  : 'border-gray-200 bg-white hover:border-gray-400'
+                          }`}
+                      >
+                          <div className="text-xs font-bold opacity-60 uppercase">All countries</div>
+                          <div className="text-2xl font-extrabold mt-1">{stores.length} stores</div>
+                          <div className="text-xs mt-2 opacity-70">Network overview</div>
+                      </button>
+                      {countryPerformance.map((row) => (
+                          <button
+                              key={row.country}
+                              type="button"
+                              onClick={() => setSelectedCountry(row.country)}
+                              className={`min-w-[220px] rounded-xl border p-4 text-left transition ${
+                                  selectedCountry === row.country
+                                      ? 'border-black bg-black text-white shadow-lg'
+                                      : 'border-gray-200 bg-white hover:border-gray-400'
+                              }`}
+                          >
+                              <div className="flex items-start justify-between gap-3">
+                                  <div>
+                                      <div className="font-extrabold">{row.country}</div>
+                                      <div className="text-xs mt-0.5 opacity-60">{row.stores} store{row.stores === 1 ? '' : 's'}</div>
+                                  </div>
+                                  <span className={`text-[10px] font-black px-2 py-1 rounded-full ${
+                                      selectedCountry === row.country
+                                          ? 'bg-white/15 text-white'
+                                          : row.missingReports > 0
+                                              ? 'bg-red-100 text-red-700'
+                                              : 'bg-emerald-100 text-emerald-700'
+                                  }`}>
+                                      {row.missingReports > 0 ? `${row.missingReports} missing` : 'Complete'}
+                                  </span>
+                              </div>
+                              <div className="text-sm font-bold mt-3">{formatCountryLocalTotals(row.localTotals)}</div>
+                              <div className="text-xs mt-1 opacity-60">JPY {Math.round(row.totalJPY).toLocaleString()}</div>
+                          </button>
+                      ))}
+                  </div>
+              </div>
+           </section>
+
            {/* KPI Cards */}
            <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
               {/* Sales Card */}
@@ -8140,7 +8351,7 @@ const HQDashboard: React.FC<{
                   <div className="absolute inset-0 bg-white/10 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
                   <div className="flex justify-between items-start relative z-10">
                       <h3 className="text-sm font-bold opacity-70 flex items-center gap-2">
-                          Total Network Sales
+                          Selected Sales
                           <ChevronRight className="w-4 h-4 opacity-50 group-hover:opacity-100 group-hover:translate-x-1 transition-all" />
                       </h3>
                       <div className="group/tooltip relative">
@@ -8154,22 +8365,30 @@ const HQDashboard: React.FC<{
                       JPY {metrics.totalSalesCurrentMonth.toLocaleString(undefined, {maximumFractionDigits: 0})}
                   </div>
                   <div className="flex items-center gap-2 mt-2 relative z-10">
-                      <span className={`text-xs font-bold ${metrics.growthRate >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                          {metrics.growthRate >= 0 ? '↑' : '↓'} {Math.abs(metrics.growthRate).toFixed(1)}%
+                      <span className={`text-xs font-bold ${
+                          metrics.growthRate === null
+                              ? 'text-gray-400'
+                              : metrics.growthRate >= 0
+                                  ? 'text-emerald-400'
+                                  : 'text-red-400'
+                      }`}>
+                          {metrics.growthRate === null
+                              ? '—'
+                              : `${metrics.growthRate >= 0 ? '↑' : '↓'} ${Math.abs(metrics.growthRate).toFixed(1)}%`}
                       </span>
                       <span className="text-[10px] text-gray-400 font-medium uppercase tracking-wide">
-                          vs Last Month
+                          {metrics.growthRate === null ? 'No prior-month baseline' : 'vs Last Month'}
                       </span>
                   </div>
                   <div className="mt-4 text-[10px] text-gray-400 font-bold border-t border-white/10 pt-2">
-                      Basis: Current Month ({metrics.currentMonthName}) • {formatFxSourceLabel(fxStatus, fxSourceText)}
+                      Basis: {metrics.currentMonthName} • {selectedCountry === 'all' ? 'All countries' : selectedCountry} • {formatFxSourceLabel(fxStatus, fxSourceText)}
                   </div>
               </button>
 
               {/* Active Franchises Card */}
               <div className="bg-white p-6 rounded-2xl shadow-sm border relative group">
                   <div className="flex justify-between items-start">
-                      <h3 className="text-sm font-bold text-gray-500">Active Franchises</h3>
+                      <h3 className="text-sm font-bold text-gray-500">Stores in View</h3>
                       <div className="group/tooltip relative">
                           <Info className="w-4 h-4 text-gray-300 hover:text-gray-600 cursor-help"/>
                           <div className="absolute right-0 top-6 w-48 bg-black text-white text-xs p-2 rounded shadow-lg opacity-0 group-hover/tooltip:opacity-100 transition-opacity pointer-events-none z-50">
@@ -8179,7 +8398,7 @@ const HQDashboard: React.FC<{
                   </div>
                   <div className="text-3xl font-extrabold mt-2 text-gray-900">{metrics.activeStores}</div>
                   <div className="mt-8 text-[10px] text-gray-400 font-bold border-t border-gray-100 pt-2">
-                      Basis: Real-time Database
+                      Basis: {selectedCountry === 'all' ? 'All countries' : selectedCountry}
                   </div>
               </div>
 
@@ -8205,57 +8424,93 @@ const HQDashboard: React.FC<{
                {/* Inventory Card */}
                <div className="bg-white p-6 rounded-2xl shadow-sm border">
                   <div className="flex justify-between items-start">
-                      <h3 className="text-sm font-bold text-gray-500">Inventory Alerts</h3>
+                      <h3 className="text-sm font-bold text-gray-500">Inventory Setup Gaps</h3>
                       <div className="group/tooltip relative">
                           <Info className="w-4 h-4 text-gray-300 hover:text-gray-600 cursor-help"/>
                           <div className="absolute right-0 top-6 w-48 bg-black text-white text-xs p-2 rounded shadow-lg opacity-0 group-hover/tooltip:opacity-100 transition-opacity pointer-events-none z-50">
-                              Number of ingredients across all stores predicted to run out within 3 days.
+                              Number of standard ingredients without both a stock level and reorder point configured.
                           </div>
                       </div>
                   </div>
-                  <div className="text-3xl font-extrabold mt-2 text-red-500">{metrics.inventoryAlerts}</div>
+                  <div className={`text-3xl font-extrabold mt-2 ${metrics.inventorySetupGaps > 0 ? 'text-amber-600' : 'text-emerald-600'}`}>
+                      {metrics.inventorySetupGaps}
+                  </div>
                   <div className="mt-8 text-[10px] text-gray-400 font-bold border-t border-gray-100 pt-2">
-                      Basis: Global Stock Analysis
+                      Basis: Required setup fields only
                   </div>
               </div>
            </div>
 
            {/* Financials Table */}
            <FinancialsTable
-             stores={stores}
+             stores={filteredStores}
              sales={sales}
              fxRates={fxRates}
              fxStatus={fxStatus}
              fxSourceText={fxSourceText}
+             monthKey={selectedMonthKey}
              onExportExcel={handleExportSalesProgress}
            />
 
            {/* Store Grid (Clickable) */}
            <div>
-              <h3 className="font-bold text-xl mb-4">Franchise Network</h3>
+              <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-2 mb-4">
+                  <div>
+                      <div className="text-xs font-black uppercase tracking-[0.18em] text-gray-400">Next: choose a store</div>
+                      <h3 className="font-bold text-xl mt-1">
+                          {selectedCountry === 'all' ? 'All Stores' : `${selectedCountry} Stores`}
+                      </h3>
+                  </div>
+                  <div className="text-sm text-gray-500">{formatMonthKeyLabel(selectedMonthKey)}</div>
+              </div>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                  {stores.map(store => (
-                      <div
+                  {filteredStores.map(store => {
+                      const monthSales = dedupeSalesByStoreDate(sales)
+                          .filter((sale) => sale.storeId === store.id && extractMonthKey(sale.date) === selectedMonthKey);
+                      const localSales = monthSales.reduce((sum, sale) => sum + Number(sale.totalAmount || 0), 0);
+                      const salesJPY = convertToJPY(localSales, store.currency, fxRates);
+                      const reportStatus = getStoreMonthReportStatus(sales, store.id, selectedMonthKey);
+                      return (
+                      <button
+                        type="button"
                         key={store.id}
-                        onClick={() => setSelectedStore(store)}
-                        className="bg-white p-5 rounded-xl shadow-sm border border-gray-100 hover:border-black cursor-pointer transition group"
+                        onClick={() => openHqStore(store)}
+                        className="bg-white p-5 rounded-xl shadow-sm border border-gray-100 hover:border-black cursor-pointer transition group text-left"
                       >
                           <div className="flex justify-between items-start mb-2">
                              <div className="w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center font-bold text-gray-600 group-hover:bg-black group-hover:text-white transition-colors">
                                 {store.country.substring(0, 2).toUpperCase()}
                              </div>
-                             {store.royaltyPercentage < 5 && <AlertTriangle className="w-4 h-4 text-orange-500" />}
+                             {reportStatus.missingDates.length > 0 ? (
+                                 <span className="text-[10px] font-black px-2 py-1 rounded-full bg-red-100 text-red-700">
+                                     {reportStatus.missingDates.length} missing
+                                 </span>
+                             ) : (
+                                 <span className="text-[10px] font-black px-2 py-1 rounded-full bg-emerald-100 text-emerald-700">
+                                     Complete
+                                 </span>
+                             )}
                           </div>
                           <h4 className="font-bold text-lg">{store.name}</h4>
                           <div className="flex items-center gap-2 text-sm text-gray-500 mt-1">
                              <MapPin className="w-3 h-3" /> {store.city}, {store.country}
                           </div>
+                          <div className="mt-4 rounded-xl bg-gray-50 px-3 py-2">
+                              <div className="text-xs text-gray-500">{formatMonthKeyLabel(selectedMonthKey)} sales</div>
+                              <div className="font-extrabold mt-0.5">{store.currency} {Math.round(localSales).toLocaleString()}</div>
+                              {store.currency !== 'JPY' && (
+                                  <div className="text-xs text-gray-500 mt-0.5">
+                                      {salesJPY === null ? 'JPY rate unavailable' : `JPY ${Math.round(salesJPY).toLocaleString()}`}
+                                  </div>
+                              )}
+                          </div>
                           <div className="mt-4 pt-4 border-t flex justify-between items-center text-sm font-medium">
-                              <span>View Details</span>
+                              <span>Open monthly detail</span>
                               <ChevronRight className="w-4 h-4 text-gray-400 group-hover:text-black" />
                           </div>
-                      </div>
-                  ))}
+                      </button>
+                      );
+                  })}
               </div>
            </div>
 
@@ -8290,7 +8545,7 @@ const StoreDashboard: React.FC<{
   onUpdateEmployees: (employees: Employee[]) => void;
   onAddIngredient: (ing: Ingredient) => Promise<void> | void;
 }> = ({ user, store, onLogout, sales, menus, setMenus, employees, ingredients, globalConfig, onAddSale, onUpdateMenu, onCreateMenu, onDeleteMenu, onUpdateSetMenu, onCreateSetMenu, onDeleteSetMenu, onUpdateEmployees, onAddIngredient }) => {
-    const [view, setView] = useState<'dashboard' | 'report' | 'menu' | 'staff'>('dashboard');
+    const [view, setView] = useState<'dashboard' | 'report' | 'month' | 'menu' | 'staff'>('dashboard');
     const [menuSection, setMenuSection] = useState<'items' | 'sets'>('items');
     const [reportDate, setReportDate] = useState<string | null>(null);
     const [editingMenu, setEditingMenu] = useState<Menu | null>(null);
@@ -8366,6 +8621,24 @@ const StoreDashboard: React.FC<{
             hasStaff: storeEmployees.length > 0,
         };
     }, [submittedDateSet, storeMenus.length, storeEmployees.length]);
+    const todayDate = formatDate(new Date());
+    const todayReport = canonicalStoreSales.find((sale) => sale.date === todayDate) ?? null;
+    const currentMonthReportStatus = useMemo(
+        () => getStoreMonthReportStatus(sales, store.id, dashboardMonthKey),
+        [sales, store.id, dashboardMonthKey],
+    );
+    const currentMonthSales = useMemo(
+        () => canonicalStoreSales
+            .filter((sale) => extractMonthKey(sale.date) === dashboardMonthKey)
+            .reduce((sum, sale) => sum + Number(sale.totalAmount || 0), 0),
+        [canonicalStoreSales, dashboardMonthKey],
+    );
+    const recipeReadyCount = storeMenus.filter((menu) => (menu.recipe?.length ?? 0) > 0).length;
+    const menusMissingRecipes = storeMenus.filter((menu) => (menu.recipe?.length ?? 0) === 0);
+    const menuIds = new Set(storeMenus.map((menu) => menu.id));
+    const setsNeedingAttention = storeSetMenus.filter(
+        (setMenu) => setMenu.items.length === 0 || setMenu.items.some((item) => !menuIds.has(item.menuId) || Number(item.quantity) <= 0),
+    );
     const [showMissingCalendar, setShowMissingCalendar] = useState(false);
     const [calendarMonth, setCalendarMonth] = useState(() => {
         const d = new Date();
@@ -8433,7 +8706,7 @@ const StoreDashboard: React.FC<{
     // Comparison Logic (Current Month vs Previous Month)
     const metricComparison = useMemo(() => {
         if (!dashboardMetricsEnabled) {
-            return { currentMonthSales: 0, growth: 0 };
+            return { currentMonthSales: 0, growth: null as number | null, weeklyGrowth: null as number | null };
         }
         const today = new Date();
         const currentMonthKey = formatMonthKey(today);
@@ -8448,11 +8721,30 @@ const StoreDashboard: React.FC<{
             .filter(s => extractMonthKey(s.date) === prevMonthKey)
             .reduce((acc, curr) => acc + curr.totalAmount, 0);
 
-        const growth = prevMonthSales > 0
+        const growth: number | null = prevMonthSales > 0
             ? ((currentMonthSales - prevMonthSales) / prevMonthSales) * 100
-            : 0;
+            : null;
 
-        return { currentMonthSales, growth };
+        const currentWeekStart = new Date(today);
+        currentWeekStart.setDate(today.getDate() - 6);
+        const previousWeekStart = new Date(today);
+        previousWeekStart.setDate(today.getDate() - 13);
+        const previousWeekEnd = new Date(today);
+        previousWeekEnd.setDate(today.getDate() - 7);
+        const currentWeekStartKey = formatDate(currentWeekStart);
+        const previousWeekStartKey = formatDate(previousWeekStart);
+        const previousWeekEndKey = formatDate(previousWeekEnd);
+        const currentWeekSales = canonicalStoreSales
+            .filter((sale) => sale.date >= currentWeekStartKey && sale.date <= formatDate(today))
+            .reduce((sum, sale) => sum + Number(sale.totalAmount || 0), 0);
+        const previousWeekSales = canonicalStoreSales
+            .filter((sale) => sale.date >= previousWeekStartKey && sale.date <= previousWeekEndKey)
+            .reduce((sum, sale) => sum + Number(sale.totalAmount || 0), 0);
+        const weeklyGrowth: number | null = previousWeekSales > 0
+            ? ((currentWeekSales - previousWeekSales) / previousWeekSales) * 100
+            : null;
+
+        return { currentMonthSales, growth, weeklyGrowth };
     }, [canonicalStoreSales, dashboardMetricsEnabled]);
 
     const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -8553,16 +8845,16 @@ const StoreDashboard: React.FC<{
         } | null;
         const fromHistory = historyState?.screen === 'owner'
             ? {
-                view: (historyState.view as 'dashboard' | 'report' | 'menu' | 'staff' | undefined) ?? 'dashboard',
+                view: (historyState.view as 'dashboard' | 'report' | 'month' | 'menu' | 'staff' | undefined) ?? 'dashboard',
                 reportDate: (historyState.reportDate as string | null | undefined) ?? null,
                 menuSection: (historyState.menuSection as 'items' | 'sets' | undefined) ?? 'items',
             }
             : null;
-        const fromStorage = safeParseJson<{ view?: 'dashboard' | 'report' | 'menu' | 'staff'; reportDate?: string | null; menuSection?: 'items' | 'sets' }>(
+        const fromStorage = safeParseJson<{ view?: 'dashboard' | 'report' | 'month' | 'menu' | 'staff'; reportDate?: string | null; menuSection?: 'items' | 'sets' }>(
             window.localStorage.getItem(ownerViewStorageKey)
         );
 
-        const normalizedUrlView = urlView === 'dashboard' || urlView === 'report' || urlView === 'menu' || urlView === 'staff'
+        const normalizedUrlView = urlView === 'dashboard' || urlView === 'report' || urlView === 'month' || urlView === 'menu' || urlView === 'staff'
             ? urlView
             : null;
         const normalizedUrlMenuSection = urlMenuSection === 'sets' ? 'sets' : (urlMenuSection === 'items' ? 'items' : null);
@@ -8642,7 +8934,7 @@ const StoreDashboard: React.FC<{
         const onPopState = (e: PopStateEvent) => {
             const state = e.state as {
                 screen?: string;
-                view?: 'dashboard' | 'report' | 'menu' | 'staff';
+                view?: 'dashboard' | 'report' | 'month' | 'menu' | 'staff';
                 reportDate?: string | null;
                 menuSection?: 'items' | 'sets';
                 layer?: string;
@@ -8815,11 +9107,24 @@ const StoreDashboard: React.FC<{
             <div className="flex flex-1 overflow-hidden">
                 {/* Sidebar */}
                 <div className="w-64 bg-white border-r hidden md:flex flex-col p-4">
+                    <button
+                        type="button"
+                        onClick={() => setView('dashboard')}
+                        className={`mb-5 flex items-center gap-3 rounded-xl px-4 py-3 text-left transition ${
+                            view === 'dashboard'
+                                ? 'bg-gray-100 text-black'
+                                : 'text-gray-500 hover:bg-gray-50 hover:text-black'
+                        }`}
+                    >
+                        <LayoutDashboard className="w-5 h-5" />
+                        <span className="font-bold text-sm">Store Overview</span>
+                    </button>
+                    <div className="text-[10px] font-black uppercase tracking-[0.18em] text-gray-400 px-4 mb-2">Core tasks</div>
                     <div className="space-y-1">
-                        <NavButton active={view === 'dashboard'} onClick={() => setView('dashboard')} icon={LayoutDashboard} label="Overview" />
-                        <NavButton active={view === 'report'} onClick={() => { setReportDate(null); setView('report'); }} icon={FileText} label="Daily Report" />
-                        <NavButton active={view === 'menu'} onClick={() => setView('menu')} icon={UtensilsCrossed} label="Menu" />
-                        <NavButton active={view === 'staff'} onClick={() => setView('staff')} icon={Users} label="Staff" />
+                        <NavButton active={view === 'report'} onClick={() => { setReportDate(todayDate); setView('report'); }} icon={FileText} label="Today's Sales Report" />
+                        <NavButton active={view === 'month'} onClick={() => setView('month')} icon={ClipboardList} label="Month Close" />
+                        <NavButton active={view === 'menu'} onClick={() => setView('menu')} icon={Package} label="Cost & Inventory" />
+                        <NavButton active={view === 'staff'} onClick={() => setView('staff')} icon={Users} label="Staff & Labor" />
                     </div>
                     <div className="mt-auto p-4 bg-gray-50 rounded-xl">
                         <div className="text-xs font-bold text-gray-500 mb-2 uppercase">Your Performance</div>
@@ -8837,19 +9142,117 @@ const StoreDashboard: React.FC<{
 
                 {/* Mobile Nav */}
                 <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t p-2 flex justify-around z-50">
-                    <button onClick={() => setView('dashboard')} className={`p-3 rounded-xl ${view === 'dashboard' ? 'text-black bg-gray-100' : 'text-gray-400'}`}><LayoutDashboard className="w-6 h-6"/></button>
-                    <button onClick={() => { setReportDate(null); setView('report'); }} className={`p-3 rounded-xl ${view === 'report' ? 'text-black bg-gray-100' : 'text-gray-400'}`}><FileText className="w-6 h-6"/></button>
-                    <button onClick={() => setView('menu')} className={`p-3 rounded-xl ${view === 'menu' ? 'text-black bg-gray-100' : 'text-gray-400'}`}><UtensilsCrossed className="w-6 h-6"/></button>
-                    <button onClick={() => setView('staff')} className={`p-3 rounded-xl ${view === 'staff' ? 'text-black bg-gray-100' : 'text-gray-400'}`}><Users className="w-6 h-6"/></button>
+                    <button aria-label="Store overview" onClick={() => setView('dashboard')} className={`p-3 rounded-xl ${view === 'dashboard' ? 'text-black bg-gray-100' : 'text-gray-400'}`}><LayoutDashboard className="w-5 h-5"/></button>
+                    <button aria-label="Today's sales report" onClick={() => { setReportDate(todayDate); setView('report'); }} className={`p-3 rounded-xl ${view === 'report' ? 'text-black bg-gray-100' : 'text-gray-400'}`}><FileText className="w-5 h-5"/></button>
+                    <button aria-label="Month close" onClick={() => setView('month')} className={`p-3 rounded-xl ${view === 'month' ? 'text-black bg-gray-100' : 'text-gray-400'}`}><ClipboardList className="w-5 h-5"/></button>
+                    <button aria-label="Cost and inventory" onClick={() => setView('menu')} className={`p-3 rounded-xl ${view === 'menu' ? 'text-black bg-gray-100' : 'text-gray-400'}`}><Package className="w-5 h-5"/></button>
+                    <button aria-label="Staff and labor" onClick={() => setView('staff')} className={`p-3 rounded-xl ${view === 'staff' ? 'text-black bg-gray-100' : 'text-gray-400'}`}><Users className="w-5 h-5"/></button>
                 </div>
 
                 {/* Main Content */}
                 <div className="flex-1 overflow-y-auto p-6 md:p-8 pb-24 md:pb-8">
                     {view === 'dashboard' && (
                         <div className="space-y-6">
+                            <div>
+                                <div className="text-xs font-black uppercase tracking-[0.18em] text-gray-400">What to do next</div>
+                                <h2 className="text-2xl font-extrabold mt-1">Store Overview</h2>
+                                <p className="text-sm text-gray-500 mt-1">Start with any item marked as requiring attention.</p>
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+                                <button
+                                    type="button"
+                                    onClick={() => { setReportDate(todayDate); setView('report'); }}
+                                    className={`rounded-2xl border p-5 text-left transition hover:-translate-y-0.5 hover:shadow-md ${
+                                        todayReport ? 'bg-white border-emerald-200' : 'bg-red-50 border-red-200'
+                                    }`}
+                                >
+                                    <div className="flex items-start justify-between gap-3">
+                                        <div className={`p-2 rounded-xl ${todayReport ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
+                                            <FileText className="w-5 h-5" />
+                                        </div>
+                                        <span className={`text-[10px] font-black uppercase px-2 py-1 rounded-full ${
+                                            todayReport ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'
+                                        }`}>
+                                            {todayReport ? 'Submitted' : 'Do today'}
+                                        </span>
+                                    </div>
+                                    <div className="font-extrabold mt-4">Today's Sales Report</div>
+                                    <div className="text-xs text-gray-500 mt-1">{todayDate}</div>
+                                    <div className="text-xs font-bold mt-4 flex items-center gap-1">
+                                        {todayReport ? 'Review or edit report' : 'Enter sales and upload receipt'}
+                                        <ChevronRight className="w-3 h-3" />
+                                    </div>
+                                </button>
+
+                                <button
+                                    type="button"
+                                    onClick={() => setView('month')}
+                                    className={`rounded-2xl border p-5 text-left transition hover:-translate-y-0.5 hover:shadow-md ${
+                                        currentMonthReportStatus.missingDates.length > 0 ? 'bg-amber-50 border-amber-200' : 'bg-white border-emerald-200'
+                                    }`}
+                                >
+                                    <div className="flex items-start justify-between gap-3">
+                                        <div className="p-2 rounded-xl bg-amber-100 text-amber-700"><ClipboardList className="w-5 h-5" /></div>
+                                        <span className={`text-[10px] font-black uppercase px-2 py-1 rounded-full ${
+                                            currentMonthReportStatus.missingDates.length > 0
+                                                ? 'bg-amber-100 text-amber-700'
+                                                : 'bg-emerald-100 text-emerald-700'
+                                        }`}>
+                                            {currentMonthReportStatus.missingDates.length > 0
+                                                ? `${currentMonthReportStatus.missingDates.length} missing`
+                                                : 'On track'}
+                                        </span>
+                                    </div>
+                                    <div className="font-extrabold mt-4">Month Close</div>
+                                    <div className="text-xs text-gray-500 mt-1">
+                                        {currentMonthReportStatus.submitted}/{currentMonthReportStatus.expected} due reports complete
+                                    </div>
+                                    <div className="text-xs font-bold mt-4 flex items-center gap-1">Check monthly readiness <ChevronRight className="w-3 h-3" /></div>
+                                </button>
+
+                                <button
+                                    type="button"
+                                    onClick={() => setView('menu')}
+                                    className={`rounded-2xl border p-5 text-left transition hover:-translate-y-0.5 hover:shadow-md ${
+                                        menusMissingRecipes.length > 0 || setsNeedingAttention.length > 0
+                                            ? 'bg-amber-50 border-amber-200'
+                                            : 'bg-white border-emerald-200'
+                                    }`}
+                                >
+                                    <div className="flex items-start justify-between gap-3">
+                                        <div className="p-2 rounded-xl bg-indigo-100 text-indigo-700"><Package className="w-5 h-5" /></div>
+                                        <span className="text-[10px] font-black uppercase px-2 py-1 rounded-full bg-gray-100 text-gray-700">
+                                            {recipeReadyCount}/{storeMenus.length} recipes
+                                        </span>
+                                    </div>
+                                    <div className="font-extrabold mt-4">Cost & Inventory</div>
+                                    <div className="text-xs text-gray-500 mt-1">{storeMenus.length} single items · {storeSetMenus.length} courses/sets</div>
+                                    <div className="text-xs font-bold mt-4 flex items-center gap-1">Configure menus and recipes <ChevronRight className="w-3 h-3" /></div>
+                                </button>
+
+                                <button
+                                    type="button"
+                                    onClick={() => setView('staff')}
+                                    className={`rounded-2xl border p-5 text-left transition hover:-translate-y-0.5 hover:shadow-md ${
+                                        storeEmployees.length > 0 ? 'bg-white border-emerald-200' : 'bg-amber-50 border-amber-200'
+                                    }`}
+                                >
+                                    <div className="flex items-start justify-between gap-3">
+                                        <div className="p-2 rounded-xl bg-sky-100 text-sky-700"><Users className="w-5 h-5" /></div>
+                                        <span className="text-[10px] font-black uppercase px-2 py-1 rounded-full bg-gray-100 text-gray-700">
+                                            {storeEmployees.length} staff
+                                        </span>
+                                    </div>
+                                    <div className="font-extrabold mt-4">Staff & Labor</div>
+                                    <div className="text-xs text-gray-500 mt-1">Keep the active staff list current.</div>
+                                    <div className="text-xs font-bold mt-4 flex items-center gap-1">Open staff records <ChevronRight className="w-3 h-3" /></div>
+                                </button>
+                            </div>
+
                             {/* Missing Report Alert */}
                             {missingDates.length > 0 && (
-                                <div className="bg-red-50 border-l-4 border-red-500 p-4 rounded-r-xl flex items-start gap-3 shadow-sm animate-pulse">
+                                <div className="bg-red-50 border-l-4 border-red-500 p-4 rounded-r-xl flex items-start gap-3 shadow-sm">
                                     <div className="p-2 bg-white rounded-full text-red-500 shadow-sm">
                                         <CalendarX className="w-6 h-6"/>
                                     </div>
@@ -8879,17 +9282,27 @@ const StoreDashboard: React.FC<{
                                     </div>
                                 </div>
                             )}
-
-                            <h2 className="text-2xl font-bold">Store Overview</h2>
                              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                                 <div className="bg-white p-6 rounded-2xl shadow-sm border relative overflow-hidden group">
                                     <div className="text-sm font-bold text-gray-500 mb-1">Total Sales (Month)</div>
                                     <div className="text-3xl font-extrabold flex items-baseline gap-2">
                                         {store.currency} {metricComparison.currentMonthSales.toLocaleString()}
                                     </div>
-                                    <div className={`flex items-center gap-1 text-xs font-bold mt-2 ${metricComparison.growth >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
-                                        {metricComparison.growth >= 0 ? <ArrowUpRight className="w-4 h-4"/> : <ArrowDownRight className="w-4 h-4"/>}
-                                        {Math.abs(metricComparison.growth).toFixed(1)}% vs Last Month
+                                    <div className={`flex items-center gap-1 text-xs font-bold mt-2 ${
+                                        metricComparison.growth === null
+                                            ? 'text-gray-400'
+                                            : metricComparison.growth >= 0
+                                                ? 'text-emerald-600'
+                                                : 'text-red-500'
+                                    }`}>
+                                        {metricComparison.growth === null
+                                            ? <Minus className="w-4 h-4"/>
+                                            : metricComparison.growth >= 0
+                                                ? <ArrowUpRight className="w-4 h-4"/>
+                                                : <ArrowDownRight className="w-4 h-4"/>}
+                                        {metricComparison.growth === null
+                                            ? 'No prior-month baseline'
+                                            : `${Math.abs(metricComparison.growth).toFixed(1)}% vs Last Month`}
                                     </div>
                                     <div className="absolute right-0 top-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
                                         <TrendingUp className="w-24 h-24 text-black"/>
@@ -8912,7 +9325,17 @@ const StoreDashboard: React.FC<{
                                  <div className="bg-white p-6 rounded-2xl shadow-sm border h-80">
                                      <div className="flex justify-between items-center mb-4">
                                          <h3 className="font-bold text-lg">Weekly Revenue Trend</h3>
-                                         <span className="text-xs font-bold bg-green-100 text-green-700 px-2 py-1 rounded-full">+12% vs Last Week</span>
+                                         <span className={`text-xs font-bold px-2 py-1 rounded-full ${
+                                             metricComparison.weeklyGrowth === null
+                                                 ? 'bg-gray-100 text-gray-500'
+                                                 : metricComparison.weeklyGrowth >= 0
+                                                     ? 'bg-emerald-100 text-emerald-700'
+                                                     : 'bg-red-100 text-red-700'
+                                         }`}>
+                                             {metricComparison.weeklyGrowth === null
+                                                 ? 'No prior-week baseline'
+                                                 : `${metricComparison.weeklyGrowth >= 0 ? '+' : ''}${metricComparison.weeklyGrowth.toFixed(1)}% vs Last Week`}
+                                         </span>
                                      </div>
                                      <ResponsiveContainer width="100%" height="100%">
                                          <BarChart data={salesData} margin={{top:0, bottom: 30}}>
@@ -8983,6 +9406,101 @@ const StoreDashboard: React.FC<{
                         </div>
                     )}
 
+                    {view === 'month' && (
+                        <div className="space-y-6">
+                            <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3">
+                                <div>
+                                    <div className="text-xs font-black uppercase tracking-[0.18em] text-gray-400">Monthly readiness</div>
+                                    <h2 className="text-2xl font-extrabold mt-1">Month Close</h2>
+                                    <p className="text-sm text-gray-500 mt-1">{formatMonthKeyLabel(dashboardMonthKey)} · daily sales report check</p>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => { setReportDate(todayDate); setView('report'); }}
+                                    className="inline-flex items-center justify-center gap-2 rounded-xl bg-black px-4 py-2.5 text-sm font-bold text-white hover:bg-gray-800"
+                                >
+                                    <FileText className="w-4 h-4" />
+                                    Open Today's Report
+                                </button>
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                <div className="bg-white rounded-2xl border border-gray-200 p-5">
+                                    <div className="text-xs font-bold uppercase text-gray-500">Reporting progress</div>
+                                    <div className="text-3xl font-extrabold mt-2">
+                                        {currentMonthReportStatus.expected > 0
+                                            ? Math.round((currentMonthReportStatus.submitted / currentMonthReportStatus.expected) * 100)
+                                            : 100}%
+                                    </div>
+                                    <div className="text-xs text-gray-500 mt-1">
+                                        {currentMonthReportStatus.submitted} of {currentMonthReportStatus.expected} due dates submitted
+                                    </div>
+                                </div>
+                                <div className="bg-white rounded-2xl border border-gray-200 p-5">
+                                    <div className="text-xs font-bold uppercase text-gray-500">Missing reports</div>
+                                    <div className={`text-3xl font-extrabold mt-2 ${
+                                        currentMonthReportStatus.missingDates.length > 0 ? 'text-red-600' : 'text-emerald-600'
+                                    }`}>
+                                        {currentMonthReportStatus.missingDates.length}
+                                    </div>
+                                    <div className="text-xs text-gray-500 mt-1">Dates requiring action before close</div>
+                                </div>
+                                <div className="bg-white rounded-2xl border border-gray-200 p-5">
+                                    <div className="text-xs font-bold uppercase text-gray-500">Reported sales</div>
+                                    <div className="text-2xl font-extrabold mt-2">{store.currency} {formatMoneyDisplay(currentMonthSales)}</div>
+                                    <div className="text-xs text-gray-500 mt-1">Total from submitted daily reports</div>
+                                </div>
+                            </div>
+
+                            <div className={`rounded-2xl border p-6 ${
+                                currentMonthReportStatus.missingDates.length > 0
+                                    ? 'bg-red-50 border-red-200'
+                                    : 'bg-emerald-50 border-emerald-200'
+                            }`}>
+                                <div className="flex items-start gap-3">
+                                    {currentMonthReportStatus.missingDates.length > 0
+                                        ? <AlertOctagon className="w-6 h-6 text-red-600 shrink-0" />
+                                        : <CheckCircle2 className="w-6 h-6 text-emerald-600 shrink-0" />}
+                                    <div className="min-w-0">
+                                        <h3 className={`font-extrabold ${
+                                            currentMonthReportStatus.missingDates.length > 0 ? 'text-red-900' : 'text-emerald-900'
+                                        }`}>
+                                            {currentMonthReportStatus.missingDates.length > 0
+                                                ? 'Complete these reports before month close'
+                                                : 'Daily report check is complete'}
+                                        </h3>
+                                        <p className={`text-sm mt-1 ${
+                                            currentMonthReportStatus.missingDates.length > 0 ? 'text-red-700' : 'text-emerald-700'
+                                        }`}>
+                                            Today is handled separately. The list below covers completed days through yesterday.
+                                        </p>
+                                        {currentMonthReportStatus.missingDates.length > 0 && (
+                                            <div className="flex flex-wrap gap-2 mt-4">
+                                                {currentMonthReportStatus.missingDates.map((date) => (
+                                                    <button
+                                                        key={date}
+                                                        type="button"
+                                                        onClick={() => { setReportDate(date); setView('report'); }}
+                                                        className="rounded-lg border border-red-200 bg-white px-3 py-2 text-xs font-bold text-red-700 hover:bg-red-100"
+                                                    >
+                                                        {date}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="rounded-2xl border border-dashed border-gray-300 bg-white p-5">
+                                <div className="font-bold">Next monthly-close functions</div>
+                                <p className="text-sm text-gray-500 mt-1">
+                                    The close checklist, tax schedule, payment details, and final approval are added in Update 4. No accounting data is written from this preparation screen.
+                                </p>
+                            </div>
+                        </div>
+                    )}
+
                     {view === 'report' && (
                       <SalesReporter
   store={store}
@@ -9005,26 +9523,58 @@ const StoreDashboard: React.FC<{
                     )}
 
                     {view === 'menu' && (
-                        <div className="space-y-4">
-                            <div className="sticky top-2 z-10 bg-gray-50/95 backdrop-blur supports-[backdrop-filter]:bg-gray-50/80 py-1 flex items-center justify-end">
-                                <div className="inline-flex items-center rounded-xl border border-gray-200 bg-white p-1">
+                        <div className="space-y-6">
+                            <div>
+                                <div className="text-xs font-black uppercase tracking-[0.18em] text-gray-400">Prepare cost management</div>
+                                <h2 className="text-2xl font-extrabold mt-1">Cost & Inventory</h2>
+                                <p className="text-sm text-gray-500 mt-1">Register single-item recipes first, then build courses and sets from those items.</p>
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                                <div className="rounded-2xl border border-gray-200 bg-white p-4">
+                                    <div className="text-xs font-bold uppercase text-gray-500">Single items</div>
+                                    <div className="text-2xl font-extrabold mt-1">{storeMenus.length}</div>
+                                    <div className="text-xs text-gray-500 mt-1">Individually sold menu items</div>
+                                </div>
+                                <div className={`rounded-2xl border p-4 ${
+                                    menusMissingRecipes.length > 0 ? 'border-amber-200 bg-amber-50' : 'border-emerald-200 bg-white'
+                                }`}>
+                                    <div className="text-xs font-bold uppercase text-gray-500">Recipes ready</div>
+                                    <div className="text-2xl font-extrabold mt-1">{recipeReadyCount}/{storeMenus.length}</div>
+                                    <div className="text-xs text-gray-500 mt-1">
+                                        {menusMissingRecipes.length > 0 ? `${menusMissingRecipes.length} items need ingredients` : 'All item recipes configured'}
+                                    </div>
+                                </div>
+                                <div className={`rounded-2xl border p-4 ${
+                                    setsNeedingAttention.length > 0 ? 'border-amber-200 bg-amber-50' : 'border-emerald-200 bg-white'
+                                }`}>
+                                    <div className="text-xs font-bold uppercase text-gray-500">Courses & sets</div>
+                                    <div className="text-2xl font-extrabold mt-1">{storeSetMenus.length}</div>
+                                    <div className="text-xs text-gray-500 mt-1">
+                                        {setsNeedingAttention.length > 0 ? `${setsNeedingAttention.length} need components` : 'Components configured'}
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="sticky top-2 z-10 bg-gray-50/95 backdrop-blur supports-[backdrop-filter]:bg-gray-50/80 py-1">
+                                <div className="grid grid-cols-2 items-stretch rounded-2xl border border-gray-200 bg-white p-1">
                                     <button
                                         type="button"
                                         onClick={() => setMenuSection('items')}
-                                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
+                                        className={`px-3 py-3 rounded-xl text-sm font-bold transition ${
                                             menuSection === 'items' ? 'bg-black text-white' : 'text-gray-600 hover:bg-gray-100'
                                         }`}
                                     >
-                                        Items ({storeMenus.length})
+                                        Single Items & Recipes ({storeMenus.length})
                                     </button>
                                     <button
                                         type="button"
                                         onClick={() => setMenuSection('sets')}
-                                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
+                                        className={`px-3 py-3 rounded-xl text-sm font-bold transition ${
                                             menuSection === 'sets' ? 'bg-black text-white' : 'text-gray-600 hover:bg-gray-100'
                                         }`}
                                     >
-                                        Set Menus ({storeSetMenus.length})
+                                        Courses & Sets ({storeSetMenus.length})
                                     </button>
                                 </div>
                             </div>
@@ -9051,12 +9601,21 @@ const StoreDashboard: React.FC<{
                     )}
 
                     {view === 'staff' && (
-                        <EmployeeManager
-                            store={store}
-                            employees={storeEmployees}
-                            positions={globalConfig.positions}
-                            onUpdate={(emps) => onUpdateEmployees(emps)}
-                        />
+                        <div className="space-y-6">
+                            <div>
+                                <div className="text-xs font-black uppercase tracking-[0.18em] text-gray-400">People records</div>
+                                <h2 className="text-2xl font-extrabold mt-1">Staff & Labor</h2>
+                                <p className="text-sm text-gray-500 mt-1">
+                                    Keep the active staff list current. Working hours, overtime, payroll, and labor-cost ratio are added in Update 7.
+                                </p>
+                            </div>
+                            <EmployeeManager
+                                store={store}
+                                employees={storeEmployees}
+                                positions={globalConfig.positions}
+                                onUpdate={(emps) => onUpdateEmployees(emps)}
+                            />
+                        </div>
                     )}
                 </div>
             </div>
@@ -9497,6 +10056,7 @@ const OnboardingScreen: React.FC<{
 
 const App = () => {
   const localHqPreviewMode = isLocalHqPreviewMode();
+  const localOwnerPreviewMode = isLocalOwnerPreviewMode();
   const [user, setUser] = useState<User | null>(null);
   const [sessionEmail, setSessionEmail] = useState<string | null>(null);
 
@@ -10194,6 +10754,53 @@ if (localHqPreviewMode) {
       onUpdateStore={() => {}}
       onSaveStoreStocks={() => {}}
       onDeleteStore={async () => {}}
+      onUpdateMenu={() => {}}
+      onCreateMenu={() => {}}
+      onDeleteMenu={() => {}}
+      onUpdateSetMenu={() => {}}
+      onCreateSetMenu={() => {}}
+      onDeleteSetMenu={() => {}}
+      onUpdateEmployees={() => {}}
+      onAddIngredient={() => {}}
+    />
+  );
+}
+
+if (localOwnerPreviewMode) {
+  const previewStore = MOCK_STORES[0];
+  const previewUser = MOCK_USERS.find((mockUser) => mockUser.role === UserRole.OWNER) ?? {
+    name: 'Store Owner Preview',
+    email: 'owner-preview@chibo.local',
+    role: UserRole.OWNER,
+    storeId: previewStore.id,
+  };
+  const previewSetMenus: SetMenu[] = [
+    {
+      id: 'SM_PREVIEW_1',
+      storeId: previewStore.id,
+      name: 'CHIBO Course',
+      price: 3200,
+      items: [
+        { menuId: 'M1', quantity: 1 },
+        { menuId: 'M4', quantity: 1 },
+      ],
+    },
+  ];
+
+  return (
+    <StoreDashboard
+      user={previewUser}
+      store={previewStore}
+      onLogout={() => {
+        window.location.href = window.location.pathname;
+      }}
+      sales={MOCK_SALES}
+      menus={MOCK_MENUS}
+      setMenus={previewSetMenus}
+      employees={MOCK_EMPLOYEES}
+      ingredients={MOCK_INGREDIENTS}
+      globalConfig={DEFAULT_GLOBAL_CONFIG}
+      onAddSale={() => {}}
       onUpdateMenu={() => {}}
       onCreateMenu={() => {}}
       onDeleteMenu={() => {}}
