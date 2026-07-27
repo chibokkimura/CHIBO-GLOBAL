@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test:smoke:supabase": "node scripts/supabase-smoke.mjs"
+    "test:smoke:supabase": "node scripts/supabase-smoke.mjs",
+    "test:audit:supabase": "node scripts/supabase-readonly-audit.mjs docs/PRODUCTION_BASELINE_2026-07-27.json"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.0.0",
