@@ -103,6 +103,15 @@ const signedImageUrlCache = new Map<string, { url: string; expiresAt: number }>(
 const HQ_ADMIN_EMAIL = 'chibo.global.mgsystem@gmail.com';
 const HQ_BOOTSTRAP_EMAILS = [HQ_ADMIN_EMAIL];
 
+function isEditableNavigationTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const tagName = target.tagName;
+  return target.isContentEditable
+    || tagName === 'INPUT'
+    || tagName === 'TEXTAREA'
+    || tagName === 'SELECT';
+}
+
 function isHqAdminEmail(email: string | null | undefined): boolean {
   return (email ?? '').trim().toLowerCase() === HQ_ADMIN_EMAIL;
 }
@@ -7780,20 +7789,98 @@ const HQDashboard: React.FC<{
     }
   }, [stores, sales, fxRates, fxStatus, fxSourceText]);
 
+  const openHqDashboardOverlay = useCallback((overlay: 'settings' | 'sales-analytics') => {
+    if (typeof window === 'undefined') return;
+    setIsSettingsOpen(overlay === 'settings');
+    setIsSalesAnalyticsOpen(overlay === 'sales-analytics');
+    window.history.pushState(
+      {
+        screen: 'hq',
+        selectedStoreId: null,
+        overlay,
+        settingsTab,
+      },
+      ''
+    );
+  }, [settingsTab]);
+
+  const closeHqDashboardOverlay = useCallback((overlay: 'settings' | 'sales-analytics') => {
+    if (typeof window !== 'undefined') {
+      const state = window.history.state as { screen?: string; overlay?: string } | null;
+      if (state?.screen === 'hq' && state.overlay === overlay) {
+        window.history.back();
+        return;
+      }
+    }
+    if (overlay === 'settings') setIsSettingsOpen(false);
+    if (overlay === 'sales-analytics') setIsSalesAnalyticsOpen(false);
+  }, []);
+
+  const selectSettingsTab = useCallback((tab: 'general' | 'locations' | 'finance' | 'ops' | 'menu') => {
+    setSettingsTab(tab);
+    if (typeof window === 'undefined') return;
+    const state = window.history.state as { screen?: string; overlay?: string } | null;
+    if (state?.screen === 'hq' && state.overlay === 'settings') {
+      window.history.replaceState({ ...state, settingsTab: tab }, '');
+    }
+  }, []);
+
   useEffect(() => {
     if (typeof window === 'undefined' || navRestoreRef.current) return;
-    const historyState = window.history.state;
-    const historyStoreId = historyState?.screen === 'hq'
-      ? (historyState.selectedStoreId as string | null | undefined) ?? null
-      : null;
-    const persistedStoreId = historyStoreId ?? window.localStorage.getItem(HQ_SELECTED_STORE_STORAGE_KEY);
+    const historyState = window.history.state as {
+      screen?: string;
+      selectedStoreId?: string | null;
+      storeId?: string | null;
+      section?: string;
+      menuSection?: string;
+      overlay?: string;
+      settingsTab?: string;
+    } | null;
+    const hasAppHistory = historyState?.screen === 'hq' || historyState?.screen === 'hq-detail';
+    const historyStoreId = historyState?.screen === 'hq-detail'
+      ? historyState.storeId ?? null
+      : historyState?.screen === 'hq'
+        ? historyState.selectedStoreId ?? null
+        : null;
+    const persistedStoreId = hasAppHistory
+      ? historyStoreId
+      : window.localStorage.getItem(HQ_SELECTED_STORE_STORAGE_KEY);
     if (persistedStoreId && stores.length === 0) return;
 
     const restoredStore = persistedStoreId
       ? stores.find(s => s.id === persistedStoreId) ?? null
       : null;
     setSelectedStore(restoredStore);
-    window.history.replaceState({ screen: 'hq', selectedStoreId: restoredStore?.id ?? null }, '');
+    const restoredOverlay = !restoredStore && historyState?.screen === 'hq'
+      ? historyState.overlay
+      : null;
+    setIsSettingsOpen(restoredOverlay === 'settings');
+    setIsSalesAnalyticsOpen(restoredOverlay === 'sales-analytics');
+    if (
+      historyState?.settingsTab === 'general'
+      || historyState?.settingsTab === 'locations'
+      || historyState?.settingsTab === 'finance'
+      || historyState?.settingsTab === 'ops'
+      || historyState?.settingsTab === 'menu'
+    ) {
+      setSettingsTab(historyState.settingsTab);
+    }
+    window.history.replaceState(
+      restoredStore
+        ? {
+            screen: 'hq-detail',
+            storeId: restoredStore.id,
+            section: historyState?.screen === 'hq-detail' ? historyState.section ?? 'sales' : 'sales',
+            menuSection: historyState?.screen === 'hq-detail' ? historyState.menuSection ?? 'items' : 'items',
+          }
+        : {
+            screen: 'hq',
+            selectedStoreId: null,
+            overlay: restoredOverlay ?? null,
+            settingsTab: historyState?.settingsTab ?? 'general',
+          },
+      ''
+    );
     navReadyRef.current = true;
     navRestoreRef.current = true;
   }, [stores]);
@@ -7814,29 +7901,60 @@ const HQDashboard: React.FC<{
       popLockRef.current = false;
       return;
     }
-    window.history.pushState({ screen: 'hq', selectedStoreId: selectedStore?.id ?? null }, '');
-  }, [selectedStore]);
+    window.history.pushState(
+      selectedStore
+        ? {
+            screen: 'hq-detail',
+            storeId: selectedStore.id,
+            section: 'sales',
+            menuSection: 'items',
+          }
+        : {
+            screen: 'hq',
+            selectedStoreId: null,
+            overlay: null,
+            settingsTab: 'general',
+          },
+      ''
+    );
+  }, [selectedStore?.id]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const onPopState = (e: PopStateEvent) => {
-      const state = e.state;
-      if (!state || state.screen !== 'hq') {
-        // keep user inside app while session is valid
-        window.history.pushState({ screen: 'hq', selectedStoreId: selectedStore?.id ?? null }, '');
+      const state = e.state as {
+        screen?: string;
+        selectedStoreId?: string | null;
+        storeId?: string | null;
+        overlay?: string;
+        settingsTab?: string;
+      } | null;
+      if (!state || (state.screen !== 'hq' && state.screen !== 'hq-detail')) {
         return;
       }
       popLockRef.current = true;
-      if (!state.selectedStoreId) {
-        setSelectedStore(null);
-        return;
+      setIsSettingsOpen(state.screen === 'hq' && state.overlay === 'settings');
+      setIsSalesAnalyticsOpen(state.screen === 'hq' && state.overlay === 'sales-analytics');
+      if (
+        state.settingsTab === 'general'
+        || state.settingsTab === 'locations'
+        || state.settingsTab === 'finance'
+        || state.settingsTab === 'ops'
+        || state.settingsTab === 'menu'
+      ) {
+        setSettingsTab(state.settingsTab);
       }
-      const store = stores.find(s => s.id === state.selectedStoreId) ?? null;
+      const storeId = state.screen === 'hq-detail'
+        ? state.storeId
+        : state.selectedStoreId;
+      const store = storeId
+        ? stores.find(s => s.id === storeId) ?? null
+        : null;
       setSelectedStore(store);
     };
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
-  }, [stores, selectedStore]);
+  }, [stores]);
 
   useEffect(() => {
     if (!selectedStore) return;
@@ -7896,7 +8014,7 @@ const HQDashboard: React.FC<{
              </div>
           </div>
           <div className="flex items-center gap-4">
-             <button onClick={() => setIsSettingsOpen(true)} className="p-2 hover:bg-gray-100 rounded-full transition text-gray-600 flex items-center gap-2">
+             <button onClick={() => openHqDashboardOverlay('settings')} className="p-2 hover:bg-gray-100 rounded-full transition text-gray-600 flex items-center gap-2">
                  <Settings className="w-5 h-5" />
                  <span className="text-sm font-bold hidden md:inline">Global Settings</span>
              </button>
@@ -7913,15 +8031,15 @@ const HQDashboard: React.FC<{
                <div className="bg-white rounded-2xl shadow-xl max-w-2xl w-full flex flex-col max-h-[90vh]" onClick={e => e.stopPropagation()}>
                    <div className="p-6 border-b flex justify-between items-center bg-gray-50 rounded-t-2xl">
                        <h2 className="text-xl font-bold">Global Configuration</h2>
-                       <button onClick={() => setIsSettingsOpen(false)}><XCircle className="w-6 h-6 text-gray-400 hover:text-black"/></button>
+                       <button onClick={() => closeHqDashboardOverlay('settings')}><XCircle className="w-6 h-6 text-gray-400 hover:text-black"/></button>
                    </div>
 
                    <div className="flex border-b">
-                       <button onClick={() => setSettingsTab('general')} className={`flex-1 py-3 text-sm font-bold border-b-2 ${settingsTab === 'general' ? 'border-black text-black' : 'border-transparent text-gray-500 hover:bg-gray-50'}`}>Store Setup</button>
-                       <button onClick={() => setSettingsTab('locations')} className={`flex-1 py-3 text-sm font-bold border-b-2 ${settingsTab === 'locations' ? 'border-black text-black' : 'border-transparent text-gray-500 hover:bg-gray-50'}`}>Locations</button>
-                       <button onClick={() => setSettingsTab('finance')} className={`flex-1 py-3 text-sm font-bold border-b-2 ${settingsTab === 'finance' ? 'border-black text-black' : 'border-transparent text-gray-500 hover:bg-gray-50'}`}>Finance</button>
-                       <button onClick={() => setSettingsTab('ops')} className={`flex-1 py-3 text-sm font-bold border-b-2 ${settingsTab === 'ops' ? 'border-black text-black' : 'border-transparent text-gray-500 hover:bg-gray-50'}`}>Operations</button>
-                       <button onClick={() => setSettingsTab('menu')} className={`flex-1 py-3 text-sm font-bold border-b-2 ${settingsTab === 'menu' ? 'border-black text-black' : 'border-transparent text-gray-500 hover:bg-gray-50'}`}>Menu Config</button>
+                       <button onClick={() => selectSettingsTab('general')} className={`flex-1 py-3 text-sm font-bold border-b-2 ${settingsTab === 'general' ? 'border-black text-black' : 'border-transparent text-gray-500 hover:bg-gray-50'}`}>Store Setup</button>
+                       <button onClick={() => selectSettingsTab('locations')} className={`flex-1 py-3 text-sm font-bold border-b-2 ${settingsTab === 'locations' ? 'border-black text-black' : 'border-transparent text-gray-500 hover:bg-gray-50'}`}>Locations</button>
+                       <button onClick={() => selectSettingsTab('finance')} className={`flex-1 py-3 text-sm font-bold border-b-2 ${settingsTab === 'finance' ? 'border-black text-black' : 'border-transparent text-gray-500 hover:bg-gray-50'}`}>Finance</button>
+                       <button onClick={() => selectSettingsTab('ops')} className={`flex-1 py-3 text-sm font-bold border-b-2 ${settingsTab === 'ops' ? 'border-black text-black' : 'border-transparent text-gray-500 hover:bg-gray-50'}`}>Operations</button>
+                       <button onClick={() => selectSettingsTab('menu')} className={`flex-1 py-3 text-sm font-bold border-b-2 ${settingsTab === 'menu' ? 'border-black text-black' : 'border-transparent text-gray-500 hover:bg-gray-50'}`}>Menu Config</button>
                    </div>
 
                    <div className="p-6 overflow-y-auto">
@@ -7994,7 +8112,7 @@ const HQDashboard: React.FC<{
                    </div>
 
                    <div className="p-4 border-t bg-gray-50 rounded-b-2xl text-right">
-                       <button onClick={() => setIsSettingsOpen(false)} className="bg-black text-white px-6 py-2 rounded-xl font-bold text-sm hover:bg-gray-800">Done</button>
+                       <button onClick={() => closeHqDashboardOverlay('settings')} className="bg-black text-white px-6 py-2 rounded-xl font-bold text-sm hover:bg-gray-800">Done</button>
                    </div>
                </div>
            </div>
@@ -8002,7 +8120,7 @@ const HQDashboard: React.FC<{
 
        <SalesAnalyticsModal
             isOpen={isSalesAnalyticsOpen}
-            onClose={() => setIsSalesAnalyticsOpen(false)}
+            onClose={() => closeHqDashboardOverlay('sales-analytics')}
             sales={sales}
             stores={stores}
             fxRates={fxRates}
@@ -8016,7 +8134,7 @@ const HQDashboard: React.FC<{
               {/* Sales Card */}
               <button
                 type="button"
-                onClick={() => setIsSalesAnalyticsOpen(true)}
+                onClick={() => openHqDashboardOverlay('sales-analytics')}
                 className="bg-black text-white p-6 rounded-2xl shadow-lg cursor-pointer hover:scale-105 active:scale-95 hover:shadow-2xl transition-all duration-300 group text-left relative overflow-hidden focus:ring-4 focus:ring-black/20 outline-none"
               >
                   <div className="absolute inset-0 bg-white/10 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
@@ -8369,13 +8487,70 @@ const StoreDashboard: React.FC<{
         setCalendarMonth(prev => new Date(prev.getFullYear(), prev.getMonth() + 1, 1));
     };
 
+    const pushOwnerLayer = useCallback((
+        layer: 'menu-editor' | 'set-menu-editor' | 'missing-calendar',
+        entityId?: string
+    ) => {
+        if (typeof window === 'undefined') return;
+        window.history.pushState(
+            {
+                screen: 'owner',
+                view,
+                reportDate,
+                menuSection,
+                layer,
+                entityId: entityId ?? null,
+            },
+            ''
+        );
+    }, [view, reportDate, menuSection]);
+
+    const openOwnerMenuEditor = useCallback((menu: Menu) => {
+        setEditingMenu(menu);
+        setEditingSetMenu(null);
+        pushOwnerLayer('menu-editor', menu.id);
+    }, [pushOwnerLayer]);
+
+    const openOwnerSetMenuEditor = useCallback((setMenu: SetMenu) => {
+        setEditingSetMenu(setMenu);
+        setEditingMenu(null);
+        pushOwnerLayer('set-menu-editor', setMenu.id);
+    }, [pushOwnerLayer]);
+
+    const openOwnerMissingCalendar = useCallback(() => {
+        setCalendarMonth(new Date(new Date().getFullYear(), new Date().getMonth(), 1));
+        setShowMissingCalendar(true);
+        pushOwnerLayer('missing-calendar');
+    }, [pushOwnerLayer]);
+
+    const closeOwnerLayer = useCallback((
+        layer: 'menu-editor' | 'set-menu-editor' | 'missing-calendar',
+        fallback: () => void
+    ) => {
+        if (typeof window !== 'undefined') {
+            const state = window.history.state as { screen?: string; layer?: string } | null;
+            if (state?.screen === 'owner' && state.layer === layer) {
+                window.history.back();
+                return;
+            }
+        }
+        fallback();
+    }, []);
+
     useEffect(() => {
         if (typeof window === 'undefined' || navRestoreRef.current) return;
         const url = new URL(window.location.href);
         const urlView = url.searchParams.get('ov');
         const urlReportDate = url.searchParams.get('od');
         const urlMenuSection = url.searchParams.get('om');
-        const historyState = window.history.state;
+        const historyState = window.history.state as {
+            screen?: string;
+            view?: string;
+            reportDate?: string | null;
+            menuSection?: string;
+            layer?: string;
+            entityId?: string | null;
+        } | null;
         const fromHistory = historyState?.screen === 'owner'
             ? {
                 view: (historyState.view as 'dashboard' | 'report' | 'menu' | 'staff' | undefined) ?? 'dashboard',
@@ -8399,10 +8574,32 @@ const StoreDashboard: React.FC<{
         setView(restoredView);
         setReportDate(restoredReportDate);
         setMenuSection(restoredMenuSection);
-        window.history.replaceState({ screen: 'owner', view: restoredView, reportDate: restoredReportDate, menuSection: restoredMenuSection }, '');
+        const restoredLayer = fromHistory ? historyState?.layer ?? null : null;
+        setShowMissingCalendar(restoredLayer === 'missing-calendar');
+        setEditingMenu(
+            restoredLayer === 'menu-editor'
+                ? storeMenus.find(menu => menu.id === historyState?.entityId) ?? null
+                : null
+        );
+        setEditingSetMenu(
+            restoredLayer === 'set-menu-editor'
+                ? storeSetMenus.find(setMenu => setMenu.id === historyState?.entityId) ?? null
+                : null
+        );
+        window.history.replaceState(
+            {
+                screen: 'owner',
+                view: restoredView,
+                reportDate: restoredReportDate,
+                menuSection: restoredMenuSection,
+                layer: restoredLayer,
+                entityId: historyState?.entityId ?? null,
+            },
+            ''
+        );
         navReadyRef.current = true;
         navRestoreRef.current = true;
-    }, [ownerViewStorageKey]);
+    }, [ownerViewStorageKey, storeMenus, storeSetMenus]);
 
     useEffect(() => {
         if (typeof window === 'undefined') return;
@@ -8416,7 +8613,7 @@ const StoreDashboard: React.FC<{
             popLockRef.current = false;
             return;
         }
-        window.history.pushState({ screen: 'owner', view, reportDate, menuSection }, '');
+        window.history.pushState({ screen: 'owner', view, reportDate, menuSection, layer: null, entityId: null }, '');
     }, [view, reportDate, menuSection]);
 
     useEffect(() => {
@@ -8443,21 +8640,36 @@ const StoreDashboard: React.FC<{
     useEffect(() => {
         if (typeof window === 'undefined') return;
         const onPopState = (e: PopStateEvent) => {
-            const state = e.state;
+            const state = e.state as {
+                screen?: string;
+                view?: 'dashboard' | 'report' | 'menu' | 'staff';
+                reportDate?: string | null;
+                menuSection?: 'items' | 'sets';
+                layer?: string;
+                entityId?: string | null;
+            } | null;
             if (!state || state.screen !== 'owner') {
-                window.history.pushState({ screen: 'owner', view, reportDate, menuSection }, '');
                 return;
             }
             popLockRef.current = true;
             setReportDate(state.reportDate ?? null);
             setView(state.view ?? 'dashboard');
             setMenuSection(state.menuSection === 'sets' ? 'sets' : 'items');
-            setEditingMenu(null);
-            setEditingSetMenu(null);
+            setShowMissingCalendar(state.layer === 'missing-calendar');
+            setEditingMenu(
+                state.layer === 'menu-editor'
+                    ? storeMenus.find(menu => menu.id === state.entityId) ?? null
+                    : null
+            );
+            setEditingSetMenu(
+                state.layer === 'set-menu-editor'
+                    ? storeSetMenus.find(setMenu => setMenu.id === state.entityId) ?? null
+                    : null
+            );
         };
         window.addEventListener('popstate', onPopState);
         return () => window.removeEventListener('popstate', onPopState);
-    }, [view, reportDate, menuSection]);
+    }, [storeMenus, storeSetMenus]);
 
     return (
         <div className="min-h-screen bg-gray-50 flex flex-col">
@@ -8470,9 +8682,9 @@ const StoreDashboard: React.FC<{
                     onAddIngredient={onAddIngredient}
                     onSave={async (updatedMenu) => {
                         await Promise.resolve(onUpdateMenu(updatedMenu));
-                        setEditingMenu(null);
+                        closeOwnerLayer('menu-editor', () => setEditingMenu(null));
                     }}
-                    onBack={() => setEditingMenu(null)}
+                    onBack={() => closeOwnerLayer('menu-editor', () => setEditingMenu(null))}
                 />
             )}
             {editingSetMenu && (
@@ -8481,9 +8693,9 @@ const StoreDashboard: React.FC<{
                     menus={storeMenus}
                     onSave={async (nextSetMenu) => {
                         await Promise.resolve(onUpdateSetMenu(nextSetMenu));
-                        setEditingSetMenu(null);
+                        closeOwnerLayer('set-menu-editor', () => setEditingSetMenu(null));
                     }}
-                    onBack={() => setEditingSetMenu(null)}
+                    onBack={() => closeOwnerLayer('set-menu-editor', () => setEditingSetMenu(null))}
                 />
             )}
 
@@ -8494,7 +8706,7 @@ const StoreDashboard: React.FC<{
                             <div className="font-extrabold text-lg">Missing Reports Calendar</div>
                             <button
                                 type="button"
-                                onClick={() => setShowMissingCalendar(false)}
+                                onClick={() => closeOwnerLayer('missing-calendar', () => setShowMissingCalendar(false))}
                                 className="p-2 rounded-full hover:bg-gray-100 transition"
                             >
                                 <X className="w-5 h-5 text-gray-500" />
@@ -8658,10 +8870,7 @@ const StoreDashboard: React.FC<{
 
                                           <button
                                             type="button"
-                                            onClick={() => {
-                                              setCalendarMonth(new Date(new Date().getFullYear(), new Date().getMonth(), 1));
-                                              setShowMissingCalendar(true);
-                                            }}
+                                            onClick={openOwnerMissingCalendar}
                                             className="px-2 py-1 bg-white text-red-700 text-xs font-bold rounded border border-red-200 hover:bg-red-50 transition"
                                           >
                                             View Older Dates
@@ -8824,8 +9033,8 @@ const StoreDashboard: React.FC<{
                                 <MenuManager
                                     store={store}
                                     menus={storeMenus}
-                                    onEdit={setEditingMenu}
-                                    onCreate={(menu) => setEditingMenu(menu)}
+                                    onEdit={openOwnerMenuEditor}
+                                    onCreate={openOwnerMenuEditor}
                                     onDelete={onDeleteMenu}
                                 />
                             ) : (
@@ -8833,8 +9042,8 @@ const StoreDashboard: React.FC<{
                                     store={store}
                                     menus={storeMenus}
                                     setMenus={storeSetMenus}
-                                    onEdit={setEditingSetMenu}
-                                    onCreate={(setMenu) => setEditingSetMenu(setMenu)}
+                                    onEdit={openOwnerSetMenuEditor}
+                                    onCreate={openOwnerSetMenuEditor}
                                     onDelete={onDeleteSetMenu}
                                 />
                             )}
@@ -9295,6 +9504,28 @@ const App = () => {
     if (typeof document !== 'undefined') {
       document.documentElement.lang = 'en';
     }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.key !== 'Backspace'
+        || event.defaultPrevented
+        || event.metaKey
+        || event.ctrlKey
+        || event.altKey
+        || isEditableNavigationTarget(event.target)
+      ) {
+        return;
+      }
+      const state = window.history.state as { screen?: string } | null;
+      if (!state?.screen) return;
+      event.preventDefault();
+      window.history.back();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
   useEffect(() => {
