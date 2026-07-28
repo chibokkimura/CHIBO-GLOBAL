@@ -8920,6 +8920,7 @@ const StoreDashboard: React.FC<{
 }> = ({ user, store, onLogout, sales, menus, setMenus, employees, ingredients, globalConfig, onAddSale, onUpdateMenu, onCreateMenu, onDeleteMenu, onUpdateSetMenu, onCreateSetMenu, onDeleteSetMenu, onUpdateEmployees, onAddIngredient }) => {
     const [view, setView] = useState<'dashboard' | 'report' | 'month' | 'menu' | 'staff'>('dashboard');
     const [menuSection, setMenuSection] = useState<'items' | 'sets'>('items');
+    const [ownerCostSection, setOwnerCostSection] = useState<'cost' | 'recipes'>('cost');
     const [reportDate, setReportDate] = useState<string | null>(null);
     const [editingMenu, setEditingMenu] = useState<Menu | null>(null);
     const [editingSetMenu, setEditingSetMenu] = useState<SetMenu | null>(null);
@@ -9815,6 +9816,30 @@ const StoreDashboard: React.FC<{
 
                     {view === 'menu' && (
                         <div className="space-y-6">
+                            <div className="sticky top-2 z-20 grid grid-cols-2 rounded-2xl border border-gray-200 bg-white p-1 shadow-sm">
+                                <button
+                                    type="button"
+                                    aria-pressed={ownerCostSection === 'cost'}
+                                    onClick={() => setOwnerCostSection('cost')}
+                                    className={`rounded-xl px-4 py-3 text-sm font-extrabold transition ${
+                                        ownerCostSection === 'cost' ? 'bg-black text-white' : 'text-gray-500 hover:bg-gray-50 hover:text-black'
+                                    }`}
+                                >
+                                    원가·매입·재고
+                                </button>
+                                <button
+                                    type="button"
+                                    aria-pressed={ownerCostSection === 'recipes'}
+                                    onClick={() => setOwnerCostSection('recipes')}
+                                    className={`rounded-xl px-4 py-3 text-sm font-extrabold transition ${
+                                        ownerCostSection === 'recipes' ? 'bg-black text-white' : 'text-gray-500 hover:bg-gray-50 hover:text-black'
+                                    }`}
+                                >
+                                    메뉴·코스·레시피
+                                </button>
+                            </div>
+
+                            {ownerCostSection === 'cost' && (
                             <CostInventoryWorkspace
                                 store={store}
                                 ingredients={ingredients}
@@ -9825,36 +9850,38 @@ const StoreDashboard: React.FC<{
                                 mode="owner"
                                 onAddIngredient={onAddIngredient}
                             />
+                            )}
 
-                            <div className="border-t border-gray-200 pt-6">
+                            {ownerCostSection === 'recipes' && (
+                            <div className="pt-2">
                             <div>
-                                <div className="text-xs font-black uppercase tracking-[0.18em] text-gray-400">Recipe setup</div>
-                                <h2 className="text-2xl font-extrabold mt-1">Menus, Courses & Recipes</h2>
-                                <p className="text-sm text-gray-500 mt-1">Register ingredients per single item, then build courses and sets from those items.</p>
+                                <div className="text-xs font-black tracking-[0.12em] text-gray-400">메뉴 원가 설정</div>
+                                <h2 className="text-2xl font-extrabold mt-1">메뉴·코스·레시피</h2>
+                                <p className="text-sm text-gray-500 mt-1">단품 메뉴의 재료 사용량을 먼저 등록한 뒤 코스와 세트를 구성합니다.</p>
                             </div>
 
                             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                                 <div className="rounded-2xl border border-gray-200 bg-white p-4">
-                                    <div className="text-xs font-bold uppercase text-gray-500">Single items</div>
+                                    <div className="text-xs font-bold text-gray-500">단품 메뉴</div>
                                     <div className="text-2xl font-extrabold mt-1">{storeMenus.length}</div>
-                                    <div className="text-xs text-gray-500 mt-1">Individually sold menu items</div>
+                                    <div className="text-xs text-gray-500 mt-1">개별 판매 메뉴</div>
                                 </div>
                                 <div className={`rounded-2xl border p-4 ${
                                     menusMissingRecipes.length > 0 ? 'border-amber-200 bg-amber-50' : 'border-emerald-200 bg-white'
                                 }`}>
-                                    <div className="text-xs font-bold uppercase text-gray-500">Recipes ready</div>
+                                    <div className="text-xs font-bold text-gray-500">레시피 완료</div>
                                     <div className="text-2xl font-extrabold mt-1">{recipeReadyCount}/{storeMenus.length}</div>
                                     <div className="text-xs text-gray-500 mt-1">
-                                        {menusMissingRecipes.length > 0 ? `${menusMissingRecipes.length} items need ingredients` : 'All item recipes configured'}
+                                        {menusMissingRecipes.length > 0 ? `${menusMissingRecipes.length}개 메뉴에 재료 등록 필요` : '모든 단품 레시피 완료'}
                                     </div>
                                 </div>
                                 <div className={`rounded-2xl border p-4 ${
                                     setsNeedingAttention.length > 0 ? 'border-amber-200 bg-amber-50' : 'border-emerald-200 bg-white'
                                 }`}>
-                                    <div className="text-xs font-bold uppercase text-gray-500">Courses & sets</div>
+                                    <div className="text-xs font-bold text-gray-500">코스·세트</div>
                                     <div className="text-2xl font-extrabold mt-1">{storeSetMenus.length}</div>
                                     <div className="text-xs text-gray-500 mt-1">
-                                        {setsNeedingAttention.length > 0 ? `${setsNeedingAttention.length} need components` : 'Components configured'}
+                                        {setsNeedingAttention.length > 0 ? `${setsNeedingAttention.length}개 구성메뉴 등록 필요` : '구성메뉴 등록 완료'}
                                     </div>
                                 </div>
                             </div>
@@ -9868,7 +9895,7 @@ const StoreDashboard: React.FC<{
                                             menuSection === 'items' ? 'bg-black text-white' : 'text-gray-600 hover:bg-gray-100'
                                         }`}
                                     >
-                                        Single Items & Recipes ({storeMenus.length})
+                                        단품 메뉴·레시피 ({storeMenus.length})
                                     </button>
                                     <button
                                         type="button"
@@ -9877,7 +9904,7 @@ const StoreDashboard: React.FC<{
                                             menuSection === 'sets' ? 'bg-black text-white' : 'text-gray-600 hover:bg-gray-100'
                                         }`}
                                     >
-                                        Courses & Sets ({storeSetMenus.length})
+                                        코스·세트 ({storeSetMenus.length})
                                     </button>
                                 </div>
                             </div>
@@ -9901,6 +9928,7 @@ const StoreDashboard: React.FC<{
                                 />
                             )}
                             </div>
+                            )}
                         </div>
                     )}
 
