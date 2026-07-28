@@ -259,7 +259,18 @@ const CostInventoryWorkspace: React.FC<Props> = ({
   const previousMonthKey = adjacentMonthKey(monthKey, -1);
   const previousMonthStart = `${previousMonthKey}-01`;
   const { end: monthEnd } = useMemo(() => monthBounds(monthKey), [monthKey]);
-  const monthOptions = useMemo(() => createMonthOptions(initialMonthKey), [initialMonthKey]);
+  const reportedMonthKeys = useMemo(() => new Set(
+    sales
+      .filter((sale) => sale.storeId === store.id)
+      .map((sale) => sale.date.slice(0, 7))
+      .filter((key) => /^\d{4}-\d{2}$/.test(key)),
+  ), [sales, store.id]);
+  const monthOptions = useMemo(() => Array.from(new Set([
+    ...createMonthOptions(initialMonthKey),
+    ...reportedMonthKeys,
+    monthKey,
+  ])).sort((left, right) => right.localeCompare(left)), [initialMonthKey, monthKey, reportedMonthKeys]);
+  const isTestStore = store.country.trim().toUpperCase() === 'TEST' || store.id.startsWith('TEST_');
   const ingredientById = useMemo(
     () => new Map(localIngredients.map((ingredient) => [ingredient.id, ingredient])),
     [localIngredients],
@@ -986,7 +997,12 @@ const CostInventoryWorkspace: React.FC<Props> = ({
               onChange={(event) => setMonthKey(event.target.value)}
               className="appearance-none rounded-xl border border-gray-200 bg-white py-2.5 pl-3 pr-9 text-sm font-bold"
             >
-              {monthOptions.map((key) => <option key={key} value={key}>{monthLabel(key)}</option>)}
+              {monthOptions.map((key) => (
+                <option key={key} value={key}>
+                  {monthLabel(key)}
+                  {isTestStore && reportedMonthKeys.has(key) ? ' — TEST DATA' : ''}
+                </option>
+              ))}
             </select>
             <ChevronDown className="pointer-events-none absolute right-3 top-3 h-4 w-4 text-gray-400" />
           </div>

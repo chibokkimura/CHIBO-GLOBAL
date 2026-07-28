@@ -5596,7 +5596,11 @@ const HQStoreDetail: React.FC<{
         () => [...canonicalStoreSales].sort((a, b) => b.date.localeCompare(a.date) || String(b.id).localeCompare(String(a.id))),
         [canonicalStoreSales]
     );
-    const defaultSalesMonthKey = initialMonthKey || formatMonthKey(new Date());
+    const isTestStore = store.country.trim().toUpperCase() === 'TEST' || store.id.startsWith('TEST_');
+    const testDataMonthKey = isTestStore && sortedStoreSales.length > 0
+        ? extractMonthKey(sortedStoreSales[0].date)
+        : null;
+    const defaultSalesMonthKey = testDataMonthKey || initialMonthKey || formatMonthKey(new Date());
     const salesMonthOptions = useMemo(() => {
         const keys = new Set<string>([defaultSalesMonthKey]);
         sortedStoreSales.forEach((sale) => {
@@ -5610,6 +5614,16 @@ const HQStoreDetail: React.FC<{
         if (salesMonthFilter === 'all') return sortedStoreSales;
         return sortedStoreSales.filter((sale) => extractMonthKey(sale.date) === salesMonthFilter);
     }, [sortedStoreSales, salesMonthFilter]);
+    const testMonthSales = useMemo(
+        () => isTestStore
+            ? canonicalStoreSales.filter((sale) => extractMonthKey(sale.date) === defaultSalesMonthKey)
+            : [],
+        [canonicalStoreSales, defaultSalesMonthKey, isTestStore],
+    );
+    const testMonthSalesTotal = useMemo(
+        () => testMonthSales.reduce((sum, sale) => sum + Number(sale.totalAmount || 0), 0),
+        [testMonthSales],
+    );
     const [editingMenu, setEditingMenu] = useState<Menu | null>(null);
     const [editingSetMenu, setEditingSetMenu] = useState<SetMenu | null>(null);
     const [viewingReceipt, setViewingReceipt] = useState<string | null>(null);
@@ -7053,12 +7067,73 @@ const HQStoreDetail: React.FC<{
                 </div>
             </div>
 
+            {isTestStore && (
+                <section
+                    data-testid="test-cost-lab-banner"
+                    className="mb-6 rounded-2xl border-2 border-amber-300 bg-amber-50 p-5 shadow-sm"
+                >
+                    <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+                        <div>
+                            <div className="inline-flex items-center rounded-full bg-amber-200 px-3 py-1 text-[11px] font-black uppercase tracking-[0.16em] text-amber-900">
+                                Test workspace
+                            </div>
+                            <h2 className="mt-2 text-xl font-extrabold text-gray-950">
+                                Cost-analysis sample data is ready
+                            </h2>
+                            <p className="mt-1 text-sm text-amber-950/75">
+                                Open Cost &amp; Inventory to review actual cost, theoretical recipe cost, stock counts, and ingredient variances together.
+                            </p>
+                            <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                                <div className="rounded-xl border border-amber-200 bg-white/80 p-3">
+                                    <div className="text-[10px] font-bold uppercase text-gray-500">Sample month</div>
+                                    <div className="mt-1 font-extrabold">{formatMonthKeyLabel(defaultSalesMonthKey)}</div>
+                                </div>
+                                <div className="rounded-xl border border-amber-200 bg-white/80 p-3">
+                                    <div className="text-[10px] font-bold uppercase text-gray-500">Sales</div>
+                                    <div className="mt-1 font-extrabold">{store.currency} {Math.round(testMonthSalesTotal).toLocaleString()}</div>
+                                </div>
+                                <div className="rounded-xl border border-amber-200 bg-white/80 p-3">
+                                    <div className="text-[10px] font-bold uppercase text-gray-500">Daily reports</div>
+                                    <div className="mt-1 font-extrabold">{testMonthSales.length} days</div>
+                                </div>
+                                <div className="rounded-xl border border-amber-200 bg-white/80 p-3">
+                                    <div className="text-[10px] font-bold uppercase text-gray-500">Menu setup</div>
+                                    <div className="mt-1 font-extrabold">{storeMenus.length} items · {storeSetMenus.length} course</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div className="flex shrink-0 flex-col gap-2 sm:flex-row lg:flex-col">
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setSalesMonthFilter(defaultSalesMonthKey);
+                                    setDetailSection('inventory');
+                                }}
+                                className="rounded-xl bg-black px-5 py-3 text-sm font-extrabold text-white hover:bg-gray-800"
+                            >
+                                Open Cost &amp; Inventory
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setMenuSection('items');
+                                    setDetailSection('menu');
+                                }}
+                                className="rounded-xl border border-amber-300 bg-white px-5 py-3 text-sm font-extrabold text-gray-900 hover:bg-amber-100"
+                            >
+                                Open Menu &amp; Recipes
+                            </button>
+                        </div>
+                    </div>
+                </section>
+            )}
+
             <div className="sticky top-0 z-20 bg-gray-50/95 backdrop-blur supports-[backdrop-filter]:bg-gray-50/80 py-2 mb-6 overflow-x-auto">
                 <div className="inline-flex items-center gap-2 rounded-2xl border border-gray-200 bg-white p-1 min-w-max">
                     {[
                         { key: 'sales', label: 'Sales' },
                         { key: 'close', label: 'Month Close' },
-                        { key: 'inventory', label: 'Inventory' },
+                        { key: 'inventory', label: 'Cost & Inventory' },
                         { key: 'invoice', label: 'Invoice' },
                         { key: 'menu', label: 'Menu' },
                         { key: 'staff', label: 'Staff' },
@@ -8037,6 +8112,29 @@ const HQDashboard: React.FC<{
     [stores],
   );
   const [selectedCountry, setSelectedCountry] = useState<string>('all');
+  const testStores = useMemo(
+    () => stores.filter((store) => (
+      store.country.trim().toUpperCase() === 'TEST' || store.id.startsWith('TEST_')
+    )),
+    [stores],
+  );
+  const testStoreSummaries = useMemo(() => testStores.map((store) => {
+    const storeSales = dedupeSalesByStoreDate(sales)
+      .filter((sale) => sale.storeId === store.id)
+      .sort((left, right) => right.date.localeCompare(left.date));
+    const monthKey = storeSales.length > 0
+      ? extractMonthKey(storeSales[0].date)
+      : formatMonthKey(new Date());
+    const monthSales = storeSales.filter((sale) => extractMonthKey(sale.date) === monthKey);
+    return {
+      store,
+      monthKey,
+      salesDays: monthSales.length,
+      salesTotal: monthSales.reduce((sum, sale) => sum + Number(sale.totalAmount || 0), 0),
+      menuCount: menus.filter((menu) => menu.storeId === store.id).length,
+      courseCount: setMenus.filter((setMenu) => setMenu.storeId === store.id).length,
+    };
+  }), [menus, sales, setMenus, testStores]);
   const filteredStores = useMemo(
     () => selectedCountry === 'all'
       ? stores
@@ -8190,20 +8288,29 @@ const HQDashboard: React.FC<{
     }
   }, []);
 
-  const openHqStore = useCallback((store: Store) => {
+  const openHqStore = useCallback((
+    store: Store,
+    section: 'sales' | 'close' | 'inventory' | 'invoice' | 'menu' | 'staff' | 'accounts' = 'sales',
+    monthKey: string = selectedMonthKey,
+  ) => {
+    setSelectedMonthKey(monthKey);
     if (typeof window !== 'undefined') {
+      const url = new URL(window.location.href);
+      url.searchParams.set('hs', section);
+      if (section !== 'menu') url.searchParams.delete('hm');
       window.history.pushState(
         {
           screen: 'hq-detail',
           storeId: store.id,
-          section: 'sales',
+          section,
           menuSection: 'items',
         },
-        ''
+        '',
+        `${url.pathname}${url.search}${url.hash}`
       );
     }
     setSelectedStore(store);
-  }, []);
+  }, [selectedMonthKey]);
 
   const closeHqStore = useCallback(() => {
     if (typeof window !== 'undefined') {
@@ -8494,6 +8601,47 @@ const HQDashboard: React.FC<{
        />
 
        <div className="flex-1 p-8 overflow-y-auto space-y-8 max-w-7xl mx-auto w-full">
+           {testStoreSummaries.length > 0 && (
+             <section className="rounded-2xl border-2 border-amber-300 bg-amber-50 p-5 shadow-sm">
+               <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+                 <div>
+                   <div className="text-xs font-black uppercase tracking-[0.18em] text-amber-700">QA / sample data</div>
+                   <h2 className="mt-1 text-2xl font-extrabold">Test Cost Workspace</h2>
+                   <p className="mt-1 text-sm text-amber-950/70">
+                     Use this entry point to open the prepared cost-analysis data without finding the test month manually.
+                   </p>
+                 </div>
+                 <div className="rounded-full bg-amber-200 px-3 py-1 text-xs font-black text-amber-900">
+                   Excluded from current-month sales
+                 </div>
+               </div>
+               <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                 {testStoreSummaries.map((summary) => (
+                   <div key={summary.store.id} className="rounded-xl border border-amber-200 bg-white p-4">
+                     <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                       <div>
+                         <div className="font-extrabold">{summary.store.name}</div>
+                         <div className="mt-1 text-xs text-gray-500">
+                           {formatMonthKeyLabel(summary.monthKey)} · {summary.salesDays} reports · {summary.menuCount} menus · {summary.courseCount} course
+                         </div>
+                         <div className="mt-2 text-lg font-extrabold">
+                           {summary.store.currency} {Math.round(summary.salesTotal).toLocaleString()}
+                         </div>
+                       </div>
+                       <button
+                         type="button"
+                         onClick={() => openHqStore(summary.store, 'inventory', summary.monthKey)}
+                         className="rounded-xl bg-black px-5 py-3 text-sm font-extrabold text-white hover:bg-gray-800"
+                       >
+                         Open Cost Analysis
+                       </button>
+                     </div>
+                   </div>
+                 ))}
+               </div>
+             </section>
+           )}
+
            <section className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
               <div className="p-6 border-b bg-gray-50">
                   <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
