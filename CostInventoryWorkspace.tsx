@@ -1,23 +1,19 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  AlertTriangle,
   ArrowDownRight,
   ArrowUpRight,
-  Calculator,
-  CheckCircle2,
   ChevronDown,
-  ClipboardList,
-  PackagePlus,
+  ChefHat,
+  Gauge,
   Plus,
   RefreshCw,
   Save,
   Target,
   Trash2,
-  TrendingDown,
-  Warehouse,
 } from 'lucide-react';
-import { Ingredient, Sale, Store } from './types';
+import { Ingredient, Menu, Sale, SetMenu, Store } from './types';
 import { supabase } from './supabaseClient';
+import { buildTheoreticalCostAnalysis } from './theoreticalCost';
 
 type IngredientCategory = 'main' | 'secondary' | 'packaging' | 'other';
 
@@ -74,9 +70,13 @@ type PreviousCostSummary = {
   inventoryComplete: boolean;
 };
 
+type WorkspaceSection = 'summary' | 'purchases' | 'inventory';
+
 type Props = {
   store: Store;
   ingredients: Ingredient[];
+  menus: Menu[];
+  setMenus: SetMenu[];
   sales: Sale[];
   initialMonthKey: string;
   mode: 'owner' | 'hq';
@@ -200,6 +200,8 @@ function emptyInventoryRow(
 const CostInventoryWorkspace: React.FC<Props> = ({
   store,
   ingredients,
+  menus,
+  setMenus,
   sales,
   initialMonthKey,
   mode,
@@ -227,6 +229,10 @@ const CostInventoryWorkspace: React.FC<Props> = ({
   const [showNewIngredient, setShowNewIngredient] = useState(false);
   const [newIngredient, setNewIngredient] = useState({ name: '', unit: 'g' });
   const [showPurchaseForm, setShowPurchaseForm] = useState(false);
+  const [activeSection, setActiveSection] = useState<WorkspaceSection>('summary');
+  const [showMonthlySettings, setShowMonthlySettings] = useState(false);
+  const [expandedProfileId, setExpandedProfileId] = useState<string | null>(null);
+  const [expandedInventoryId, setExpandedInventoryId] = useState<string | null>(null);
   const [purchaseDraft, setPurchaseDraft] = useState({
     ingredientId: '',
     purchaseDate: `${initialMonthKey}-01`,
@@ -252,7 +258,18 @@ const CostInventoryWorkspace: React.FC<Props> = ({
   const previousMonthKey = adjacentMonthKey(monthKey, -1);
   const previousMonthStart = `${previousMonthKey}-01`;
   const { end: monthEnd } = useMemo(() => monthBounds(monthKey), [monthKey]);
-  const monthOptions = useMemo(() => createMonthOptions(initialMonthKey), [initialMonthKey]);
+  const reportedMonthKeys = useMemo(() => new Set(
+    sales
+      .filter((sale) => sale.storeId === store.id)
+      .map((sale) => sale.date.slice(0, 7))
+      .filter((key) => /^\d{4}-\d{2}$/.test(key)),
+  ), [sales, store.id]);
+  const monthOptions = useMemo(() => Array.from(new Set([
+    ...createMonthOptions(initialMonthKey),
+    ...reportedMonthKeys,
+    monthKey,
+  ])).sort((left, right) => right.localeCompare(left)), [initialMonthKey, monthKey, reportedMonthKeys]);
+  const isTestStore = store.country.trim().toUpperCase() === 'TEST' || store.id.startsWith('TEST_');
   const ingredientById = useMemo(
     () => new Map(localIngredients.map((ingredient) => [ingredient.id, ingredient])),
     [localIngredients],
@@ -348,6 +365,10 @@ const CostInventoryWorkspace: React.FC<Props> = ({
     purchasedQuantityByIngredient,
     store.id,
   ]);
+  const costBreakdownByIngredient = useMemo(
+    () => new Map(costBreakdown.map((row) => [row.ingredientId, row])),
+    [costBreakdown],
+  );
   const openingInventoryValue = costBreakdown.reduce((sum, row) => sum + row.openingValue, 0);
   const closingInventoryValue = costBreakdown.reduce((sum, row) => sum + row.closingValue, 0);
   const actualCost = openingInventoryValue + purchaseTotal - closingInventoryValue;
@@ -365,15 +386,75 @@ const CostInventoryWorkspace: React.FC<Props> = ({
     ? actualCostPercentage - previousCostSummary.actualCostPercentage
     : null;
   const totalWasteValue = costBreakdown.reduce((sum, row) => sum + row.wasteValue, 0);
-  const rateTone = actualCostPercentage === null || !inventoryComplete
-    ? 'border-gray-200 bg-white text-gray-900'
-    : targetVariance === null
-      ? 'border-blue-200 bg-blue-50 text-blue-900'
-      : targetVariance <= 0
-        ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
-        : targetVariance <= 2
-          ? 'border-amber-200 bg-amber-50 text-amber-900'
-          : 'border-red-200 bg-red-50 text-red-900';
+  const ingredientCostInputs = useMemo(() => new Map(costBreakdown.map((row) => [
+    row.ingredientId,
+    {
+      unitCost: Number.isFinite(row.closingUnitCost) ? row.closingUnitCost : null,
+      actualUsage: Number.isFinite(row.actualUsage) ? row.actualUsage : null,
+      wasteQuantity: inventoryRows[row.ingredientId]?.wasteQuantity ?? 0,
+    },
+  ])), [costBreakdown, inventoryRows]);
+  const theoreticalAnalysis = useMemo(() => buildTheoreticalCostAnalysis({
+    storeId: store.id,
+    monthKey,
+    sales,
+    menus,
+    setMenus,
+    ingredientCosts: ingredientCostInputs,
+  }), [ingredientCostInputs, menus, monthKey, sales, setMenus, store.id]);
+  const theoreticalCostPercentage = netSales > 0
+    ? (theoreticalAnalysis.theoreticalCost / netSales) * 100
+    : null;
+  const actualVsTheoreticalGap = actualCost - theoreticalAnalysis.theoreticalCost;
+  const varianceAnalysisReady = inventoryComplete && theoreticalAnalysis.analysisReady;
+  const recipeRateVariance = varianceAnalysisReady
+    && actualCostPercentage !== null
+    && theoreticalCostPercentage !== null
+    ? actualCostPercentage - theoreticalCostPercentage
+    : null;
+  const recipeBlockerCount = theoreticalAnalysis.soldMenuRowsMissingRecipe
+    + theoreticalAnalysis.soldMenuRowsMissingCost
+    + (theoreticalAnalysis.unknownDirectUnits > 0 ? 1 : 0)
+    + (theoreticalAnalysis.unknownCourseSalesUnits > 0 ? 1 : 0)
+    + (theoreticalAnalysis.setsWithoutComponentsUnits > 0 ? 1 : 0)
+    + (theoreticalAnalysis.categoryBreakdownMismatchUnits > 0 ? 1 : 0);
+  const targetReductionAmount = targetVariance !== null && targetVariance > 0
+    ? (targetVariance / 100) * netSales
+    : 0;
+  const costRateSeries = [
+    {
+      id: 'actual',
+      label: 'Actual',
+      value: actualCostPercentage,
+    },
+    {
+      id: 'target',
+      label: 'Target',
+      value: costControl.targetCostPercentage,
+    },
+    {
+      id: 'recipe',
+      label: 'Recipe',
+      value: theoreticalCostPercentage,
+    },
+  ];
+  const rateChartMaximum = Math.max(
+    5,
+    Math.ceil(
+      (Math.max(...costRateSeries.map((series) => series.value ?? 0)) * 1.1) / 5,
+    ) * 5,
+  );
+  const excessCostDrivers = useMemo(
+    () => theoreticalAnalysis.ingredientRows
+      .filter((row) => row.varianceValue !== null && row.varianceValue > 0)
+      .sort((left, right) => (right.varianceValue ?? 0) - (left.varianceValue ?? 0))
+      .slice(0, 5),
+    [theoreticalAnalysis.ingredientRows],
+  );
+  const largestDriverValue = Math.max(
+    1,
+    ...excessCostDrivers.map((row) => row.varianceValue ?? 0),
+  );
 
   const seedPreview = useCallback(() => {
     const sampleIngredients = localIngredients.slice(0, 3);
@@ -570,7 +651,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
       const message = String(loadError?.message ?? '');
       setError(
         message.toLowerCase().includes('could not find the table')
-          ? 'The cost-management database tables are not active yet. Apply the latest Phase 5 and 6 migrations, then reload.'
+          ? 'The cost-management database is not active yet. Please contact the administrator.'
           : (message || 'Failed to load cost and inventory data.'),
       );
     } finally {
@@ -871,7 +952,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
       return;
     }
 
-    const costRow = costBreakdown.find((item) => item.ingredientId === ingredientId);
+    const costRow = costBreakdownByIngredient.get(ingredientId);
     if (!costRow || costRow.invalid) {
       setError('Check the quantities and valuation before saving this ingredient count.');
       return;
@@ -931,28 +1012,33 @@ const CostInventoryWorkspace: React.FC<Props> = ({
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <div className="text-xs font-black uppercase tracking-[0.18em] text-gray-400">
-            {mode === 'hq' ? 'HQ inventory review' : 'Store cost input'}
+          <div className="text-xs font-black tracking-[0.12em] text-gray-400">
+            {mode === 'hq' ? 'HQ COST REVIEW' : 'STORE COST INPUT'}
           </div>
-          <h2 className="mt-1 text-2xl font-extrabold">Actual Cost, Purchases & Inventory</h2>
+          <h2 className="mt-1 text-2xl font-extrabold">Cost, Purchases & Inventory</h2>
           <p className="mt-1 text-sm text-gray-500">
             {mode === 'hq'
-              ? 'Review actual cost, targets, purchase setup, and completed stock counts for this store.'
-              : 'Record purchases and physical stock counts to calculate the actual food cost rate.'}
+              ? 'Review the monthly result first, then inspect the inputs behind it.'
+              : 'Record purchases and month-end counts to calculate actual cost and improvement opportunities.'}
           </p>
         </div>
         <div className="flex items-center gap-2">
           <div className="relative">
             <select
-              aria-label="Inventory month"
+              aria-label="Cost and inventory month"
               value={monthKey}
               onChange={(event) => setMonthKey(event.target.value)}
               className="appearance-none rounded-xl border border-gray-200 bg-white py-2.5 pl-3 pr-9 text-sm font-bold"
             >
-              {monthOptions.map((key) => <option key={key} value={key}>{monthLabel(key)}</option>)}
+              {monthOptions.map((key) => (
+                <option key={key} value={key}>
+                  {monthLabel(key)}
+                  {isTestStore && reportedMonthKeys.has(key) ? ' · TEST DATA' : ''}
+                </option>
+              ))}
             </select>
             <ChevronDown className="pointer-events-none absolute right-3 top-3 h-4 w-4 text-gray-400" />
           </div>
@@ -967,752 +1053,1100 @@ const CostInventoryWorkspace: React.FC<Props> = ({
         </div>
       </div>
 
-      <section className={`rounded-2xl border p-5 ${rateTone}`}>
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-          <div>
-            <div className="flex items-center gap-2 text-xs font-black uppercase tracking-[0.16em] opacity-70">
-              <Calculator className="h-4 w-4" /> Actual food cost
-            </div>
-            <div className="mt-2 flex flex-wrap items-end gap-x-4 gap-y-1">
-              <div className="text-3xl font-extrabold">
-                {actualCostPercentage === null ? '—' : `${formatAmount(actualCostPercentage, 1)}%`}
+      <nav className="flex overflow-x-auto rounded-2xl border border-gray-200 bg-white p-1.5" aria-label="Cost management sections">
+        {([
+          ['summary', 'Overview'],
+          ['purchases', 'Ingredients & Purchases'],
+          ['inventory', `Inventory Close ${completedCounts}/${activeProfiles.length}`],
+        ] as Array<[WorkspaceSection, string]>).map(([key, label]) => (
+          <button
+            key={key}
+            type="button"
+            aria-pressed={activeSection === key}
+            onClick={() => setActiveSection(key)}
+            className={`whitespace-nowrap rounded-xl px-5 py-2.5 text-sm font-extrabold transition ${
+              activeSection === key ? 'bg-black text-white' : 'text-gray-500 hover:bg-gray-50 hover:text-black'
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </nav>
+
+      {notice && <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm font-bold text-emerald-700">{notice}</div>}
+      {error && <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-bold text-red-700">{error}</div>}
+
+      {activeSection === 'summary' && (
+        <>
+          <section className="rounded-2xl border border-gray-200 bg-white p-5">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+              <div>
+                <div className="text-xs font-black tracking-[0.12em] text-gray-400">MONTHLY COST RESULT</div>
+                <h3 className="mt-1 text-xl font-extrabold">
+                  {inventoryComplete
+                    ? targetVariance === null
+                      ? 'Inventory is complete · Set a target cost rate'
+                      : targetVariance <= 0
+                        ? 'Cost is within target'
+                        : `${formatAmount(targetVariance, 1)} points above target`
+                    : `${activeProfiles.length - completedCounts} inventory count(s) still open`}
+                </h3>
+                <p className="mt-1 text-sm text-gray-500">
+                  Formula: opening stock value + monthly purchases − closing stock value
+                </p>
               </div>
-              <div className="pb-1 text-sm font-bold">
-                {store.currency} {formatAmount(actualCost)}
+              <div className="flex flex-wrap gap-2">
+                <span className={`rounded-full px-3 py-2 text-xs font-extrabold ${
+                  !inventoryComplete
+                    ? 'bg-amber-100 text-amber-800'
+                    : targetVariance !== null && targetVariance > 0
+                      ? 'bg-red-100 text-red-700'
+                      : 'bg-emerald-100 text-emerald-700'
+                }`}>
+                  {!inventoryComplete
+                    ? 'IN PROGRESS'
+                    : targetVariance !== null && targetVariance > 0
+                      ? 'ACTION NEEDED'
+                      : 'ON TRACK'}
+                </span>
+                <button
+                  type="button"
+                  aria-expanded={showMonthlySettings}
+                  onClick={() => setShowMonthlySettings((current) => !current)}
+                  className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-bold hover:bg-gray-50"
+                >
+                  Monthly Settings {showMonthlySettings ? 'Close' : 'Open'}
+                </button>
               </div>
             </div>
-            <div className="mt-2 text-sm">
-              {!inventoryComplete
-                ? `Draft calculation · ${completedCounts}/${activeProfiles.length} inventory counts complete`
-                : targetVariance === null
-                  ? 'Inventory is complete. Set a target cost percentage to evaluate performance.'
-                  : targetVariance <= 0
-                    ? `${formatAmount(Math.abs(targetVariance), 1)} percentage point(s) below target`
-                    : `${formatAmount(targetVariance, 1)} percentage point(s) above target`}
-            </div>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {costControl.targetCostPercentage !== null && (
-              <div className="rounded-xl border border-current/15 bg-white/70 px-3 py-2 text-xs font-bold">
-                Target {formatAmount(costControl.targetCostPercentage, 1)}%
+
+            <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <div className="rounded-2xl bg-gray-950 p-5 text-white">
+                <div className="text-xs font-bold text-gray-400">ACTUAL COST RATE</div>
+                <div className="mt-2 text-3xl font-black">
+                  {actualCostPercentage === null ? '—' : `${formatAmount(actualCostPercentage, 1)}%`}
+                </div>
+                <div className="mt-2 text-sm font-bold text-gray-300">
+                  Actual cost {store.currency} {formatAmount(actualCost)}
+                </div>
               </div>
-            )}
+              <div className="rounded-2xl border border-gray-200 p-5">
+                <div className="text-xs font-bold text-gray-500">NET SALES</div>
+                <div className="mt-2 text-2xl font-extrabold">{store.currency} {formatAmount(netSales)}</div>
+                <div className="mt-2 text-xs text-gray-500">
+                  {costControl.netSalesOverride !== null ? 'Manual override applied' : 'From daily sales reports'}
+                </div>
+              </div>
+              <div className="rounded-2xl border border-gray-200 p-5">
+                <div className="text-xs font-bold text-gray-500">RECIPE COST RATE</div>
+                <div className="mt-2 text-2xl font-extrabold">
+                  {theoreticalCostPercentage === null ? '—' : `${formatAmount(theoreticalCostPercentage, 1)}%`}
+                </div>
+                <div className="mt-2 text-xs text-gray-500">
+                  Recipe cost {store.currency} {formatAmount(theoreticalAnalysis.theoreticalCost)}
+                </div>
+              </div>
+              <div className={`rounded-2xl border p-5 ${
+                varianceAnalysisReady && actualVsTheoreticalGap > 0
+                  ? 'border-red-200'
+                  : 'border-gray-200'
+              }`}>
+                <div className="text-xs font-bold text-gray-500">ACTUAL − RECIPE GAP</div>
+                <div className={`mt-2 text-2xl font-extrabold ${
+                  varianceAnalysisReady && actualVsTheoreticalGap > 0 ? 'text-red-600' : ''
+                }`}>
+                  {varianceAnalysisReady
+                    ? `${actualVsTheoreticalGap > 0 ? '+' : ''}${store.currency} ${formatAmount(actualVsTheoreticalGap)}`
+                    : 'Not ready'}
+                </div>
+                <div className="mt-2 text-xs text-gray-500">
+                  {varianceAnalysisReady ? 'Waste, overuse, and price gap' : 'Complete recipes, costs, and inventory'}
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-5">
+              {[
+                ['Target rate', costControl.targetCostPercentage === null ? 'Not set' : `${formatAmount(costControl.targetCostPercentage, 1)}%`],
+                ['Opening stock', `${store.currency} ${formatAmount(openingInventoryValue)}`],
+                ['Purchases', `${store.currency} ${formatAmount(purchaseTotal)}`],
+                ['Closing stock', `${store.currency} ${formatAmount(closingInventoryValue)}`],
+                ['Waste value', `${store.currency} ${formatAmount(totalWasteValue)}`],
+              ].map(([label, value]) => (
+                <div key={label} className="rounded-xl bg-gray-50 p-3">
+                  <div className="text-[11px] font-bold text-gray-500">{label}</div>
+                  <div className="mt-1 text-sm font-extrabold">{value}</div>
+                </div>
+              ))}
+            </div>
+
             {previousRateDelta !== null && (
-              <div className="inline-flex items-center gap-1 rounded-xl border border-current/15 bg-white/70 px-3 py-2 text-xs font-bold">
+              <div className={`mt-4 flex items-center gap-2 rounded-xl p-3 text-sm font-bold ${
+                previousRateDelta > 0 ? 'bg-amber-50 text-amber-800' : 'bg-emerald-50 text-emerald-700'
+              }`}>
                 {previousRateDelta <= 0
                   ? <ArrowDownRight className="h-4 w-4" />
                   : <ArrowUpRight className="h-4 w-4" />}
-                {previousRateDelta > 0 ? '+' : ''}{formatAmount(previousRateDelta, 1)} pt vs prior month
+                {formatAmount(Math.abs(previousRateDelta), 1)} points {previousRateDelta > 0 ? 'higher' : 'better'} than last month.
               </div>
             )}
-          </div>
-        </div>
 
-        <div className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-5">
-          {[
-            ['Net sales', netSales, costControl.netSalesOverride !== null ? 'Manual override' : 'Daily reports'],
-            ['Opening stock', openingInventoryValue, 'Quantity × opening unit cost'],
-            ['Purchases', purchaseTotal, `${purchases.length} entries`],
-            ['Closing stock', closingInventoryValue, 'Quantity × moving average'],
-            ['Waste value', totalWasteValue, 'Recorded waste estimate'],
-          ].map(([label, amount, description]) => (
-            <div key={String(label)} className="rounded-xl border border-black/10 bg-white/80 p-3">
-              <div className="text-[11px] font-bold uppercase text-gray-500">{label}</div>
-              <div className="mt-1 text-base font-extrabold text-gray-900">
-                {store.currency} {formatAmount(Number(amount))}
+            {showMonthlySettings && (
+              <div className="mt-4 grid grid-cols-1 gap-3 rounded-xl border border-gray-200 bg-gray-50 p-4 md:grid-cols-2 xl:grid-cols-[160px_220px_1fr_auto]">
+                <label className="text-xs font-bold text-gray-600">
+                  Target cost rate (%)
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="0.1"
+                    value={costControl.targetCostPercentage ?? ''}
+                    onChange={(event) => setCostControl((current) => ({
+                      ...current,
+                      targetCostPercentage: event.target.value === '' ? null : Number(event.target.value),
+                    }))}
+                    className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900"
+                    placeholder="e.g. 30"
+                  />
+                </label>
+                <label className="text-xs font-bold text-gray-600">
+                  Net sales override ({store.currency})
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={costControl.netSalesOverride ?? ''}
+                    onChange={(event) => setCostControl((current) => ({
+                      ...current,
+                      netSalesOverride: event.target.value === '' ? null : Number(event.target.value),
+                    }))}
+                    className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900"
+                    placeholder={`Reported: ${formatAmount(reportedSales)}`}
+                  />
+                </label>
+                <label className="text-xs font-bold text-gray-600">
+                  Monthly note
+                  <input
+                    value={costControl.notes}
+                    onChange={(event) => setCostControl((current) => ({ ...current, notes: event.target.value }))}
+                    className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900"
+                    placeholder="Unusual purchase, stock issue, sales correction, etc."
+                  />
+                </label>
+                <button
+                  type="button"
+                  disabled={savingKey !== null}
+                  onClick={() => void saveCostControl()}
+                  className="self-end rounded-lg bg-black px-4 py-2 text-sm font-bold text-white disabled:opacity-40"
+                >
+                  Save Settings
+                </button>
               </div>
-              <div className="mt-1 text-[10px] text-gray-500">{description}</div>
-            </div>
-          ))}
-        </div>
+            )}
+          </section>
 
-        <div className="mt-4 grid grid-cols-1 gap-3 rounded-xl border border-black/10 bg-white/80 p-4 md:grid-cols-2 xl:grid-cols-[160px_220px_1fr_auto]">
-          <label className="text-xs font-bold text-gray-600">
-            Target cost %
-            <input
-              type="number"
-              min="0"
-              max="100"
-              step="0.1"
-              value={costControl.targetCostPercentage ?? ''}
-              onChange={(event) => setCostControl((current) => ({
-                ...current,
-                targetCostPercentage: event.target.value === '' ? null : Number(event.target.value),
-              }))}
-              className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900"
-              placeholder="e.g. 30"
-            />
-          </label>
-          <label className="text-xs font-bold text-gray-600">
-            Net sales override ({store.currency})
-            <input
-              type="number"
-              min="0"
-              step="0.01"
-              value={costControl.netSalesOverride ?? ''}
-              onChange={(event) => setCostControl((current) => ({
-                ...current,
-                netSalesOverride: event.target.value === '' ? null : Number(event.target.value),
-              }))}
-              className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900"
-              placeholder={`Reported: ${formatAmount(reportedSales)}`}
-            />
-          </label>
-          <label className="text-xs font-bold text-gray-600">
-            Monthly note
-            <input
-              value={costControl.notes}
-              onChange={(event) => setCostControl((current) => ({ ...current, notes: event.target.value }))}
-              className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900"
-              placeholder="Tax exclusion, unusual purchase, stock issue, etc."
-            />
-          </label>
-          <button
-            type="button"
-            disabled={savingKey !== null}
-            onClick={() => void saveCostControl()}
-            className="self-end rounded-lg bg-black px-4 py-2 text-sm font-bold text-white disabled:opacity-40"
-          >
-            Save settings
-          </button>
-        </div>
-        <div className="mt-2 text-[11px] opacity-70">
-          Formula: opening stock value + purchases − closing stock value. Blank net sales override uses reported daily sales.
-        </div>
-      </section>
+          <section className="grid gap-5 lg:grid-cols-2">
+            <div className="self-start rounded-2xl border border-gray-200 bg-white p-5">
+              <div className="flex items-center gap-2">
+                <Gauge className="h-5 w-5" />
+                <h3 className="text-lg font-extrabold">Cost Control Position</h3>
+              </div>
+              <p className="mt-1 text-sm text-gray-500">
+                One actual-cost bar with target and recipe reference markers.
+              </p>
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-        <div className="rounded-2xl border border-gray-200 bg-white p-5">
-          <div className="flex items-center justify-between text-xs font-bold uppercase text-gray-500">
-            Ingredients configured <Warehouse className="h-4 w-4" />
-          </div>
-          <div className="mt-2 text-2xl font-extrabold">{activeProfiles.length}</div>
-          <div className="mt-1 text-xs text-gray-500">Purchase pack, content, price, and supplier</div>
-        </div>
-        <div className="rounded-2xl border border-gray-200 bg-white p-5">
-          <div className="flex items-center justify-between text-xs font-bold uppercase text-gray-500">
-            Purchases this month <PackagePlus className="h-4 w-4" />
-          </div>
-          <div className="mt-2 text-2xl font-extrabold">{store.currency} {formatAmount(purchaseTotal)}</div>
-          <div className="mt-1 text-xs text-gray-500">{purchases.length} purchase entr{purchases.length === 1 ? 'y' : 'ies'}</div>
-        </div>
-        <div className="rounded-2xl border border-gray-200 bg-white p-5">
-          <div className="flex items-center justify-between text-xs font-bold uppercase text-gray-500">
-            Inventory counts <ClipboardList className="h-4 w-4" />
-          </div>
-          <div className={`mt-2 text-2xl font-extrabold ${completedCounts === activeProfiles.length && activeProfiles.length > 0 ? 'text-emerald-700' : 'text-amber-600'}`}>
-            {completedCounts}/{activeProfiles.length}
-          </div>
-          <div className="mt-1 text-xs text-gray-500">Marked complete for {monthLabel(monthKey)}</div>
-        </div>
-      </div>
-
-      <section className="rounded-2xl border border-gray-200 bg-white p-5">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <div className="flex items-center gap-2">
-              <Target className="h-5 w-5" />
-              <h3 className="font-extrabold">Cost Diagnosis</h3>
-            </div>
-            <p className="mt-1 text-xs text-gray-500">
-              See which ingredients contribute most to actual food cost and what needs attention first.
-            </p>
-          </div>
-          <div className={`rounded-xl px-3 py-2 text-xs font-bold ${
-            !inventoryComplete
-              ? 'bg-amber-50 text-amber-800'
-              : targetVariance !== null && targetVariance > 0
-                ? 'bg-red-50 text-red-700'
-                : 'bg-emerald-50 text-emerald-700'
-          }`}>
-            {!inventoryComplete
-              ? `Finish ${activeProfiles.length - completedCounts} inventory count(s)`
-              : targetVariance === null
-                ? 'Set the monthly target'
-                : targetVariance > 0
-                  ? `Reduce cost by ${store.currency} ${formatAmount((targetVariance / 100) * netSales)} to reach target`
-                  : 'Actual cost is within target'}
-          </div>
-        </div>
-
-        {previousRateDelta !== null && previousRateDelta > 0 && (
-          <div className="mt-4 flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs font-bold text-amber-800">
-            <TrendingDown className="h-4 w-4" />
-            Actual cost rate increased {formatAmount(previousRateDelta, 1)} point(s) from {monthLabel(previousMonthKey)}.
-            Check high-cost ingredients, waste, and purchase-price changes.
-          </div>
-        )}
-
-        <div className="mt-4 overflow-x-auto">
-          <table className="w-full min-w-[780px] text-left text-sm">
-            <thead className="border-b border-gray-200 text-[11px] uppercase text-gray-400">
-              <tr>
-                <th className="px-3 py-2">Ingredient</th>
-                <th className="px-3 py-2 text-right">Opening value</th>
-                <th className="px-3 py-2 text-right">Purchases</th>
-                <th className="px-3 py-2 text-right">Closing value</th>
-                <th className="px-3 py-2 text-right">Actual cost</th>
-                <th className="px-3 py-2 text-right">Cost share</th>
-                <th className="px-3 py-2 text-right">Waste value</th>
-              </tr>
-            </thead>
-            <tbody>
-              {[...costBreakdown]
-                .sort((left, right) => right.actualCost - left.actualCost)
-                .map((row) => (
-                  <tr key={row.ingredientId} className={`border-b border-gray-100 ${row.invalid ? 'bg-red-50' : ''}`}>
-                    <td className="px-3 py-3">
-                      <div className="font-bold">{row.ingredientName}</div>
-                      {row.invalid && <div className="text-[10px] font-bold text-red-600">Check quantity or valuation</div>}
-                    </td>
-                    <td className="px-3 py-3 text-right">{formatAmount(row.openingValue)}</td>
-                    <td className="px-3 py-3 text-right">{formatAmount(row.purchaseCost)}</td>
-                    <td className="px-3 py-3 text-right">{formatAmount(row.closingValue)}</td>
-                    <td className="px-3 py-3 text-right font-extrabold">{formatAmount(row.actualCost)}</td>
-                    <td className="px-3 py-3 text-right">
-                      {actualCost > 0 ? `${formatAmount((row.actualCost / actualCost) * 100, 1)}%` : '—'}
-                    </td>
-                    <td className="px-3 py-3 text-right">{formatAmount(row.wasteValue)}</td>
-                  </tr>
-                ))}
-              {costBreakdown.length === 0 && (
-                <tr>
-                  <td colSpan={7} className="px-3 py-8 text-center text-sm text-gray-400">
-                    Configure ingredients to start the actual-cost breakdown.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <section className="rounded-2xl border border-gray-200 bg-white p-5">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <h3 className="font-extrabold">1. Ingredient Purchase Setup</h3>
-            <p className="mt-1 text-xs text-gray-500">
-              Example: 1 case = 5,000 g, case price = {store.currency} 1,850.
-            </p>
-          </div>
-          {editable && (
-            <div className="flex flex-wrap gap-2">
-              <select
-                aria-label="Ingredient to configure"
-                value={selectedIngredientId}
-                onChange={(event) => setSelectedIngredientId(event.target.value)}
-                className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-bold"
+              <div
+                className="mt-7"
+                role="img"
+                aria-label={`Actual cost rate ${actualCostPercentage === null ? 'not available' : `${formatAmount(actualCostPercentage, 1)} percent`}; target ${costControl.targetCostPercentage === null ? 'not set' : `${formatAmount(costControl.targetCostPercentage, 1)} percent`}; recipe ${theoreticalCostPercentage === null ? 'not available' : `${formatAmount(theoreticalCostPercentage, 1)} percent`}`}
               >
-                <option value="">Choose ingredient</option>
-                {unconfiguredIngredients.map((ingredient) => (
-                  <option key={ingredient.id} value={ingredient.id}>{ingredient.name} ({ingredient.unit})</option>
-                ))}
-              </select>
-              <button
-                type="button"
-                disabled={!selectedIngredientId || savingKey !== null}
-                onClick={() => void addProfile(selectedIngredientId)}
-                className="inline-flex items-center gap-1 rounded-xl bg-black px-3 py-2 text-xs font-bold text-white disabled:opacity-40"
-              >
-                <Plus className="h-4 w-4" /> Configure
-              </button>
-              <button
-                type="button"
-                onClick={() => setShowNewIngredient((current) => !current)}
-                className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-bold"
-              >
-                New ingredient
-              </button>
-            </div>
-          )}
-        </div>
+                <div className="relative h-3 rounded-full bg-gray-100">
+                  {actualCostPercentage !== null && (
+                    <div
+                      className="h-full rounded-full bg-gray-950"
+                      style={{ width: `${Math.min(100, Math.max(1, (actualCostPercentage / rateChartMaximum) * 100))}%` }}
+                    />
+                  )}
+                  {costControl.targetCostPercentage !== null && (
+                    <div
+                      className="absolute -top-1 h-5 w-0.5 bg-amber-500"
+                      style={{ left: `${Math.min(100, Math.max(0, (costControl.targetCostPercentage / rateChartMaximum) * 100))}%` }}
+                    />
+                  )}
+                  {theoreticalCostPercentage !== null && (
+                    <div
+                      className="absolute -top-1 h-5 border-l-2 border-dashed border-gray-500"
+                      style={{ left: `${Math.min(100, Math.max(0, (theoreticalCostPercentage / rateChartMaximum) * 100))}%` }}
+                    />
+                  )}
+                </div>
+                <div className="mt-2 flex justify-between text-[10px] font-bold text-gray-400">
+                  <span>0%</span>
+                  <span>{formatAmount(rateChartMaximum, 0)}%</span>
+                </div>
+              </div>
 
-        {showNewIngredient && editable && (
-          <div className="mt-4 grid grid-cols-1 gap-3 rounded-xl border border-blue-200 bg-blue-50 p-4 sm:grid-cols-[1fr_140px_auto]">
-            <label className="text-xs font-bold text-gray-600">
-              Ingredient name
-              <input
-                value={newIngredient.name}
-                onChange={(event) => setNewIngredient((current) => ({ ...current, name: event.target.value }))}
-                className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
-                placeholder="e.g. Cabbage"
-              />
-            </label>
-            <label className="text-xs font-bold text-gray-600">
-              Base unit
-              <select
-                value={newIngredient.unit}
-                onChange={(event) => setNewIngredient((current) => ({ ...current, unit: event.target.value }))}
-                className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm"
-              >
-                <option value="g">g</option>
-                <option value="ml">ml</option>
-                <option value="pcs">pcs</option>
-                <option value="kg">kg</option>
-                <option value="L">L</option>
-              </select>
-            </label>
-            <button
-              type="button"
-              disabled={savingKey !== null}
-              onClick={() => void createIngredient()}
-              className="self-end rounded-lg bg-black px-4 py-2 text-sm font-bold text-white disabled:opacity-40"
-            >
-              Add
-            </button>
-          </div>
-        )}
-
-        <div className="mt-4 space-y-3">
-          {activeProfiles.map((profile) => {
-            const ingredient = ingredientById.get(profile.ingredientId);
-            const unitPrice = profile.contentQuantity > 0 ? profile.currentPackPrice / profile.contentQuantity : 0;
-            return (
-              <div key={profile.ingredientId} className="rounded-xl border border-gray-200 p-4">
-                <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-7">
-                  <div className="xl:col-span-2">
-                    <div className="text-sm font-extrabold">{ingredient?.name ?? profile.ingredientId}</div>
-                    <div className="mt-1 text-xs text-gray-500">
-                      Base unit: {ingredient?.unit ?? 'unit'} · {store.currency} {formatAmount(unitPrice, 4)} per {ingredient?.unit ?? 'unit'}
+              <div className="mt-5 grid grid-cols-3 gap-2">
+                {costRateSeries.map((series) => (
+                  <div key={series.id} className="rounded-xl bg-gray-50 p-3">
+                    <div className="flex items-center gap-1.5 text-[10px] font-extrabold text-gray-500">
+                      <span className={`h-2.5 w-2.5 ${
+                        series.id === 'actual'
+                          ? 'rounded-full bg-gray-950'
+                          : series.id === 'target'
+                            ? 'bg-amber-500'
+                            : 'border-l-2 border-dashed border-gray-500'
+                      }`} />
+                      {series.label}
+                    </div>
+                    <div className="mt-1 text-lg font-black">
+                      {series.value === null ? '—' : `${formatAmount(series.value, 1)}%`}
                     </div>
                   </div>
-                  <label className="text-xs font-bold text-gray-600">
-                    Category
+                ))}
+              </div>
+
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <div className="rounded-xl border border-gray-200 p-3">
+                  <div className="text-[10px] font-extrabold text-gray-400">TO REACH TARGET</div>
+                  <div className={`mt-1 text-sm font-black ${targetReductionAmount > 0 ? 'text-red-600' : 'text-gray-900'}`}>
+                    {targetVariance === null
+                      ? 'Set target'
+                      : targetReductionAmount > 0
+                        ? `Reduce ${store.currency} ${formatAmount(targetReductionAmount)}`
+                        : 'Target achieved'}
+                  </div>
+                </div>
+                <div className="rounded-xl border border-gray-200 p-3">
+                  <div className="text-[10px] font-extrabold text-gray-400">ACTUAL VS RECIPE</div>
+                  <div className={`mt-1 text-sm font-black ${recipeRateVariance !== null && recipeRateVariance > 0 ? 'text-red-600' : 'text-gray-900'}`}>
+                    {recipeRateVariance === null
+                      ? 'Not ready'
+                      : `${recipeRateVariance > 0 ? '+' : ''}${formatAmount(recipeRateVariance, 1)} pt · ${actualVsTheoreticalGap > 0 ? '+' : ''}${store.currency} ${formatAmount(actualVsTheoreticalGap)}`}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-gray-200 bg-white p-5">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <Target className="h-5 w-5" />
+                    <h3 className="text-lg font-extrabold">Excess Cost Drivers</h3>
+                  </div>
+                  <p className="mt-1 text-sm text-gray-500">Ingredients with the largest actual cost above recipe cost.</p>
+                </div>
+              </div>
+
+              {!inventoryComplete || recipeBlockerCount > 0 ? (
+                <div className="mt-4 space-y-2">
+                  {!inventoryComplete && (
+                    <div className="rounded-xl border-l-4 border-amber-500 bg-amber-50 p-4">
+                      <div className="text-sm font-extrabold">Complete inventory close</div>
+                      <div className="mt-1 text-xs text-amber-800">{completedCounts}/{activeProfiles.length} ingredient counts complete</div>
+                    </div>
+                  )}
+                  {recipeBlockerCount > 0 && (
+                    <div className="rounded-xl border-l-4 border-amber-500 bg-amber-50 p-4">
+                      <div className="text-sm font-extrabold">Complete recipes and ingredient costs</div>
+                      <div className="mt-1 text-xs text-amber-800">{recipeBlockerCount} item(s) still block the variance analysis</div>
+                    </div>
+                  )}
+                </div>
+              ) : excessCostDrivers.length > 0 ? (
+                <div className="mt-5 space-y-4">
+                  {excessCostDrivers.map((row, index) => {
+                    const ingredient = ingredientById.get(row.ingredientId);
+                    return (
+                      <div key={row.ingredientId}>
+                        <div className="mb-1.5 flex items-end justify-between gap-3">
+                          <div className="min-w-0">
+                            <span className="mr-2 text-[10px] font-black text-gray-400">#{index + 1}</span>
+                            <span className="truncate text-sm font-extrabold">{ingredient?.name ?? row.ingredientId}</span>
+                          </div>
+                          <div className="shrink-0 text-sm font-black text-gray-900">
+                            +{store.currency} {formatAmount(row.varianceValue ?? 0)}
+                          </div>
+                        </div>
+                        <div className="h-2.5 overflow-hidden rounded-full bg-gray-100">
+                          <div
+                            className={`h-full rounded-full ${index === 0 ? 'bg-gray-950' : 'bg-gray-600'}`}
+                            style={{ width: `${Math.max(3, ((row.varianceValue ?? 0) / largestDriverValue) * 100)}%` }}
+                          />
+                        </div>
+                        <div className="mt-1 text-right text-[10px] text-gray-400">
+                          Usage gap {row.usageVariance !== null && row.usageVariance > 0 ? '+' : ''}{formatAmount(row.usageVariance ?? 0, 3)} {ingredient?.unit ?? ''}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="mt-4 rounded-xl bg-gray-50 p-5 text-sm font-bold text-gray-700">
+                  No positive ingredient cost variance detected for this month.
+                </div>
+              )}
+            </div>
+          </section>
+
+          <details className="group rounded-2xl border border-gray-200 bg-white">
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-3 p-5">
+              <div>
+                <div className="flex items-center gap-2 font-extrabold">
+                  <Gauge className="h-4 w-4" /> View All Ingredient Usage Gaps
+                </div>
+                <div className="mt-1 text-xs text-gray-500">Compare recipe usage with actual usage calculated from inventory.</div>
+              </div>
+              <ChevronDown className="h-5 w-5 text-gray-400 transition group-open:rotate-180" />
+            </summary>
+            <div className="border-t border-gray-100 p-5 pt-3">
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[980px] text-left text-sm">
+                  <thead className="border-b border-gray-200 text-[11px] text-gray-400">
+                    <tr>
+                      <th className="px-3 py-2">Ingredient</th>
+                      <th className="px-3 py-2 text-right">Recipe Usage</th>
+                      <th className="px-3 py-2 text-right">Actual Usage</th>
+                      <th className="px-3 py-2 text-right">Usage Gap</th>
+                      <th className="px-3 py-2 text-right">Cost Gap</th>
+                      <th className="px-3 py-2 text-right">Share of Actual Cost</th>
+                      <th className="px-3 py-2">Check</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {theoreticalAnalysis.ingredientRows.map((row) => {
+                      const ingredient = ingredientById.get(row.ingredientId);
+                      const costRow = costBreakdownByIngredient.get(row.ingredientId);
+                      const gapHigh = row.variancePercentage !== null && row.variancePercentage > 10;
+                      const gapLow = row.variancePercentage !== null && row.variancePercentage < -10;
+                      const action = row.unitCost === null
+                        ? 'Set purchase unit and price'
+                        : !inventoryComplete || row.actualUsage === null
+                          ? 'Complete inventory close'
+                          : gapHigh && row.wasteQuantity > 0
+                            ? 'Check waste and over-portioning'
+                            : gapHigh
+                              ? 'Check waste, portions, recipe, and stock'
+                              : gapLow
+                                ? 'Check recipe or physical count'
+                                : row.wasteQuantity > 0
+                                  ? 'Check waste record'
+                                  : 'Within range';
+                      return (
+                        <tr key={row.ingredientId} className={`border-b border-gray-100 ${gapHigh && inventoryComplete ? 'bg-red-50/50' : ''}`}>
+                          <td className="px-3 py-3">
+                            <div className="font-bold">{ingredient?.name ?? row.ingredientId}</div>
+                            <div className="text-[10px] text-gray-400">{ingredient?.unit ?? 'unit'}</div>
+                          </td>
+                          <td className="px-3 py-3 text-right">{formatAmount(row.theoreticalUsage, 3)}</td>
+                          <td className="px-3 py-3 text-right">{row.actualUsage === null ? '—' : formatAmount(row.actualUsage, 3)}</td>
+                          <td className="px-3 py-3 text-right font-bold">
+                            {row.usageVariance === null ? '—' : `${row.usageVariance > 0 ? '+' : ''}${formatAmount(row.usageVariance, 3)}`}
+                            {row.variancePercentage !== null && (
+                              <div className="text-[10px] text-gray-400">
+                                {row.variancePercentage > 0 ? '+' : ''}{formatAmount(row.variancePercentage, 1)}%
+                              </div>
+                            )}
+                          </td>
+                          <td className="px-3 py-3 text-right font-bold">
+                            {row.varianceValue === null ? '—' : `${row.varianceValue > 0 ? '+' : ''}${store.currency} ${formatAmount(row.varianceValue)}`}
+                          </td>
+                          <td className="px-3 py-3 text-right">
+                            {actualCost > 0 && costRow ? `${formatAmount((costRow.actualCost / actualCost) * 100, 1)}%` : '—'}
+                          </td>
+                          <td className={`px-3 py-3 text-xs font-bold ${gapHigh && inventoryComplete ? 'text-red-700' : 'text-gray-600'}`}>{action}</td>
+                        </tr>
+                      );
+                    })}
+                    {theoreticalAnalysis.ingredientRows.length === 0 && (
+                      <tr><td colSpan={7} className="px-3 py-8 text-center text-sm text-gray-400">Enter sales quantities and menu recipes to view this analysis.</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </details>
+
+          <details className="group rounded-2xl border border-gray-200 bg-white">
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-3 p-5">
+              <div>
+                <div className="flex items-center gap-2 font-extrabold">
+                  <ChefHat className="h-4 w-4" /> View Menu & Course Profitability
+                </div>
+                <div className="mt-1 text-xs text-gray-500">Review recipe cost by menu using monthly sales quantities.</div>
+              </div>
+              <ChevronDown className="h-5 w-5 text-gray-400 transition group-open:rotate-180" />
+            </summary>
+            <div className="space-y-6 border-t border-gray-100 p-5 pt-3">
+              <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                {[
+                  ['Recipe coverage', theoreticalAnalysis.recipeCoveragePercentage === null ? '—' : `${formatAmount(theoreticalAnalysis.recipeCoveragePercentage, 1)}%`],
+                  ['Cost coverage', theoreticalAnalysis.costCoveragePercentage === null ? '—' : `${formatAmount(theoreticalAnalysis.costCoveragePercentage, 1)}%`],
+                  ['Recipe cost', `${store.currency} ${formatAmount(theoreticalAnalysis.theoreticalCost)}`],
+                  ['Incomplete items', `${recipeBlockerCount}`],
+                ].map(([label, value]) => (
+                  <div key={label} className="rounded-xl bg-gray-50 p-4">
+                    <div className="text-[11px] font-bold text-gray-500">{label}</div>
+                    <div className="mt-1 text-xl font-extrabold">{value}</div>
+                  </div>
+                ))}
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[860px] text-left text-sm">
+                  <thead className="border-b border-gray-200 text-[11px] text-gray-400">
+                    <tr>
+                      <th className="px-3 py-2">Menu</th>
+                      <th className="px-3 py-2 text-right">Single / Course Sales</th>
+                      <th className="px-3 py-2">Recipe Status</th>
+                      <th className="px-3 py-2 text-right">Selling Price</th>
+                      <th className="px-3 py-2 text-right">Recipe Cost / Unit</th>
+                      <th className="px-3 py-2 text-right">Recipe Cost Rate</th>
+                      <th className="px-3 py-2 text-right">Monthly Recipe Cost</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {theoreticalAnalysis.menuRows.map((row) => (
+                      <tr key={row.menuId} className={`border-b border-gray-100 ${!row.costReady ? 'bg-amber-50' : ''}`}>
+                        <td className="px-3 py-3">
+                          <div className="font-bold">{row.name}</div>
+                          <div className="text-[10px] text-gray-400">{row.category}</div>
+                        </td>
+                        <td className="px-3 py-3 text-right">{formatAmount(row.directUnits, 1)} / {formatAmount(row.courseUnits, 1)}</td>
+                        <td className="px-3 py-3 text-xs font-bold">
+                          {!row.recipeReady
+                            ? <span className="text-red-600">Missing recipe</span>
+                            : !row.costReady
+                              ? <span className="text-amber-700">Missing ingredient cost</span>
+                              : <span className="text-emerald-700">Ready</span>}
+                        </td>
+                        <td className="px-3 py-3 text-right">{formatAmount(row.price)}</td>
+                        <td className="px-3 py-3 text-right">{row.theoreticalUnitCost === null ? '—' : formatAmount(row.theoreticalUnitCost)}</td>
+                        <td className="px-3 py-3 text-right">{row.theoreticalCostPercentage === null ? '—' : `${formatAmount(row.theoreticalCostPercentage, 1)}%`}</td>
+                        <td className="px-3 py-3 text-right font-bold">{row.monthlyTheoreticalCost === null ? '—' : formatAmount(row.monthlyTheoreticalCost)}</td>
+                      </tr>
+                    ))}
+                    {theoreticalAnalysis.menuRows.length === 0 && (
+                      <tr><td colSpan={7} className="px-3 py-8 text-center text-sm text-gray-400">No menu sales quantities were reported for this month.</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              {theoreticalAnalysis.courseRows.length > 0 && (
+                <div className="overflow-x-auto">
+                  <div className="mb-2 text-sm font-extrabold">Courses & Sets</div>
+                  <table className="w-full min-w-[720px] text-left text-sm">
+                    <thead className="border-b border-gray-200 text-[11px] text-gray-400">
+                      <tr>
+                        <th className="px-3 py-2">Course / Set</th>
+                        <th className="px-3 py-2 text-right">Units Sold</th>
+                        <th className="px-3 py-2 text-right">Components</th>
+                        <th className="px-3 py-2 text-right">Selling Price</th>
+                        <th className="px-3 py-2 text-right">Recipe Cost / Unit</th>
+                        <th className="px-3 py-2 text-right">Recipe Cost Rate</th>
+                        <th className="px-3 py-2 text-right">Monthly Recipe Cost</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {theoreticalAnalysis.courseRows.map((row) => (
+                        <tr key={row.setMenuId} className={`border-b border-gray-100 ${!row.costReady ? 'bg-amber-50' : ''}`}>
+                          <td className="px-3 py-3 font-bold">{row.name}</td>
+                          <td className="px-3 py-3 text-right">{formatAmount(row.soldUnits, 1)}</td>
+                          <td className="px-3 py-3 text-right">{row.componentCount}</td>
+                          <td className="px-3 py-3 text-right">{formatAmount(row.price)}</td>
+                          <td className="px-3 py-3 text-right">{row.theoreticalUnitCost === null ? '—' : formatAmount(row.theoreticalUnitCost)}</td>
+                          <td className="px-3 py-3 text-right">{row.theoreticalCostPercentage === null ? '—' : `${formatAmount(row.theoreticalCostPercentage, 1)}%`}</td>
+                          <td className="px-3 py-3 text-right font-bold">{row.monthlyTheoreticalCost === null ? '—' : formatAmount(row.monthlyTheoreticalCost)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </details>
+        </>
+      )}
+
+      {activeSection === 'purchases' && (
+        <>
+          <section className="rounded-2xl border border-gray-200 bg-white p-5">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <h3 className="text-lg font-extrabold">1. Ingredient Purchase Setup</h3>
+                <p className="mt-1 text-sm text-gray-500">
+                  Review each ingredient in one row and open the form only when changes are needed.
+                </p>
+              </div>
+              {editable && (
+                <div className="flex flex-wrap gap-2">
+                  <select
+                    aria-label="Ingredient to configure"
+                    value={selectedIngredientId}
+                    onChange={(event) => setSelectedIngredientId(event.target.value)}
+                    className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-bold"
+                  >
+                    <option value="">Select a registered ingredient</option>
+                    {unconfiguredIngredients.map((ingredient) => (
+                      <option key={ingredient.id} value={ingredient.id}>{ingredient.name} ({ingredient.unit})</option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    disabled={!selectedIngredientId || savingKey !== null}
+                    onClick={() => void addProfile(selectedIngredientId)}
+                    className="inline-flex items-center gap-1 rounded-xl bg-black px-3 py-2 text-xs font-bold text-white disabled:opacity-40"
+                  >
+                    <Plus className="h-4 w-4" /> Add Purchase Setup
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowNewIngredient((current) => !current)}
+                    className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-bold"
+                  >
+                    Add New Ingredient
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {showNewIngredient && editable && (
+              <div className="mt-4 grid grid-cols-1 gap-3 rounded-xl border border-gray-200 bg-gray-50 p-4 sm:grid-cols-[1fr_140px_auto]">
+                <label className="text-xs font-bold text-gray-600">
+                  Ingredient name
+                  <input
+                    value={newIngredient.name}
+                    onChange={(event) => setNewIngredient((current) => ({ ...current, name: event.target.value }))}
+                    className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+                    placeholder="e.g. Cabbage"
+                  />
+                </label>
+                <label className="text-xs font-bold text-gray-600">
+                  Base unit
+                  <select
+                    value={newIngredient.unit}
+                    onChange={(event) => setNewIngredient((current) => ({ ...current, unit: event.target.value }))}
+                    className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm"
+                  >
+                    <option value="g">g</option>
+                    <option value="ml">ml</option>
+                    <option value="pcs">pcs</option>
+                    <option value="kg">kg</option>
+                    <option value="L">L</option>
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  disabled={savingKey !== null}
+                  onClick={() => void createIngredient()}
+                  className="self-end rounded-lg bg-black px-4 py-2 text-sm font-bold text-white disabled:opacity-40"
+                >
+                  Add
+                </button>
+              </div>
+            )}
+
+            <div className="mt-4 overflow-x-auto">
+              <table className="w-full min-w-[900px] text-left text-sm">
+                <thead className="border-b border-gray-200 text-[11px] text-gray-400">
+                  <tr>
+                    <th className="px-3 py-2">Ingredient</th>
+                    <th className="px-3 py-2">Purchase Unit</th>
+                    <th className="px-3 py-2 text-right">Content</th>
+                    <th className="px-3 py-2 text-right">Pack Price</th>
+                    <th className="px-3 py-2 text-right">Base Unit Cost</th>
+                    <th className="px-3 py-2">Supplier</th>
+                    {editable && <th className="px-3 py-2 text-right">Edit</th>}
+                  </tr>
+                </thead>
+                <tbody>
+                  {activeProfiles.map((profile) => {
+                    const ingredient = ingredientById.get(profile.ingredientId);
+                    const unitPrice = profile.contentQuantity > 0 ? profile.currentPackPrice / profile.contentQuantity : 0;
+                    const expanded = expandedProfileId === profile.ingredientId;
+                    return (
+                      <React.Fragment key={profile.ingredientId}>
+                        <tr className="border-b border-gray-100">
+                          <td className="px-3 py-3">
+                            <div className="font-extrabold">{ingredient?.name ?? profile.ingredientId}</div>
+                            <div className="text-[10px] text-gray-400">{CATEGORY_LABELS[profile.category]} · {ingredient?.unit ?? 'unit'}</div>
+                          </td>
+                          <td className="px-3 py-3">{profile.purchaseUnit}</td>
+                          <td className="px-3 py-3 text-right">{formatAmount(profile.contentQuantity, 3)} {ingredient?.unit ?? ''}</td>
+                          <td className="px-3 py-3 text-right font-bold">{store.currency} {formatAmount(profile.currentPackPrice)}</td>
+                          <td className="px-3 py-3 text-right">{store.currency} {formatAmount(unitPrice, 4)} / {ingredient?.unit ?? 'unit'}</td>
+                          <td className="px-3 py-3 text-gray-500">{profile.supplier || '—'}</td>
+                          {editable && (
+                            <td className="px-3 py-3 text-right">
+                              <button
+                                type="button"
+                                aria-expanded={expanded}
+                                onClick={() => setExpandedProfileId(expanded ? null : profile.ingredientId)}
+                                className="rounded-lg border border-gray-200 px-3 py-2 text-xs font-bold hover:bg-gray-50"
+                              >
+                                {expanded ? 'Close' : 'Edit'}
+                              </button>
+                            </td>
+                          )}
+                        </tr>
+                        {expanded && editable && (
+                          <tr className="border-b border-gray-200 bg-gray-50">
+                            <td colSpan={7} className="p-4">
+                              <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+                                <label className="text-xs font-bold text-gray-600">
+                                  Category
+                                  <select
+                                    value={profile.category}
+                                    onChange={(event) => setProfiles((current) => current.map((row) => row.ingredientId === profile.ingredientId ? { ...row, category: event.target.value as IngredientCategory } : row))}
+                                    className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm"
+                                  >
+                                    {(Object.keys(CATEGORY_LABELS) as IngredientCategory[]).map((key) => <option key={key} value={key}>{CATEGORY_LABELS[key]}</option>)}
+                                  </select>
+                                </label>
+                                <label className="text-xs font-bold text-gray-600">
+                                  Purchase unit
+                                  <input
+                                    value={profile.purchaseUnit}
+                                    onChange={(event) => setProfiles((current) => current.map((row) => row.ingredientId === profile.ingredientId ? { ...row, purchaseUnit: event.target.value } : row))}
+                                    className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+                                    placeholder="case / pack / bottle"
+                                  />
+                                </label>
+                                <label className="text-xs font-bold text-gray-600">
+                                  Content ({ingredient?.unit ?? 'unit'})
+                                  <input
+                                    type="number"
+                                    min="0.001"
+                                    step="0.001"
+                                    value={profile.contentQuantity}
+                                    onChange={(event) => setProfiles((current) => current.map((row) => row.ingredientId === profile.ingredientId ? { ...row, contentQuantity: Number(event.target.value) } : row))}
+                                    className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+                                  />
+                                </label>
+                                <label className="text-xs font-bold text-gray-600">
+                                  Pack price ({store.currency})
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="0.01"
+                                    value={profile.currentPackPrice}
+                                    onChange={(event) => setProfiles((current) => current.map((row) => row.ingredientId === profile.ingredientId ? { ...row, currentPackPrice: Number(event.target.value) } : row))}
+                                    className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+                                  />
+                                </label>
+                                <label className="text-xs font-bold text-gray-600">
+                                  Supplier
+                                  <input
+                                    value={profile.supplier}
+                                    onChange={(event) => setProfiles((current) => current.map((row) => row.ingredientId === profile.ingredientId ? { ...row, supplier: event.target.value } : row))}
+                                    className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+                                    placeholder="Optional"
+                                  />
+                                </label>
+                              </div>
+                              <div className="mt-3 flex justify-end">
+                                <button
+                                  type="button"
+                                  disabled={savingKey !== null}
+                                  onClick={() => void saveProfile(profile)}
+                                  className="inline-flex items-center gap-1 rounded-lg bg-black px-4 py-2 text-xs font-bold text-white disabled:opacity-40"
+                                >
+                                  <Save className="h-4 w-4" /> Save Ingredient Setup
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
+                    );
+                  })}
+                  {activeProfiles.length === 0 && (
+                    <tr><td colSpan={editable ? 7 : 6} className="px-3 py-8 text-center text-sm text-gray-400">No ingredient purchase setup has been registered.</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section className="rounded-2xl border border-gray-200 bg-white p-5">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <h3 className="text-lg font-extrabold">2. Monthly Purchases</h3>
+                <p className="mt-1 text-sm text-gray-500">Enter package count and invoice total; base-unit quantity is calculated automatically.</p>
+              </div>
+              {editable && (
+                <button
+                  type="button"
+                  disabled={activeProfiles.length === 0}
+                  onClick={() => setShowPurchaseForm((current) => !current)}
+                  className="inline-flex items-center justify-center gap-1 rounded-xl bg-black px-4 py-2.5 text-xs font-bold text-white disabled:opacity-40"
+                >
+                  <Plus className="h-4 w-4" /> Add Purchase
+                </button>
+              )}
+            </div>
+
+            {showPurchaseForm && editable && (
+              <div className="mt-4 rounded-xl border border-gray-200 bg-gray-50 p-4">
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-6">
+                  <label className="text-xs font-bold text-gray-600 xl:col-span-2">
+                    Ingredient
                     <select
-                      value={profile.category}
-                      disabled={!editable}
-                      onChange={(event) => setProfiles((current) => current.map((row) => row.ingredientId === profile.ingredientId ? { ...row, category: event.target.value as IngredientCategory } : row))}
-                      className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm disabled:bg-gray-50"
+                      value={purchaseDraft.ingredientId}
+                      onChange={(event) => {
+                        const profile = activeProfiles.find((row) => row.ingredientId === event.target.value);
+                        setPurchaseDraft((current) => ({
+                          ...current,
+                          ingredientId: event.target.value,
+                          supplier: profile?.supplier ?? '',
+                          totalCost: profile ? String(profile.currentPackPrice * Number(current.packages || 0)) : '',
+                        }));
+                      }}
+                      className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm"
                     >
-                      {(Object.keys(CATEGORY_LABELS) as IngredientCategory[]).map((key) => <option key={key} value={key}>{CATEGORY_LABELS[key]}</option>)}
+                      {activeProfiles.map((profile) => {
+                        const ingredient = ingredientById.get(profile.ingredientId);
+                        return <option key={profile.ingredientId} value={profile.ingredientId}>{ingredient?.name ?? profile.ingredientId}</option>;
+                      })}
                     </select>
                   </label>
                   <label className="text-xs font-bold text-gray-600">
-                    Purchase unit
+                    Purchase date
                     <input
-                      value={profile.purchaseUnit}
-                      disabled={!editable}
-                      onChange={(event) => setProfiles((current) => current.map((row) => row.ingredientId === profile.ingredientId ? { ...row, purchaseUnit: event.target.value } : row))}
-                      className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm disabled:bg-gray-50"
-                      placeholder="case / pack / bottle"
+                      type="date"
+                      min={monthStart}
+                      max={monthEnd}
+                      value={purchaseDraft.purchaseDate}
+                      onChange={(event) => setPurchaseDraft((current) => ({ ...current, purchaseDate: event.target.value }))}
+                      className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
                     />
                   </label>
                   <label className="text-xs font-bold text-gray-600">
-                    Content ({ingredient?.unit ?? 'unit'})
+                    Packages
                     <input
                       type="number"
                       min="0.001"
                       step="0.001"
-                      value={profile.contentQuantity}
-                      disabled={!editable}
-                      onChange={(event) => setProfiles((current) => current.map((row) => row.ingredientId === profile.ingredientId ? { ...row, contentQuantity: Number(event.target.value) } : row))}
-                      className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm disabled:bg-gray-50"
+                      value={purchaseDraft.packages}
+                      onChange={(event) => {
+                        const packages = event.target.value;
+                        const profile = activeProfiles.find((row) => row.ingredientId === purchaseDraft.ingredientId);
+                        setPurchaseDraft((current) => ({
+                          ...current,
+                          packages,
+                          totalCost: profile ? String(profile.currentPackPrice * Number(packages || 0)) : current.totalCost,
+                        }));
+                      }}
+                      className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
                     />
                   </label>
                   <label className="text-xs font-bold text-gray-600">
-                    Pack price ({store.currency})
+                    Invoice total ({store.currency})
                     <input
                       type="number"
                       min="0"
                       step="0.01"
-                      value={profile.currentPackPrice}
-                      disabled={!editable}
-                      onChange={(event) => setProfiles((current) => current.map((row) => row.ingredientId === profile.ingredientId ? { ...row, currentPackPrice: Number(event.target.value) } : row))}
-                      className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm disabled:bg-gray-50"
+                      value={purchaseDraft.totalCost}
+                      onChange={(event) => setPurchaseDraft((current) => ({ ...current, totalCost: event.target.value }))}
+                      className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
                     />
                   </label>
                   <label className="text-xs font-bold text-gray-600">
                     Supplier
                     <input
-                      value={profile.supplier}
-                      disabled={!editable}
-                      onChange={(event) => setProfiles((current) => current.map((row) => row.ingredientId === profile.ingredientId ? { ...row, supplier: event.target.value } : row))}
-                      className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm disabled:bg-gray-50"
+                      value={purchaseDraft.supplier}
+                      onChange={(event) => setPurchaseDraft((current) => ({ ...current, supplier: event.target.value }))}
+                      className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
                       placeholder="Optional"
                     />
                   </label>
                 </div>
-                {editable && (
-                  <div className="mt-3 flex justify-end">
-                    <button
-                      type="button"
-                      disabled={savingKey !== null}
-                      onClick={() => void saveProfile(profile)}
-                      className="inline-flex items-center gap-1 rounded-lg bg-black px-3 py-2 text-xs font-bold text-white disabled:opacity-40"
-                    >
-                      <Save className="h-4 w-4" /> Save setup
-                    </button>
-                  </div>
-                )}
+                <label className="mt-3 block text-xs font-bold text-gray-600">
+                  Notes
+                  <input
+                    value={purchaseDraft.notes}
+                    onChange={(event) => setPurchaseDraft((current) => ({ ...current, notes: event.target.value }))}
+                    className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+                    placeholder="Invoice number, price change, delivery issue, etc."
+                  />
+                </label>
+                <div className="mt-3 flex justify-end gap-2">
+                  <button type="button" onClick={() => setShowPurchaseForm(false)} className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-bold">Cancel</button>
+                  <button type="button" disabled={savingKey !== null} onClick={() => void addPurchase()} className="rounded-lg bg-black px-4 py-2 text-xs font-bold text-white disabled:opacity-40">Save Purchase</button>
+                </div>
               </div>
-            );
-          })}
-          {activeProfiles.length === 0 && (
-            <div className="rounded-xl border border-dashed border-gray-300 p-8 text-center text-sm text-gray-400">
-              No ingredients configured for purchasing yet.
-            </div>
-          )}
-        </div>
-      </section>
+            )}
 
-      <section className="rounded-2xl border border-gray-200 bg-white p-5">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <h3 className="font-extrabold">2. Purchases</h3>
-            <p className="mt-1 text-xs text-gray-500">Enter packs and total invoice cost. Base quantity is calculated automatically.</p>
-          </div>
-          {editable && (
-            <button
-              type="button"
-              disabled={activeProfiles.length === 0}
-              onClick={() => setShowPurchaseForm((current) => !current)}
-              className="inline-flex items-center justify-center gap-1 rounded-xl bg-black px-3 py-2 text-xs font-bold text-white disabled:opacity-40"
-            >
-              <Plus className="h-4 w-4" /> Add purchase
-            </button>
-          )}
-        </div>
-
-        {showPurchaseForm && editable && (
-          <div className="mt-4 rounded-xl border border-blue-200 bg-blue-50 p-4">
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-6">
-              <label className="text-xs font-bold text-gray-600 xl:col-span-2">
-                Ingredient
-                <select
-                  value={purchaseDraft.ingredientId}
-                  onChange={(event) => {
-                    const profile = activeProfiles.find((row) => row.ingredientId === event.target.value);
-                    setPurchaseDraft((current) => ({
-                      ...current,
-                      ingredientId: event.target.value,
-                      supplier: profile?.supplier ?? '',
-                      totalCost: profile ? String(profile.currentPackPrice * Number(current.packages || 0)) : '',
-                    }));
-                  }}
-                  className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm"
-                >
-                  {activeProfiles.map((profile) => {
-                    const ingredient = ingredientById.get(profile.ingredientId);
-                    return <option key={profile.ingredientId} value={profile.ingredientId}>{ingredient?.name ?? profile.ingredientId}</option>;
-                  })}
-                </select>
-              </label>
-              <label className="text-xs font-bold text-gray-600">
-                Purchase date
-                <input
-                  type="date"
-                  min={monthStart}
-                  max={monthEnd}
-                  value={purchaseDraft.purchaseDate}
-                  onChange={(event) => setPurchaseDraft((current) => ({ ...current, purchaseDate: event.target.value }))}
-                  className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
-                />
-              </label>
-              <label className="text-xs font-bold text-gray-600">
-                Packs purchased
-                <input
-                  type="number"
-                  min="0.001"
-                  step="0.001"
-                  value={purchaseDraft.packages}
-                  onChange={(event) => {
-                    const packages = event.target.value;
-                    const profile = activeProfiles.find((row) => row.ingredientId === purchaseDraft.ingredientId);
-                    setPurchaseDraft((current) => ({
-                      ...current,
-                      packages,
-                      totalCost: profile ? String(profile.currentPackPrice * Number(packages || 0)) : current.totalCost,
-                    }));
-                  }}
-                  className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
-                />
-              </label>
-              <label className="text-xs font-bold text-gray-600">
-                Total cost ({store.currency})
-                <input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={purchaseDraft.totalCost}
-                  onChange={(event) => setPurchaseDraft((current) => ({ ...current, totalCost: event.target.value }))}
-                  className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
-                />
-              </label>
-              <label className="text-xs font-bold text-gray-600">
-                Supplier
-                <input
-                  value={purchaseDraft.supplier}
-                  onChange={(event) => setPurchaseDraft((current) => ({ ...current, supplier: event.target.value }))}
-                  className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
-                  placeholder="Optional"
-                />
-              </label>
+            <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-3">
+              <div className="rounded-xl bg-gray-50 p-4">
+                <div className="text-xs font-bold text-gray-500">MONTHLY PURCHASES</div>
+                <div className="mt-1 text-xl font-extrabold">{store.currency} {formatAmount(purchaseTotal)}</div>
+              </div>
+              <div className="rounded-xl bg-gray-50 p-4">
+                <div className="text-xs font-bold text-gray-500">PURCHASE ENTRIES</div>
+                <div className="mt-1 text-xl font-extrabold">{purchases.length}</div>
+              </div>
+              <div className="rounded-xl bg-gray-50 p-4">
+                <div className="text-xs font-bold text-gray-500">CONFIGURED INGREDIENTS</div>
+                <div className="mt-1 text-xl font-extrabold">{activeProfiles.length}</div>
+              </div>
             </div>
-            <label className="mt-3 block text-xs font-bold text-gray-600">
-              Note
-              <input
-                value={purchaseDraft.notes}
-                onChange={(event) => setPurchaseDraft((current) => ({ ...current, notes: event.target.value }))}
-                className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
-                placeholder="Invoice number, price change, delivery issue, etc."
-              />
-            </label>
-            <div className="mt-3 flex justify-end gap-2">
-              <button type="button" onClick={() => setShowPurchaseForm(false)} className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-bold">Cancel</button>
-              <button type="button" disabled={savingKey !== null} onClick={() => void addPurchase()} className="rounded-lg bg-black px-4 py-2 text-xs font-bold text-white disabled:opacity-40">Save purchase</button>
-            </div>
-          </div>
-        )}
 
-        <div className="mt-4 overflow-x-auto">
-          <table className="w-full min-w-[760px] text-left text-sm">
-            <thead className="border-b border-gray-200 text-xs uppercase text-gray-400">
-              <tr>
-                <th className="px-3 py-2">Date</th>
-                <th className="px-3 py-2">Ingredient</th>
-                <th className="px-3 py-2 text-right">Packs</th>
-                <th className="px-3 py-2 text-right">Base quantity</th>
-                <th className="px-3 py-2 text-right">Total cost</th>
-                <th className="px-3 py-2">Supplier / note</th>
-                {editable && <th className="px-3 py-2 text-right">Action</th>}
-              </tr>
-            </thead>
-            <tbody>
-              {purchases.map((purchase) => {
-                const ingredient = ingredientById.get(purchase.ingredientId);
-                const profile = activeProfiles.find((row) => row.ingredientId === purchase.ingredientId);
-                return (
-                  <tr key={purchase.id} className="border-b border-gray-100">
-                    <td className="px-3 py-3 font-bold">{purchase.purchaseDate}</td>
-                    <td className="px-3 py-3">{ingredient?.name ?? purchase.ingredientId}</td>
-                    <td className="px-3 py-3 text-right">{formatAmount(purchase.packages, 3)} {profile?.purchaseUnit ?? 'pack'}</td>
-                    <td className="px-3 py-3 text-right">{formatAmount(purchase.baseQuantity, 3)} {ingredient?.unit ?? ''}</td>
-                    <td className="px-3 py-3 text-right font-bold">{purchase.currency} {formatAmount(purchase.totalCost)}</td>
-                    <td className="px-3 py-3 text-xs text-gray-500">{[purchase.supplier, purchase.notes].filter(Boolean).join(' · ') || '—'}</td>
-                    {editable && (
-                      <td className="px-3 py-3 text-right">
-                        <button
-                          type="button"
-                          aria-label={`Delete purchase ${purchase.purchaseDate} ${ingredient?.name ?? purchase.ingredientId}`}
-                          disabled={savingKey !== null}
-                          onClick={() => void deletePurchase(purchase)}
-                          className="rounded-lg p-2 text-gray-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-30"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      </td>
-                    )}
+            <div className="mt-4 overflow-x-auto">
+              <table className="w-full min-w-[760px] text-left text-sm">
+                <thead className="border-b border-gray-200 text-[11px] text-gray-400">
+                  <tr>
+                    <th className="px-3 py-2">Date</th>
+                    <th className="px-3 py-2">Ingredient</th>
+                    <th className="px-3 py-2 text-right">Packages</th>
+                    <th className="px-3 py-2 text-right">Base Quantity</th>
+                    <th className="px-3 py-2 text-right">Total</th>
+                    <th className="px-3 py-2">Supplier / Notes</th>
+                    {editable && <th className="px-3 py-2 text-right">Delete</th>}
                   </tr>
-                );
-              })}
-              {purchases.length === 0 && (
-                <tr><td colSpan={editable ? 7 : 6} className="px-3 py-8 text-center text-sm text-gray-400">No purchases entered for this month.</td></tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <section className="rounded-2xl border border-gray-200 bg-white p-5">
-        <div>
-          <h3 className="font-extrabold">3. Monthly Inventory Count</h3>
-          <p className="mt-1 text-xs text-gray-500">
-            Opening + purchases + adjustment − closing = actual quantity used. Waste is recorded separately for diagnosis.
-          </p>
-        </div>
-
-        <div className="mt-4 space-y-3">
-          {activeProfiles.map((profile) => {
-            const ingredient = ingredientById.get(profile.ingredientId);
-            const row = inventoryRows[profile.ingredientId] ?? emptyInventoryRow(store.id, profile.ingredientId, monthStart);
-            const purchasedQuantity = purchasedQuantityByIngredient.get(profile.ingredientId) ?? 0;
-            const actualUsage = row.openingQuantity + purchasedQuantity + row.adjustmentQuantity - row.closingQuantity;
-            const valuation = costBreakdown.find((item) => item.ingredientId === profile.ingredientId);
-            const invalidUsage = valuation?.invalid ?? (actualUsage < 0 || row.wasteQuantity > Math.max(0, actualUsage));
-            return (
-              <div key={profile.ingredientId} className={`rounded-xl border p-4 ${invalidUsage ? 'border-red-200 bg-red-50' : row.countComplete ? 'border-emerald-200 bg-emerald-50/40' : 'border-gray-200'}`}>
-                <div className="flex flex-col gap-3 xl:flex-row xl:items-start">
-                  <div className="min-w-[180px] xl:w-48">
-                    <div className="text-sm font-extrabold">{ingredient?.name ?? profile.ingredientId}</div>
-                    <div className="mt-1 text-xs text-gray-500">Base unit: {ingredient?.unit ?? 'unit'}</div>
-                    <div className={`mt-2 text-xs font-bold ${invalidUsage ? 'text-red-700' : 'text-gray-700'}`}>
-                      Calculated use: {formatAmount(actualUsage, 3)} {ingredient?.unit ?? ''}
-                    </div>
-                  </div>
-                  <div className="grid min-w-0 flex-1 grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-                    <label className="text-xs font-bold text-gray-600">
-                      Opening
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.001"
-                        value={row.openingQuantity}
-                        disabled={!editable}
-                        onChange={(event) => updateInventoryDraft(profile.ingredientId, {
-                          openingQuantity: Number(event.target.value),
-                          countComplete: false,
-                        })}
-                        className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm disabled:bg-gray-50"
-                      />
-                    </label>
-                    <label className="text-xs font-bold text-gray-600">
-                      Purchased
-                      <input
-                        value={formatAmount(purchasedQuantity, 3)}
-                        disabled
-                        className="mt-1 w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm"
-                      />
-                    </label>
-                    <label className="text-xs font-bold text-gray-600">
-                      Waste
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.001"
-                        value={row.wasteQuantity}
-                        disabled={!editable}
-                        onChange={(event) => updateInventoryDraft(profile.ingredientId, {
-                          wasteQuantity: Number(event.target.value),
-                          countComplete: false,
-                        })}
-                        className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm disabled:bg-gray-50"
-                      />
-                    </label>
-                    <label className="text-xs font-bold text-gray-600">
-                      Adjustment (+/−)
-                      <input
-                        type="number"
-                        step="0.001"
-                        value={row.adjustmentQuantity}
-                        disabled={!editable}
-                        onChange={(event) => updateInventoryDraft(profile.ingredientId, {
-                          adjustmentQuantity: Number(event.target.value),
-                          countComplete: false,
-                        })}
-                        className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm disabled:bg-gray-50"
-                      />
-                    </label>
-                    <label className="text-xs font-bold text-gray-600">
-                      Closing
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.001"
-                        value={row.closingQuantity}
-                        disabled={!editable}
-                        onChange={(event) => updateInventoryDraft(profile.ingredientId, {
-                          closingQuantity: Number(event.target.value),
-                          countComplete: false,
-                        })}
-                        className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm disabled:bg-gray-50"
-                      />
-                    </label>
-                    <label className="text-xs font-bold text-gray-600">
-                      Note
-                      <input
-                        value={row.notes}
-                        disabled={!editable}
-                        onChange={(event) => updateInventoryDraft(profile.ingredientId, { notes: event.target.value })}
-                        className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm disabled:bg-gray-50"
-                        placeholder="Optional"
-                      />
-                    </label>
-                  </div>
-                </div>
-
-                <div className="mt-3 grid grid-cols-2 gap-3 rounded-lg bg-gray-50 p-3 md:grid-cols-4">
-                  <label className="text-xs font-bold text-gray-600">
-                    Opening unit cost ({store.currency}/{ingredient?.unit ?? 'unit'})
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.000001"
-                      value={row.openingUnitCost}
-                      disabled={!editable}
-                      onChange={(event) => updateInventoryDraft(profile.ingredientId, {
-                        openingUnitCost: Number(event.target.value),
-                        countComplete: false,
-                      })}
-                      className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm disabled:bg-gray-100"
-                    />
-                    <span className="mt-1 block text-[10px] font-normal text-gray-400">
-                      {previousClosingCosts[profile.ingredientId] > 0
-                        ? `Prior close: ${formatAmount(previousClosingCosts[profile.ingredientId], 6)}`
-                        : 'First month: verify supplier unit cost'}
-                    </span>
-                  </label>
-                  <div className="text-xs font-bold text-gray-600">
-                    Moving-average closing cost
-                    <div className="mt-1 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900">
-                      {formatAmount(valuation?.closingUnitCost ?? 0, 6)}
-                    </div>
-                    <div className="mt-1 text-[10px] font-normal text-gray-400">Calculated automatically</div>
-                  </div>
-                  <div className="text-xs font-bold text-gray-600">
-                    Opening value
-                    <div className="mt-1 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900">
-                      {store.currency} {formatAmount(valuation?.openingValue ?? 0)}
-                    </div>
-                  </div>
-                  <div className="text-xs font-bold text-gray-600">
-                    Closing value
-                    <div className="mt-1 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900">
-                      {store.currency} {formatAmount(valuation?.closingValue ?? 0)}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-black/5 pt-3">
-                  <div className="flex items-center gap-2">
-                    {invalidUsage
-                      ? <AlertTriangle className="h-4 w-4 text-red-600" />
-                      : row.countComplete
-                        ? <CheckCircle2 className="h-4 w-4 text-emerald-700" />
-                        : <ClipboardList className="h-4 w-4 text-gray-400" />}
-                    <label className={`flex items-center gap-2 text-xs font-bold ${editable ? 'cursor-pointer' : ''}`}>
-                      <input
-                        type="checkbox"
-                        checked={row.countComplete}
-                        disabled={!editable || invalidUsage}
-                        onChange={(event) => updateInventoryDraft(profile.ingredientId, { countComplete: event.target.checked })}
-                        className="h-4 w-4 rounded border-gray-300"
-                      />
-                      Physical count complete
-                    </label>
-                    {invalidUsage && <span className="text-xs font-bold text-red-700">Check closing stock or waste quantity.</span>}
-                  </div>
-                  {editable && (
-                    <button
-                      type="button"
-                      disabled={savingKey !== null || invalidUsage}
-                      onClick={() => void saveInventoryRow(profile.ingredientId)}
-                      className="inline-flex items-center gap-1 rounded-lg bg-black px-3 py-2 text-xs font-bold text-white disabled:opacity-40"
-                    >
-                      <Save className="h-4 w-4" /> Save count
-                    </button>
+                </thead>
+                <tbody>
+                  {purchases.map((purchase) => {
+                    const ingredient = ingredientById.get(purchase.ingredientId);
+                    const profile = activeProfiles.find((row) => row.ingredientId === purchase.ingredientId);
+                    return (
+                      <tr key={purchase.id} className="border-b border-gray-100">
+                        <td className="px-3 py-3 font-bold">{purchase.purchaseDate}</td>
+                        <td className="px-3 py-3">{ingredient?.name ?? purchase.ingredientId}</td>
+                        <td className="px-3 py-3 text-right">{formatAmount(purchase.packages, 3)} {profile?.purchaseUnit ?? 'pack'}</td>
+                        <td className="px-3 py-3 text-right">{formatAmount(purchase.baseQuantity, 3)} {ingredient?.unit ?? ''}</td>
+                        <td className="px-3 py-3 text-right font-bold">{purchase.currency} {formatAmount(purchase.totalCost)}</td>
+                        <td className="px-3 py-3 text-xs text-gray-500">{[purchase.supplier, purchase.notes].filter(Boolean).join(' · ') || '—'}</td>
+                        {editable && (
+                          <td className="px-3 py-3 text-right">
+                            <button
+                              type="button"
+                              aria-label={`Delete ${purchase.purchaseDate} ${ingredient?.name ?? purchase.ingredientId} purchase`}
+                              disabled={savingKey !== null}
+                              onClick={() => void deletePurchase(purchase)}
+                              className="rounded-lg p-2 text-gray-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-30"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </td>
+                        )}
+                      </tr>
+                    );
+                  })}
+                  {purchases.length === 0 && (
+                    <tr><td colSpan={editable ? 7 : 6} className="px-3 py-8 text-center text-sm text-gray-400">No purchase entries for this month.</td></tr>
                   )}
-                </div>
-              </div>
-            );
-          })}
-          {activeProfiles.length === 0 && (
-            <div className="rounded-xl border border-dashed border-gray-300 p-8 text-center text-sm text-gray-400">
-              Configure ingredients first, then monthly count rows will appear here.
+                </tbody>
+              </table>
             </div>
-          )}
-        </div>
-      </section>
+          </section>
+        </>
+      )}
 
-      <div className="rounded-2xl border border-blue-200 bg-blue-50 p-5">
-        <div className="font-extrabold text-blue-900">Next: theoretical recipe cost and labor</div>
-        <p className="mt-1 text-sm text-blue-800">
-          Actual food cost now uses opening stock value + purchases − closing stock value.
-          Update 7 will compare this result with menu and course recipes, theoretical usage, and labor cost.
-        </p>
-      </div>
+      {activeSection === 'inventory' && (
+        <section className="rounded-2xl border border-gray-200 bg-white p-5">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <h3 className="text-lg font-extrabold">Month-End Inventory Close</h3>
+              <p className="mt-1 text-sm text-gray-500">
+                Opening + purchases + adjustment − closing = actual usage. Enter quantities first and expand valuation details only when needed.
+              </p>
+            </div>
+            <div className={`rounded-xl px-4 py-2 text-sm font-extrabold ${
+              inventoryComplete ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-800'
+            }`}>
+              {completedCounts}/{activeProfiles.length} counts complete
+            </div>
+          </div>
 
-      {notice && <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm font-bold text-emerald-700">{notice}</div>}
-      {error && <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-bold text-red-700">{error}</div>}
+          <div className="mt-4 rounded-xl bg-gray-50 p-4 text-xs leading-5 text-gray-600">
+            Check <strong>Count complete</strong> only after physically counting the ingredient, then save.
+            Only rows with invalid quantities are highlighted in red.
+          </div>
+
+          <div className="mt-4 overflow-x-auto">
+            <table className="w-full min-w-[880px] text-left text-sm">
+              <thead className="border-b border-gray-200 text-[11px] text-gray-400">
+                <tr>
+                  <th className="px-3 py-2">Ingredient</th>
+                  <th className="px-2 py-2 text-right">Opening</th>
+                  <th className="px-2 py-2 text-right">Purchased</th>
+                  <th className="px-2 py-2 text-right">Waste</th>
+                  <th className="px-2 py-2 text-right">Adjust (+/-)</th>
+                  <th className="px-2 py-2 text-right">Closing</th>
+                  <th className="px-3 py-2 text-right">Actual Usage</th>
+                  <th className="px-3 py-2 text-center">Close</th>
+                </tr>
+              </thead>
+              <tbody>
+                {activeProfiles.map((profile) => {
+                  const ingredient = ingredientById.get(profile.ingredientId);
+                  const row = inventoryRows[profile.ingredientId] ?? emptyInventoryRow(store.id, profile.ingredientId, monthStart);
+                  const purchasedQuantity = purchasedQuantityByIngredient.get(profile.ingredientId) ?? 0;
+                  const actualUsage = row.openingQuantity + purchasedQuantity + row.adjustmentQuantity - row.closingQuantity;
+                  const valuation = costBreakdownByIngredient.get(profile.ingredientId);
+                  const invalidUsage = valuation?.invalid ?? (actualUsage < 0 || row.wasteQuantity > Math.max(0, actualUsage));
+                  const expanded = expandedInventoryId === profile.ingredientId;
+                  const inputClassName = 'w-16 rounded-lg border border-gray-200 px-1.5 py-2 text-right text-sm disabled:bg-gray-50';
+                  return (
+                    <React.Fragment key={profile.ingredientId}>
+                      <tr className={`border-b border-gray-100 ${invalidUsage ? 'bg-red-50' : ''}`}>
+                        <td className="px-3 py-3">
+                          <div className="font-extrabold">{ingredient?.name ?? profile.ingredientId}</div>
+                          <div className="mt-1 text-[10px] text-gray-400">{ingredient?.unit ?? 'unit'}</div>
+                          {invalidUsage && <div className="mt-1 text-[10px] font-bold text-red-600">Check quantities</div>}
+                          <button
+                            type="button"
+                            aria-expanded={expanded}
+                            onClick={() => setExpandedInventoryId(expanded ? null : profile.ingredientId)}
+                            className="mt-2 text-[10px] font-bold text-gray-500 underline underline-offset-2 hover:text-black"
+                          >
+                            {expanded ? 'Close valuation details' : 'Valuation details'}
+                          </button>
+                        </td>
+                        <td className="px-2 py-3 text-right">
+                          <input
+                            aria-label={`${ingredient?.name ?? profile.ingredientId} opening inventory`}
+                            type="number"
+                            min="0"
+                            step="0.001"
+                            value={row.openingQuantity}
+                            disabled={!editable}
+                            onChange={(event) => updateInventoryDraft(profile.ingredientId, { openingQuantity: Number(event.target.value), countComplete: false })}
+                            className={inputClassName}
+                          />
+                        </td>
+                        <td className="px-2 py-3 text-right">
+                          <div className="inline-block w-16 rounded-lg bg-gray-50 px-1.5 py-2 text-right">{formatAmount(purchasedQuantity, 3)}</div>
+                        </td>
+                        <td className="px-2 py-3 text-right">
+                          <input
+                            aria-label={`${ingredient?.name ?? profile.ingredientId} waste quantity`}
+                            type="number"
+                            min="0"
+                            step="0.001"
+                            value={row.wasteQuantity}
+                            disabled={!editable}
+                            onChange={(event) => updateInventoryDraft(profile.ingredientId, { wasteQuantity: Number(event.target.value), countComplete: false })}
+                            className={inputClassName}
+                          />
+                        </td>
+                        <td className="px-2 py-3 text-right">
+                          <input
+                            aria-label={`${ingredient?.name ?? profile.ingredientId} inventory adjustment`}
+                            type="number"
+                            step="0.001"
+                            value={row.adjustmentQuantity}
+                            disabled={!editable}
+                            onChange={(event) => updateInventoryDraft(profile.ingredientId, { adjustmentQuantity: Number(event.target.value), countComplete: false })}
+                            className={inputClassName}
+                          />
+                        </td>
+                        <td className="px-2 py-3 text-right">
+                          <input
+                            aria-label={`${ingredient?.name ?? profile.ingredientId} closing inventory`}
+                            type="number"
+                            min="0"
+                            step="0.001"
+                            value={row.closingQuantity}
+                            disabled={!editable}
+                            onChange={(event) => updateInventoryDraft(profile.ingredientId, { closingQuantity: Number(event.target.value), countComplete: false })}
+                            className={inputClassName}
+                          />
+                        </td>
+                        <td className={`px-3 py-3 text-right font-extrabold ${invalidUsage ? 'text-red-700' : ''}`}>
+                          {formatAmount(actualUsage, 3)} {ingredient?.unit ?? ''}
+                        </td>
+                        <td className="px-3 py-3 text-center">
+                          <div className="flex flex-col items-center gap-2">
+                            <label className={`inline-flex items-center gap-1.5 text-xs font-bold ${editable ? 'cursor-pointer' : ''}`}>
+                              <input
+                                type="checkbox"
+                                checked={row.countComplete}
+                                disabled={!editable || invalidUsage}
+                                onChange={(event) => updateInventoryDraft(profile.ingredientId, { countComplete: event.target.checked })}
+                                className="h-4 w-4 rounded border-gray-300"
+                              />
+                              {row.countComplete ? 'Complete' : 'Open'}
+                            </label>
+                            {editable && (
+                              <button
+                                type="button"
+                                disabled={savingKey !== null || invalidUsage}
+                                onClick={() => void saveInventoryRow(profile.ingredientId)}
+                                className="inline-flex items-center gap-1 rounded-lg bg-black px-3 py-2 text-xs font-bold text-white disabled:opacity-40"
+                              >
+                                <Save className="h-4 w-4" /> Save
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                      {expanded && (
+                        <tr className="border-b border-gray-200 bg-gray-50">
+                          <td colSpan={8} className="p-4">
+                            <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+                              <label className="text-xs font-bold text-gray-600">
+                                Opening unit cost ({store.currency}/{ingredient?.unit ?? 'unit'})
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="0.000001"
+                                  value={row.openingUnitCost}
+                                  disabled={!editable}
+                                  onChange={(event) => updateInventoryDraft(profile.ingredientId, { openingUnitCost: Number(event.target.value), countComplete: false })}
+                                  className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm disabled:bg-gray-100"
+                                />
+                                <span className="mt-1 block text-[10px] font-normal text-gray-400">
+                                  {previousClosingCosts[profile.ingredientId] > 0
+                                    ? `Previous closing cost: ${formatAmount(previousClosingCosts[profile.ingredientId], 6)}`
+                                    : 'For the first month, confirm the supplier unit cost'}
+                                </span>
+                              </label>
+                              <div className="text-xs font-bold text-gray-600">
+                                Moving-average closing cost
+                                <div className="mt-1 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900">
+                                  {formatAmount(valuation?.closingUnitCost ?? 0, 6)}
+                                </div>
+                                <div className="mt-1 text-[10px] font-normal text-gray-400">Calculated automatically</div>
+                              </div>
+                              <div className="text-xs font-bold text-gray-600">
+                                Opening stock value
+                                <div className="mt-1 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900">
+                                  {store.currency} {formatAmount(valuation?.openingValue ?? 0)}
+                                </div>
+                              </div>
+                              <div className="text-xs font-bold text-gray-600">
+                                Closing stock value
+                                <div className="mt-1 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900">
+                                  {store.currency} {formatAmount(valuation?.closingValue ?? 0)}
+                                </div>
+                              </div>
+                              <label className="text-xs font-bold text-gray-600">
+                                Notes
+                                <input
+                                  value={row.notes}
+                                  disabled={!editable}
+                                  onChange={(event) => updateInventoryDraft(profile.ingredientId, { notes: event.target.value })}
+                                  className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm disabled:bg-gray-100"
+                                  placeholder="Reason for count difference, etc."
+                                />
+                              </label>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  );
+                })}
+                {activeProfiles.length === 0 && (
+                  <tr><td colSpan={8} className="px-3 py-8 text-center text-sm text-gray-400">Register ingredient purchase setup first.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
     </div>
   );
 };
