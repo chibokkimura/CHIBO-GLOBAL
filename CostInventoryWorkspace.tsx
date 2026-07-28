@@ -1,6 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
+  ArrowDownRight,
+  ArrowUpRight,
+  Calculator,
   CheckCircle2,
   ChevronDown,
   ClipboardList,
@@ -8,10 +11,12 @@ import {
   Plus,
   RefreshCw,
   Save,
+  Target,
   Trash2,
+  TrendingDown,
   Warehouse,
 } from 'lucide-react';
-import { Ingredient, Store } from './types';
+import { Ingredient, Sale, Store } from './types';
 import { supabase } from './supabaseClient';
 
 type IngredientCategory = 'main' | 'secondary' | 'packaging' | 'other';
@@ -47,16 +52,32 @@ type InventoryRow = {
   ingredientId: string;
   monthStart: string;
   openingQuantity: number;
+  openingUnitCost: number;
   wasteQuantity: number;
   adjustmentQuantity: number;
   closingQuantity: number;
+  closingUnitCost: number;
   countComplete: boolean;
   notes: string;
+};
+
+type CostControl = {
+  targetCostPercentage: number | null;
+  netSalesOverride: number | null;
+  notes: string;
+};
+
+type PreviousCostSummary = {
+  actualCostPercentage: number | null;
+  actualCost: number;
+  netSales: number;
+  inventoryComplete: boolean;
 };
 
 type Props = {
   store: Store;
   ingredients: Ingredient[];
+  sales: Sale[];
   initialMonthKey: string;
   mode: 'owner' | 'hq';
   onAddIngredient?: (ingredient: Ingredient) => Promise<void> | void;
@@ -92,6 +113,12 @@ function monthBounds(monthKey: string): { start: string; end: string } {
 function monthLabel(monthKey: string): string {
   const [year, month] = monthKey.split('-').map(Number);
   return new Intl.DateTimeFormat('en-US', { month: 'long', year: 'numeric' }).format(new Date(year, month - 1, 1));
+}
+
+function adjacentMonthKey(monthKey: string, offset: number): string {
+  const [year, month] = monthKey.split('-').map(Number);
+  const date = new Date(year, month - 1 + offset, 1);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
 }
 
 function createMonthOptions(initialMonthKey: string): string[] {
@@ -139,23 +166,32 @@ function mapInventory(row: any): InventoryRow {
     ingredientId: row.ingredient_id,
     monthStart: row.month_start,
     openingQuantity: Number(row.opening_quantity ?? 0),
+    openingUnitCost: Number(row.opening_unit_cost ?? 0),
     wasteQuantity: Number(row.waste_quantity ?? 0),
     adjustmentQuantity: Number(row.adjustment_quantity ?? 0),
     closingQuantity: Number(row.closing_quantity ?? 0),
+    closingUnitCost: Number(row.closing_unit_cost ?? 0),
     countComplete: Boolean(row.count_complete),
     notes: row.notes ?? '',
   };
 }
 
-function emptyInventoryRow(storeId: string, ingredientId: string, monthStart: string): InventoryRow {
+function emptyInventoryRow(
+  storeId: string,
+  ingredientId: string,
+  monthStart: string,
+  openingUnitCost = 0,
+): InventoryRow {
   return {
     storeId,
     ingredientId,
     monthStart,
     openingQuantity: 0,
+    openingUnitCost,
     wasteQuantity: 0,
     adjustmentQuantity: 0,
     closingQuantity: 0,
+    closingUnitCost: openingUnitCost,
     countComplete: false,
     notes: '',
   };
@@ -164,6 +200,7 @@ function emptyInventoryRow(storeId: string, ingredientId: string, monthStart: st
 const CostInventoryWorkspace: React.FC<Props> = ({
   store,
   ingredients,
+  sales,
   initialMonthKey,
   mode,
   onAddIngredient,
@@ -175,6 +212,13 @@ const CostInventoryWorkspace: React.FC<Props> = ({
   const [profiles, setProfiles] = useState<IngredientProfile[]>([]);
   const [purchases, setPurchases] = useState<PurchaseEntry[]>([]);
   const [inventoryRows, setInventoryRows] = useState<Record<string, InventoryRow>>({});
+  const [costControl, setCostControl] = useState<CostControl>({
+    targetCostPercentage: null,
+    netSalesOverride: null,
+    notes: '',
+  });
+  const [previousClosingCosts, setPreviousClosingCosts] = useState<Record<string, number>>({});
+  const [previousCostSummary, setPreviousCostSummary] = useState<PreviousCostSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -205,6 +249,8 @@ const CostInventoryWorkspace: React.FC<Props> = ({
   }, [ingredients]);
 
   const monthStart = `${monthKey}-01`;
+  const previousMonthKey = adjacentMonthKey(monthKey, -1);
+  const previousMonthStart = `${previousMonthKey}-01`;
   const { end: monthEnd } = useMemo(() => monthBounds(monthKey), [monthKey]);
   const monthOptions = useMemo(() => createMonthOptions(initialMonthKey), [initialMonthKey]);
   const ingredientById = useMemo(
@@ -239,11 +285,95 @@ const CostInventoryWorkspace: React.FC<Props> = ({
     return totals;
   }, [purchases]);
 
+  const purchaseCostByIngredient = useMemo(() => {
+    const totals = new Map<string, number>();
+    purchases.forEach((purchase) => {
+      totals.set(
+        purchase.ingredientId,
+        (totals.get(purchase.ingredientId) ?? 0) + purchase.totalCost,
+      );
+    });
+    return totals;
+  }, [purchases]);
+
   const purchaseTotal = useMemo(
     () => purchases.reduce((sum, purchase) => sum + purchase.totalCost, 0),
     [purchases],
   );
   const completedCounts = activeProfiles.filter((profile) => inventoryRows[profile.ingredientId]?.countComplete).length;
+  const reportedSales = useMemo(
+    () => sales
+      .filter((sale) => sale.storeId === store.id && sale.date.startsWith(`${monthKey}-`))
+      .reduce((sum, sale) => sum + Number(sale.totalAmount || 0), 0),
+    [monthKey, sales, store.id],
+  );
+  const netSales = costControl.netSalesOverride ?? reportedSales;
+  const costBreakdown = useMemo(() => activeProfiles.map((profile) => {
+    const ingredient = ingredientById.get(profile.ingredientId);
+    const row = inventoryRows[profile.ingredientId]
+      ?? emptyInventoryRow(store.id, profile.ingredientId, monthStart);
+    const purchasedQuantity = purchasedQuantityByIngredient.get(profile.ingredientId) ?? 0;
+    const ingredientPurchaseCost = purchaseCostByIngredient.get(profile.ingredientId) ?? 0;
+    const openingValue = row.openingQuantity * row.openingUnitCost;
+    const availableQuantity = row.openingQuantity + purchasedQuantity;
+    const availableValue = openingValue + ingredientPurchaseCost;
+    const fallbackUnitCost = profile.contentQuantity > 0
+      ? profile.currentPackPrice / profile.contentQuantity
+      : 0;
+    const closingUnitCost = availableQuantity > 0
+      ? availableValue / availableQuantity
+      : (row.openingUnitCost || fallbackUnitCost);
+    const closingValue = row.closingQuantity * closingUnitCost;
+    const actualCost = openingValue + ingredientPurchaseCost - closingValue;
+    const actualUsage = row.openingQuantity + purchasedQuantity + row.adjustmentQuantity - row.closingQuantity;
+    return {
+      ingredientId: profile.ingredientId,
+      ingredientName: ingredient?.name ?? profile.ingredientId,
+      unit: ingredient?.unit ?? '',
+      openingValue,
+      purchaseCost: ingredientPurchaseCost,
+      closingValue,
+      actualCost,
+      closingUnitCost,
+      wasteValue: row.wasteQuantity * closingUnitCost,
+      actualUsage,
+      invalid: actualUsage < 0 || row.wasteQuantity > Math.max(0, actualUsage) || actualCost < 0,
+    };
+  }), [
+    activeProfiles,
+    ingredientById,
+    inventoryRows,
+    monthStart,
+    purchaseCostByIngredient,
+    purchasedQuantityByIngredient,
+    store.id,
+  ]);
+  const openingInventoryValue = costBreakdown.reduce((sum, row) => sum + row.openingValue, 0);
+  const closingInventoryValue = costBreakdown.reduce((sum, row) => sum + row.closingValue, 0);
+  const actualCost = openingInventoryValue + purchaseTotal - closingInventoryValue;
+  const actualCostPercentage = netSales > 0 ? (actualCost / netSales) * 100 : null;
+  const targetVariance = actualCostPercentage !== null && costControl.targetCostPercentage !== null
+    ? actualCostPercentage - costControl.targetCostPercentage
+    : null;
+  const inventoryComplete = activeProfiles.length > 0
+    && completedCounts === activeProfiles.length
+    && costBreakdown.every((row) => !row.invalid);
+  const previousRateDelta = inventoryComplete
+    && previousCostSummary?.inventoryComplete
+    && actualCostPercentage !== null
+    && previousCostSummary.actualCostPercentage != null
+    ? actualCostPercentage - previousCostSummary.actualCostPercentage
+    : null;
+  const totalWasteValue = costBreakdown.reduce((sum, row) => sum + row.wasteValue, 0);
+  const rateTone = actualCostPercentage === null || !inventoryComplete
+    ? 'border-gray-200 bg-white text-gray-900'
+    : targetVariance === null
+      ? 'border-blue-200 bg-blue-50 text-blue-900'
+      : targetVariance <= 0
+        ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
+        : targetVariance <= 2
+          ? 'border-amber-200 bg-amber-50 text-amber-900'
+          : 'border-red-200 bg-red-50 text-red-900';
 
   const seedPreview = useCallback(() => {
     const sampleIngredients = localIngredients.slice(0, 3);
@@ -291,7 +421,12 @@ const CostInventoryWorkspace: React.FC<Props> = ({
     const nextInventory = Object.fromEntries(nextProfiles.map((profile, index) => [
       profile.ingredientId,
       {
-        ...emptyInventoryRow(store.id, profile.ingredientId, monthStart),
+        ...emptyInventoryRow(
+          store.id,
+          profile.ingredientId,
+          monthStart,
+          profile.contentQuantity > 0 ? profile.currentPackPrice / profile.contentQuantity : 0,
+        ),
         openingQuantity: index === 0 ? 8000 : 2000,
         wasteQuantity: index === 0 ? 250 : 0,
         closingQuantity: index === 0 ? 4200 : 1500,
@@ -301,6 +436,21 @@ const CostInventoryWorkspace: React.FC<Props> = ({
     setProfiles(nextProfiles);
     setPurchases(nextPurchases);
     setInventoryRows(nextInventory);
+    setCostControl({
+      targetCostPercentage: 30,
+      netSalesOverride: null,
+      notes: 'Preview target',
+    });
+    setPreviousClosingCosts(Object.fromEntries(nextProfiles.map((profile) => [
+      profile.ingredientId,
+      profile.contentQuantity > 0 ? profile.currentPackPrice / profile.contentQuantity : 0,
+    ])));
+    setPreviousCostSummary({
+      actualCostPercentage: 31.8,
+      actualCost: 28620,
+      netSales: 90000,
+      inventoryComplete: true,
+    });
   }, [localIngredients, monthKey, monthStart, store.currency, store.id]);
 
   const loadData = useCallback(async () => {
@@ -315,7 +465,14 @@ const CostInventoryWorkspace: React.FC<Props> = ({
     }
 
     try {
-      const [profileResult, purchaseResult, inventoryResult] = await Promise.all([
+      const [
+        profileResult,
+        purchaseResult,
+        inventoryResult,
+        controlResult,
+        previousInventoryResult,
+        previousSummaryResult,
+      ] = await Promise.all([
         supabase
           .from('store_ingredient_profiles')
           .select('store_id,ingredient_id,category,purchase_unit,content_quantity,current_pack_price,currency,supplier,active')
@@ -330,15 +487,43 @@ const CostInventoryWorkspace: React.FC<Props> = ({
           .order('purchase_date', { ascending: false }),
         supabase
           .from('monthly_ingredient_inventory')
-          .select('store_id,ingredient_id,month_start,opening_quantity,waste_quantity,adjustment_quantity,closing_quantity,count_complete,notes')
+          .select('store_id,ingredient_id,month_start,opening_quantity,opening_unit_cost,waste_quantity,adjustment_quantity,closing_quantity,closing_unit_cost,count_complete,notes')
           .eq('store_id', store.id)
           .eq('month_start', monthStart),
+        supabase
+          .from('monthly_cost_controls')
+          .select('target_cost_percentage,net_sales_override,notes')
+          .eq('store_id', store.id)
+          .eq('month_start', monthStart)
+          .maybeSingle(),
+        supabase
+          .from('monthly_ingredient_inventory')
+          .select('ingredient_id,closing_unit_cost')
+          .eq('store_id', store.id)
+          .eq('month_start', previousMonthStart),
+        supabase
+          .from('monthly_actual_cost_summary')
+          .select('actual_cost_percentage,actual_cost,net_sales,inventory_complete')
+          .eq('store_id', store.id)
+          .eq('month_start', previousMonthStart)
+          .maybeSingle(),
       ]);
 
-      const firstError = profileResult.error || purchaseResult.error || inventoryResult.error;
+      const firstError = profileResult.error
+        || purchaseResult.error
+        || inventoryResult.error
+        || controlResult.error
+        || previousInventoryResult.error
+        || previousSummaryResult.error;
       if (firstError) throw firstError;
 
       const nextProfiles = (profileResult.data ?? []).map(mapProfile);
+      const nextPreviousClosingCosts = Object.fromEntries(
+        (previousInventoryResult.data ?? []).map((row: any) => [
+          row.ingredient_id,
+          Number(row.closing_unit_cost ?? 0),
+        ]),
+      );
       const nextInventoryRows = Object.fromEntries(
         (inventoryResult.data ?? []).map((row: any) => {
           const mapped = mapInventory(row);
@@ -347,25 +532,51 @@ const CostInventoryWorkspace: React.FC<Props> = ({
       );
       nextProfiles.forEach((profile) => {
         if (!nextInventoryRows[profile.ingredientId]) {
-          nextInventoryRows[profile.ingredientId] = emptyInventoryRow(store.id, profile.ingredientId, monthStart);
+          const currentUnitCost = profile.contentQuantity > 0
+            ? profile.currentPackPrice / profile.contentQuantity
+            : 0;
+          nextInventoryRows[profile.ingredientId] = emptyInventoryRow(
+            store.id,
+            profile.ingredientId,
+            monthStart,
+            nextPreviousClosingCosts[profile.ingredientId] || currentUnitCost,
+          );
         }
       });
 
       setProfiles(nextProfiles);
       setPurchases((purchaseResult.data ?? []).map(mapPurchase));
       setInventoryRows(nextInventoryRows);
+      setPreviousClosingCosts(nextPreviousClosingCosts);
+      setCostControl({
+        targetCostPercentage: controlResult.data?.target_cost_percentage == null
+          ? null
+          : Number(controlResult.data.target_cost_percentage),
+        netSalesOverride: controlResult.data?.net_sales_override == null
+          ? null
+          : Number(controlResult.data.net_sales_override),
+        notes: controlResult.data?.notes ?? '',
+      });
+      setPreviousCostSummary(previousSummaryResult.data ? {
+        actualCostPercentage: previousSummaryResult.data.actual_cost_percentage == null
+          ? null
+          : Number(previousSummaryResult.data.actual_cost_percentage),
+        actualCost: Number(previousSummaryResult.data.actual_cost ?? 0),
+        netSales: Number(previousSummaryResult.data.net_sales ?? 0),
+        inventoryComplete: Boolean(previousSummaryResult.data.inventory_complete),
+      } : null);
     } catch (loadError: any) {
       console.error('Failed to load cost and inventory data', loadError);
       const message = String(loadError?.message ?? '');
       setError(
         message.toLowerCase().includes('could not find the table')
-          ? 'The Update 5 database tables are not active yet. Apply the Phase 5 migration, then reload.'
+          ? 'The cost-management database tables are not active yet. Apply the latest Phase 5 and 6 migrations, then reload.'
           : (message || 'Failed to load cost and inventory data.'),
       );
     } finally {
       setLoading(false);
     }
-  }, [monthEnd, monthStart, preview, seedPreview, store.id]);
+  }, [monthEnd, monthStart, preview, previousMonthStart, seedPreview, store.id]);
 
   useEffect(() => {
     void loadData();
@@ -384,6 +595,47 @@ const CostInventoryWorkspace: React.FC<Props> = ({
       notes: '',
     }));
   }, [activeProfiles, monthStart]);
+
+  const saveCostControl = async () => {
+    if (
+      costControl.targetCostPercentage !== null
+      && (costControl.targetCostPercentage < 0 || costControl.targetCostPercentage > 100)
+    ) {
+      setError('Target cost percentage must be between 0 and 100.');
+      return;
+    }
+    if (costControl.netSalesOverride !== null && costControl.netSalesOverride < 0) {
+      setError('Net sales override cannot be negative.');
+      return;
+    }
+
+    setSavingKey('cost-control');
+    setError(null);
+    setNotice(null);
+    try {
+      if (!preview) {
+        const authUser = (await supabase.auth.getUser()).data.user?.id ?? null;
+        const { error: saveError } = await supabase
+          .from('monthly_cost_controls')
+          .upsert({
+            store_id: store.id,
+            month_start: monthStart,
+            target_cost_percentage: costControl.targetCostPercentage,
+            net_sales_override: costControl.netSalesOverride,
+            notes: costControl.notes.trim() || null,
+            created_by: authUser,
+            updated_by: authUser,
+            updated_at: new Date().toISOString(),
+          }, { onConflict: 'store_id,month_start' });
+        if (saveError) throw saveError;
+      }
+      setNotice('Monthly cost settings saved.');
+    } catch (saveError: any) {
+      setError(saveError?.message ?? 'Failed to save monthly cost settings.');
+    } finally {
+      setSavingKey(null);
+    }
+  };
 
   const saveProfile = async (profile: IngredientProfile) => {
     if (!editable) return;
@@ -477,6 +729,29 @@ const CostInventoryWorkspace: React.FC<Props> = ({
     }
   };
 
+  const invalidateInventoryCount = async (ingredientId: string) => {
+    setInventoryRows((current) => ({
+      ...current,
+      [ingredientId]: {
+        ...(current[ingredientId]
+          ?? emptyInventoryRow(store.id, ingredientId, monthStart)),
+        countComplete: false,
+      },
+    }));
+    if (!preview) {
+      const { error: invalidateError } = await supabase
+        .from('monthly_ingredient_inventory')
+        .update({
+          count_complete: false,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('store_id', store.id)
+        .eq('ingredient_id', ingredientId)
+        .eq('month_start', monthStart);
+      if (invalidateError) throw invalidateError;
+    }
+  };
+
   const addPurchase = async () => {
     if (!editable) return;
     const profile = activeProfiles.find((row) => row.ingredientId === purchaseDraft.ingredientId);
@@ -529,6 +804,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
         setPurchases((current) => [mapPurchase(data), ...current]);
       }
 
+      await invalidateInventoryCount(next.ingredientId);
       setPurchaseDraft((current) => ({
         ...current,
         packages: '1',
@@ -559,6 +835,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
         if (deleteError) throw deleteError;
       }
       setPurchases((current) => current.filter((row) => row.id !== purchase.id));
+      await invalidateInventoryCount(purchase.ingredientId);
     } catch (deleteError: any) {
       setError(deleteError?.message ?? 'Failed to delete purchase entry.');
     } finally {
@@ -581,11 +858,22 @@ const CostInventoryWorkspace: React.FC<Props> = ({
     const row = inventoryRows[ingredientId] ?? emptyInventoryRow(store.id, ingredientId, monthStart);
     if (
       row.openingQuantity < 0
+      || row.openingUnitCost < 0
       || row.wasteQuantity < 0
       || row.closingQuantity < 0
       || !Number.isFinite(row.adjustmentQuantity)
     ) {
-      setError('Inventory quantities must be valid. Opening, waste, and closing quantities cannot be negative.');
+      setError('Inventory quantities and unit costs must be valid and cannot be negative.');
+      return;
+    }
+    if (row.openingQuantity > 0 && row.openingUnitCost <= 0) {
+      setError('Enter the opening unit cost before completing this ingredient count.');
+      return;
+    }
+
+    const costRow = costBreakdown.find((item) => item.ingredientId === ingredientId);
+    if (!costRow || costRow.invalid) {
+      setError('Check the quantities and valuation before saving this ingredient count.');
       return;
     }
 
@@ -602,22 +890,31 @@ const CostInventoryWorkspace: React.FC<Props> = ({
             ingredient_id: ingredientId,
             month_start: monthStart,
             opening_quantity: row.openingQuantity,
+            opening_unit_cost: row.openingUnitCost,
             waste_quantity: row.wasteQuantity,
             adjustment_quantity: row.adjustmentQuantity,
             closing_quantity: row.closingQuantity,
+            closing_unit_cost: costRow.closingUnitCost,
             count_complete: row.countComplete,
             notes: row.notes.trim() || null,
             created_by: authUser,
             updated_by: authUser,
             updated_at: new Date().toISOString(),
           }, { onConflict: 'store_id,ingredient_id,month_start' })
-          .select('store_id,ingredient_id,month_start,opening_quantity,waste_quantity,adjustment_quantity,closing_quantity,count_complete,notes')
+          .select('store_id,ingredient_id,month_start,opening_quantity,opening_unit_cost,waste_quantity,adjustment_quantity,closing_quantity,closing_unit_cost,count_complete,notes')
           .single();
         if (saveError) throw saveError;
         const saved = mapInventory(data);
         setInventoryRows((current) => ({ ...current, [ingredientId]: saved }));
       }
-      setNotice('Monthly inventory count saved.');
+      setInventoryRows((current) => ({
+        ...current,
+        [ingredientId]: {
+          ...(current[ingredientId] ?? row),
+          closingUnitCost: costRow.closingUnitCost,
+        },
+      }));
+      setNotice('Monthly inventory count and valuation saved.');
     } catch (saveError: any) {
       setError(saveError?.message ?? 'Failed to save monthly inventory count.');
     } finally {
@@ -640,11 +937,11 @@ const CostInventoryWorkspace: React.FC<Props> = ({
           <div className="text-xs font-black uppercase tracking-[0.18em] text-gray-400">
             {mode === 'hq' ? 'HQ inventory review' : 'Store cost input'}
           </div>
-          <h2 className="mt-1 text-2xl font-extrabold">Purchases & Monthly Inventory</h2>
+          <h2 className="mt-1 text-2xl font-extrabold">Actual Cost, Purchases & Inventory</h2>
           <p className="mt-1 text-sm text-gray-500">
             {mode === 'hq'
-              ? 'Review the store purchase setup, monthly purchases, and completed stock counts.'
-              : 'Set each purchase pack once, record purchases, then count opening and closing stock.'}
+              ? 'Review actual cost, targets, purchase setup, and completed stock counts for this store.'
+              : 'Record purchases and physical stock counts to calculate the actual food cost rate.'}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -669,6 +966,120 @@ const CostInventoryWorkspace: React.FC<Props> = ({
           </button>
         </div>
       </div>
+
+      <section className={`rounded-2xl border p-5 ${rateTone}`}>
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <div className="flex items-center gap-2 text-xs font-black uppercase tracking-[0.16em] opacity-70">
+              <Calculator className="h-4 w-4" /> Actual food cost
+            </div>
+            <div className="mt-2 flex flex-wrap items-end gap-x-4 gap-y-1">
+              <div className="text-3xl font-extrabold">
+                {actualCostPercentage === null ? '—' : `${formatAmount(actualCostPercentage, 1)}%`}
+              </div>
+              <div className="pb-1 text-sm font-bold">
+                {store.currency} {formatAmount(actualCost)}
+              </div>
+            </div>
+            <div className="mt-2 text-sm">
+              {!inventoryComplete
+                ? `Draft calculation · ${completedCounts}/${activeProfiles.length} inventory counts complete`
+                : targetVariance === null
+                  ? 'Inventory is complete. Set a target cost percentage to evaluate performance.'
+                  : targetVariance <= 0
+                    ? `${formatAmount(Math.abs(targetVariance), 1)} percentage point(s) below target`
+                    : `${formatAmount(targetVariance, 1)} percentage point(s) above target`}
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {costControl.targetCostPercentage !== null && (
+              <div className="rounded-xl border border-current/15 bg-white/70 px-3 py-2 text-xs font-bold">
+                Target {formatAmount(costControl.targetCostPercentage, 1)}%
+              </div>
+            )}
+            {previousRateDelta !== null && (
+              <div className="inline-flex items-center gap-1 rounded-xl border border-current/15 bg-white/70 px-3 py-2 text-xs font-bold">
+                {previousRateDelta <= 0
+                  ? <ArrowDownRight className="h-4 w-4" />
+                  : <ArrowUpRight className="h-4 w-4" />}
+                {previousRateDelta > 0 ? '+' : ''}{formatAmount(previousRateDelta, 1)} pt vs prior month
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-5">
+          {[
+            ['Net sales', netSales, costControl.netSalesOverride !== null ? 'Manual override' : 'Daily reports'],
+            ['Opening stock', openingInventoryValue, 'Quantity × opening unit cost'],
+            ['Purchases', purchaseTotal, `${purchases.length} entries`],
+            ['Closing stock', closingInventoryValue, 'Quantity × moving average'],
+            ['Waste value', totalWasteValue, 'Recorded waste estimate'],
+          ].map(([label, amount, description]) => (
+            <div key={String(label)} className="rounded-xl border border-black/10 bg-white/80 p-3">
+              <div className="text-[11px] font-bold uppercase text-gray-500">{label}</div>
+              <div className="mt-1 text-base font-extrabold text-gray-900">
+                {store.currency} {formatAmount(Number(amount))}
+              </div>
+              <div className="mt-1 text-[10px] text-gray-500">{description}</div>
+            </div>
+          ))}
+        </div>
+
+        <div className="mt-4 grid grid-cols-1 gap-3 rounded-xl border border-black/10 bg-white/80 p-4 md:grid-cols-2 xl:grid-cols-[160px_220px_1fr_auto]">
+          <label className="text-xs font-bold text-gray-600">
+            Target cost %
+            <input
+              type="number"
+              min="0"
+              max="100"
+              step="0.1"
+              value={costControl.targetCostPercentage ?? ''}
+              onChange={(event) => setCostControl((current) => ({
+                ...current,
+                targetCostPercentage: event.target.value === '' ? null : Number(event.target.value),
+              }))}
+              className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900"
+              placeholder="e.g. 30"
+            />
+          </label>
+          <label className="text-xs font-bold text-gray-600">
+            Net sales override ({store.currency})
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={costControl.netSalesOverride ?? ''}
+              onChange={(event) => setCostControl((current) => ({
+                ...current,
+                netSalesOverride: event.target.value === '' ? null : Number(event.target.value),
+              }))}
+              className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900"
+              placeholder={`Reported: ${formatAmount(reportedSales)}`}
+            />
+          </label>
+          <label className="text-xs font-bold text-gray-600">
+            Monthly note
+            <input
+              value={costControl.notes}
+              onChange={(event) => setCostControl((current) => ({ ...current, notes: event.target.value }))}
+              className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900"
+              placeholder="Tax exclusion, unusual purchase, stock issue, etc."
+            />
+          </label>
+          <button
+            type="button"
+            disabled={savingKey !== null}
+            onClick={() => void saveCostControl()}
+            className="self-end rounded-lg bg-black px-4 py-2 text-sm font-bold text-white disabled:opacity-40"
+          >
+            Save settings
+          </button>
+        </div>
+        <div className="mt-2 text-[11px] opacity-70">
+          Formula: opening stock value + purchases − closing stock value. Blank net sales override uses reported daily sales.
+        </div>
+      </section>
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         <div className="rounded-2xl border border-gray-200 bg-white p-5">
@@ -695,6 +1106,86 @@ const CostInventoryWorkspace: React.FC<Props> = ({
           <div className="mt-1 text-xs text-gray-500">Marked complete for {monthLabel(monthKey)}</div>
         </div>
       </div>
+
+      <section className="rounded-2xl border border-gray-200 bg-white p-5">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <div className="flex items-center gap-2">
+              <Target className="h-5 w-5" />
+              <h3 className="font-extrabold">Cost Diagnosis</h3>
+            </div>
+            <p className="mt-1 text-xs text-gray-500">
+              See which ingredients contribute most to actual food cost and what needs attention first.
+            </p>
+          </div>
+          <div className={`rounded-xl px-3 py-2 text-xs font-bold ${
+            !inventoryComplete
+              ? 'bg-amber-50 text-amber-800'
+              : targetVariance !== null && targetVariance > 0
+                ? 'bg-red-50 text-red-700'
+                : 'bg-emerald-50 text-emerald-700'
+          }`}>
+            {!inventoryComplete
+              ? `Finish ${activeProfiles.length - completedCounts} inventory count(s)`
+              : targetVariance === null
+                ? 'Set the monthly target'
+                : targetVariance > 0
+                  ? `Reduce cost by ${store.currency} ${formatAmount((targetVariance / 100) * netSales)} to reach target`
+                  : 'Actual cost is within target'}
+          </div>
+        </div>
+
+        {previousRateDelta !== null && previousRateDelta > 0 && (
+          <div className="mt-4 flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs font-bold text-amber-800">
+            <TrendingDown className="h-4 w-4" />
+            Actual cost rate increased {formatAmount(previousRateDelta, 1)} point(s) from {monthLabel(previousMonthKey)}.
+            Check high-cost ingredients, waste, and purchase-price changes.
+          </div>
+        )}
+
+        <div className="mt-4 overflow-x-auto">
+          <table className="w-full min-w-[780px] text-left text-sm">
+            <thead className="border-b border-gray-200 text-[11px] uppercase text-gray-400">
+              <tr>
+                <th className="px-3 py-2">Ingredient</th>
+                <th className="px-3 py-2 text-right">Opening value</th>
+                <th className="px-3 py-2 text-right">Purchases</th>
+                <th className="px-3 py-2 text-right">Closing value</th>
+                <th className="px-3 py-2 text-right">Actual cost</th>
+                <th className="px-3 py-2 text-right">Cost share</th>
+                <th className="px-3 py-2 text-right">Waste value</th>
+              </tr>
+            </thead>
+            <tbody>
+              {[...costBreakdown]
+                .sort((left, right) => right.actualCost - left.actualCost)
+                .map((row) => (
+                  <tr key={row.ingredientId} className={`border-b border-gray-100 ${row.invalid ? 'bg-red-50' : ''}`}>
+                    <td className="px-3 py-3">
+                      <div className="font-bold">{row.ingredientName}</div>
+                      {row.invalid && <div className="text-[10px] font-bold text-red-600">Check quantity or valuation</div>}
+                    </td>
+                    <td className="px-3 py-3 text-right">{formatAmount(row.openingValue)}</td>
+                    <td className="px-3 py-3 text-right">{formatAmount(row.purchaseCost)}</td>
+                    <td className="px-3 py-3 text-right">{formatAmount(row.closingValue)}</td>
+                    <td className="px-3 py-3 text-right font-extrabold">{formatAmount(row.actualCost)}</td>
+                    <td className="px-3 py-3 text-right">
+                      {actualCost > 0 ? `${formatAmount((row.actualCost / actualCost) * 100, 1)}%` : '—'}
+                    </td>
+                    <td className="px-3 py-3 text-right">{formatAmount(row.wasteValue)}</td>
+                  </tr>
+                ))}
+              {costBreakdown.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="px-3 py-8 text-center text-sm text-gray-400">
+                    Configure ingredients to start the actual-cost breakdown.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
 
       <section className="rounded-2xl border border-gray-200 bg-white p-5">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -1036,7 +1527,8 @@ const CostInventoryWorkspace: React.FC<Props> = ({
             const row = inventoryRows[profile.ingredientId] ?? emptyInventoryRow(store.id, profile.ingredientId, monthStart);
             const purchasedQuantity = purchasedQuantityByIngredient.get(profile.ingredientId) ?? 0;
             const actualUsage = row.openingQuantity + purchasedQuantity + row.adjustmentQuantity - row.closingQuantity;
-            const invalidUsage = actualUsage < 0 || row.wasteQuantity > Math.max(0, actualUsage);
+            const valuation = costBreakdown.find((item) => item.ingredientId === profile.ingredientId);
+            const invalidUsage = valuation?.invalid ?? (actualUsage < 0 || row.wasteQuantity > Math.max(0, actualUsage));
             return (
               <div key={profile.ingredientId} className={`rounded-xl border p-4 ${invalidUsage ? 'border-red-200 bg-red-50' : row.countComplete ? 'border-emerald-200 bg-emerald-50/40' : 'border-gray-200'}`}>
                 <div className="flex flex-col gap-3 xl:flex-row xl:items-start">
@@ -1056,7 +1548,10 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                         step="0.001"
                         value={row.openingQuantity}
                         disabled={!editable}
-                        onChange={(event) => updateInventoryDraft(profile.ingredientId, { openingQuantity: Number(event.target.value) })}
+                        onChange={(event) => updateInventoryDraft(profile.ingredientId, {
+                          openingQuantity: Number(event.target.value),
+                          countComplete: false,
+                        })}
                         className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm disabled:bg-gray-50"
                       />
                     </label>
@@ -1076,7 +1571,10 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                         step="0.001"
                         value={row.wasteQuantity}
                         disabled={!editable}
-                        onChange={(event) => updateInventoryDraft(profile.ingredientId, { wasteQuantity: Number(event.target.value) })}
+                        onChange={(event) => updateInventoryDraft(profile.ingredientId, {
+                          wasteQuantity: Number(event.target.value),
+                          countComplete: false,
+                        })}
                         className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm disabled:bg-gray-50"
                       />
                     </label>
@@ -1087,7 +1585,10 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                         step="0.001"
                         value={row.adjustmentQuantity}
                         disabled={!editable}
-                        onChange={(event) => updateInventoryDraft(profile.ingredientId, { adjustmentQuantity: Number(event.target.value) })}
+                        onChange={(event) => updateInventoryDraft(profile.ingredientId, {
+                          adjustmentQuantity: Number(event.target.value),
+                          countComplete: false,
+                        })}
                         className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm disabled:bg-gray-50"
                       />
                     </label>
@@ -1099,7 +1600,10 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                         step="0.001"
                         value={row.closingQuantity}
                         disabled={!editable}
-                        onChange={(event) => updateInventoryDraft(profile.ingredientId, { closingQuantity: Number(event.target.value) })}
+                        onChange={(event) => updateInventoryDraft(profile.ingredientId, {
+                          closingQuantity: Number(event.target.value),
+                          countComplete: false,
+                        })}
                         className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm disabled:bg-gray-50"
                       />
                     </label>
@@ -1113,6 +1617,48 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                         placeholder="Optional"
                       />
                     </label>
+                  </div>
+                </div>
+
+                <div className="mt-3 grid grid-cols-2 gap-3 rounded-lg bg-gray-50 p-3 md:grid-cols-4">
+                  <label className="text-xs font-bold text-gray-600">
+                    Opening unit cost ({store.currency}/{ingredient?.unit ?? 'unit'})
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.000001"
+                      value={row.openingUnitCost}
+                      disabled={!editable}
+                      onChange={(event) => updateInventoryDraft(profile.ingredientId, {
+                        openingUnitCost: Number(event.target.value),
+                        countComplete: false,
+                      })}
+                      className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm disabled:bg-gray-100"
+                    />
+                    <span className="mt-1 block text-[10px] font-normal text-gray-400">
+                      {previousClosingCosts[profile.ingredientId] > 0
+                        ? `Prior close: ${formatAmount(previousClosingCosts[profile.ingredientId], 6)}`
+                        : 'First month: verify supplier unit cost'}
+                    </span>
+                  </label>
+                  <div className="text-xs font-bold text-gray-600">
+                    Moving-average closing cost
+                    <div className="mt-1 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900">
+                      {formatAmount(valuation?.closingUnitCost ?? 0, 6)}
+                    </div>
+                    <div className="mt-1 text-[10px] font-normal text-gray-400">Calculated automatically</div>
+                  </div>
+                  <div className="text-xs font-bold text-gray-600">
+                    Opening value
+                    <div className="mt-1 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900">
+                      {store.currency} {formatAmount(valuation?.openingValue ?? 0)}
+                    </div>
+                  </div>
+                  <div className="text-xs font-bold text-gray-600">
+                    Closing value
+                    <div className="mt-1 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900">
+                      {store.currency} {formatAmount(valuation?.closingValue ?? 0)}
+                    </div>
                   </div>
                 </div>
 
@@ -1158,10 +1704,10 @@ const CostInventoryWorkspace: React.FC<Props> = ({
       </section>
 
       <div className="rounded-2xl border border-blue-200 bg-blue-50 p-5">
-        <div className="font-extrabold text-blue-900">Next calculation after this data is complete</div>
+        <div className="font-extrabold text-blue-900">Next: theoretical recipe cost and labor</div>
         <p className="mt-1 text-sm text-blue-800">
-          Update 6 will value opening stock, purchases, and closing stock to calculate actual food cost and actual cost percentage.
-          It will not use the old estimated real-time stock figure.
+          Actual food cost now uses opening stock value + purchases − closing stock value.
+          Update 7 will compare this result with menu and course recipes, theoretical usage, and labor cost.
         </p>
       </div>
 

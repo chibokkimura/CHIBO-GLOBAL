@@ -92,7 +92,9 @@ Supabase Dashboard → SQL Editor 에서 아래 순서대로 실행합니다.
 3) `supabase/migrations/20260728_121500__tighten_phase4_table_grants.sql`
 4) `supabase/migrations/20260728031745_phase5_ingredient_purchases_and_monthly_inventory.sql`
 5) `supabase/migrations/20260728032928_tighten_phase5_table_grants.sql`
-6) (선택) `supabase/seed.sql`
+6) `supabase/migrations/20260728035448_phase6_actual_cost_controls_and_summary.sql`
+7) `supabase/migrations/20260728035610_phase6_actual_cost_summary_view.sql`
+8) (선택) `supabase/seed.sql`
 
 ### 2) Redirect URL 설정 (로그인 후 튕김 방지)
 Supabase Dashboard → Authentication → URL Configuration

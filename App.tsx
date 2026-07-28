@@ -7180,6 +7180,7 @@ const HQStoreDetail: React.FC<{
                     <CostInventoryWorkspace
                         store={store}
                         ingredients={ingredients}
+                        sales={canonicalStoreSales}
                         initialMonthKey={salesMonthFilter === 'all' ? defaultSalesMonthKey : salesMonthFilter}
                         mode="hq"
                     />
@@ -9404,6 +9405,7 @@ const StoreDashboard: React.FC<{
                             <CostInventoryWorkspace
                                 store={store}
                                 ingredients={ingredients}
+                                sales={canonicalStoreSales}
                                 initialMonthKey={dashboardMonthKey}
                                 mode="owner"
                                 onAddIngredient={onAddIngredient}
