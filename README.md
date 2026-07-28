@@ -88,7 +88,9 @@ npm run dev
 Supabase Dashboard → SQL Editor 에서 아래 순서대로 실행합니다.
 
 1) `supabase/schema.sql`
-2) (선택) `supabase/seed.sql`
+2) `supabase/migrations/20260728_120000__phase4_monthly_close_workflow.sql`
+3) `supabase/migrations/20260728_121500__tighten_phase4_table_grants.sql`
+4) (선택) `supabase/seed.sql`
 
 ### 2) Redirect URL 설정 (로그인 후 튕김 방지)
 Supabase Dashboard → Authentication → URL Configuration
