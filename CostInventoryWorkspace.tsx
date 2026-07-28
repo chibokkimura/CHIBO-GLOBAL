@@ -84,10 +84,10 @@ type Props = {
 };
 
 const CATEGORY_LABELS: Record<IngredientCategory, string> = {
-  main: '주재료',
-  secondary: '부재료',
-  packaging: '포장재',
-  other: '기타',
+  main: 'Main',
+  secondary: 'Secondary',
+  packaging: 'Packaging',
+  other: 'Other',
 };
 
 function isLocalPreview(): boolean {
@@ -112,7 +112,7 @@ function monthBounds(monthKey: string): { start: string; end: string } {
 
 function monthLabel(monthKey: string): string {
   const [year, month] = monthKey.split('-').map(Number);
-  return new Intl.DateTimeFormat('ko-KR', { month: 'long', year: 'numeric' }).format(new Date(year, month - 1, 1));
+  return new Intl.DateTimeFormat('en-US', { month: 'long', year: 'numeric' }).format(new Date(year, month - 1, 1));
 }
 
 function adjacentMonthKey(monthKey: string, offset: number): string {
@@ -416,91 +416,43 @@ const CostInventoryWorkspace: React.FC<Props> = ({
   const targetReductionAmount = targetVariance !== null && targetVariance > 0
     ? (targetVariance / 100) * netSales
     : 0;
-  const priorityActions = useMemo(() => {
-    const actions: Array<{
-      id: string;
-      title: string;
-      value: string;
-      description: string;
-      tone: 'danger' | 'warning' | 'neutral' | 'success';
-    }> = [];
-
-    if (!inventoryComplete) {
-      actions.push({
-        id: 'inventory',
-        title: '월말 재고 마감을 완료해 주세요',
-        value: `${completedCounts}/${activeProfiles.length}개 완료`,
-        description: '재고가 모두 마감되어야 실제 원가율과 사용량 차이가 확정됩니다.',
-        tone: 'warning',
-      });
-    }
-
-    if (recipeBlockerCount > 0) {
-      actions.push({
-        id: 'recipe',
-        title: '레시피 또는 재료 단가를 확인해 주세요',
-        value: `${recipeBlockerCount}건 미완료`,
-        description: '미완료 항목이 있으면 이론 원가와 실제 원가의 차이를 정확히 비교할 수 없습니다.',
-        tone: 'warning',
-      });
-    }
-
-    if (varianceAnalysisReady) {
-      theoreticalAnalysis.ingredientRows
-        .filter((row) => row.varianceValue !== null && row.varianceValue > 0)
-        .sort((left, right) => (right.varianceValue ?? 0) - (left.varianceValue ?? 0))
-        .slice(0, 3)
-        .forEach((row) => {
-          const ingredient = ingredientById.get(row.ingredientId);
-          const unit = ingredient?.unit ?? '';
-          const highVariance = row.variancePercentage !== null && row.variancePercentage > 10;
-          actions.push({
-            id: `ingredient-${row.ingredientId}`,
-            title: `${ingredient?.name ?? row.ingredientId} 사용량을 확인해 주세요`,
-            value: `+${formatAmount(row.usageVariance ?? 0, 3)}${unit} / +${store.currency} ${formatAmount(row.varianceValue ?? 0)}`,
-            description: highVariance
-              ? (row.wasteQuantity > 0
-                ? '폐기 기록과 실제 제공량이 맞는지 확인해 주세요.'
-                : '폐기, 과다 제공, 레시피 등록량 또는 재고 수량을 확인해 주세요.')
-              : '기록된 폐기와 실제 사용량 차이를 확인해 주세요.',
-            tone: highVariance ? 'danger' : 'neutral',
-          });
-        });
-    }
-
-    if (actions.length === 0 && targetVariance !== null && targetVariance > 0) {
-      actions.push({
-        id: 'target',
-        title: '목표 원가율까지 원가 절감이 필요합니다',
-        value: `${store.currency} ${formatAmount(targetReductionAmount)} 절감 필요`,
-        description: '원가 비중이 높은 재료와 단가 상승 항목부터 확인해 주세요.',
-        tone: 'danger',
-      });
-    }
-
-    if (actions.length === 0) {
-      actions.push({
-        id: 'complete',
-        title: '이번 달 원가가 정상 범위입니다',
-        value: '추가 경고 없음',
-        description: '현재 입력 기준으로 목표와 레시피 사용량 범위 안에 있습니다.',
-        tone: 'success',
-      });
-    }
-
-    return actions.slice(0, 3);
-  }, [
-    activeProfiles.length,
-    completedCounts,
-    ingredientById,
-    inventoryComplete,
-    recipeBlockerCount,
-    store.currency,
-    targetReductionAmount,
-    targetVariance,
-    theoreticalAnalysis.ingredientRows,
-    varianceAnalysisReady,
-  ]);
+  const costRateSeries = [
+    {
+      id: 'actual',
+      label: 'Actual',
+      value: actualCostPercentage,
+      color: targetVariance !== null && targetVariance > 0 ? 'bg-red-500' : 'bg-gray-950',
+    },
+    {
+      id: 'target',
+      label: 'Target',
+      value: costControl.targetCostPercentage,
+      color: 'bg-emerald-500',
+    },
+    {
+      id: 'recipe',
+      label: 'Recipe',
+      value: theoreticalCostPercentage,
+      color: 'bg-indigo-500',
+    },
+  ];
+  const rateChartMaximum = Math.max(
+    5,
+    Math.ceil(
+      Math.max(...costRateSeries.map((series) => series.value ?? 0)) / 5,
+    ) * 5,
+  );
+  const excessCostDrivers = useMemo(
+    () => theoreticalAnalysis.ingredientRows
+      .filter((row) => row.varianceValue !== null && row.varianceValue > 0)
+      .sort((left, right) => (right.varianceValue ?? 0) - (left.varianceValue ?? 0))
+      .slice(0, 5),
+    [theoreticalAnalysis.ingredientRows],
+  );
+  const largestDriverValue = Math.max(
+    1,
+    ...excessCostDrivers.map((row) => row.varianceValue ?? 0),
+  );
 
   const seedPreview = useCallback(() => {
     const sampleIngredients = localIngredients.slice(0, 3);
@@ -697,8 +649,8 @@ const CostInventoryWorkspace: React.FC<Props> = ({
       const message = String(loadError?.message ?? '');
       setError(
         message.toLowerCase().includes('could not find the table')
-          ? '원가관리 데이터베이스가 아직 활성화되지 않았습니다. 관리자에게 확인해 주세요.'
-          : (message || '원가·재고 데이터를 불러오지 못했습니다.'),
+          ? 'The cost-management database is not active yet. Please contact the administrator.'
+          : (message || 'Failed to load cost and inventory data.'),
       );
     } finally {
       setLoading(false);
@@ -728,11 +680,11 @@ const CostInventoryWorkspace: React.FC<Props> = ({
       costControl.targetCostPercentage !== null
       && (costControl.targetCostPercentage < 0 || costControl.targetCostPercentage > 100)
     ) {
-      setError('목표 원가율은 0~100 사이로 입력해 주세요.');
+      setError('Target cost percentage must be between 0 and 100.');
       return;
     }
     if (costControl.netSalesOverride !== null && costControl.netSalesOverride < 0) {
-      setError('매출 수정값에는 음수를 입력할 수 없습니다.');
+      setError('Net sales override cannot be negative.');
       return;
     }
 
@@ -756,9 +708,9 @@ const CostInventoryWorkspace: React.FC<Props> = ({
           }, { onConflict: 'store_id,month_start' });
         if (saveError) throw saveError;
       }
-      setNotice('이번 달 원가 설정을 저장했습니다.');
+      setNotice('Monthly cost settings saved.');
     } catch (saveError: any) {
-      setError(saveError?.message ?? '이번 달 원가 설정을 저장하지 못했습니다.');
+      setError(saveError?.message ?? 'Failed to save monthly cost settings.');
     } finally {
       setSavingKey(null);
     }
@@ -767,7 +719,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
   const saveProfile = async (profile: IngredientProfile) => {
     if (!editable) return;
     if (!profile.purchaseUnit.trim() || profile.contentQuantity <= 0 || profile.currentPackPrice < 0) {
-      setError('구매단위, 0보다 큰 내용량과 올바른 팩 가격을 입력해 주세요.');
+      setError('Enter a purchase unit, content quantity above 0, and a valid pack price.');
       return;
     }
 
@@ -799,9 +751,9 @@ const CostInventoryWorkspace: React.FC<Props> = ({
           saved,
         ]);
       }
-      setNotice('재료 구매정보를 저장했습니다.');
+      setNotice('Ingredient purchase setup saved.');
     } catch (saveError: any) {
-      setError(saveError?.message ?? '재료 구매정보를 저장하지 못했습니다.');
+      setError(saveError?.message ?? 'Failed to save ingredient setup.');
     } finally {
       setSavingKey(null);
     }
@@ -831,7 +783,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
 
   const createIngredient = async () => {
     if (!editable || !newIngredient.name.trim() || !newIngredient.unit.trim()) {
-      setError('재료명과 기본 단위를 입력해 주세요.');
+      setError('Enter the ingredient name and base unit.');
       return;
     }
     const ingredient: Ingredient = {
@@ -850,7 +802,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
       setShowNewIngredient(false);
       await addProfile(ingredient.id);
     } catch (saveError: any) {
-      setError(saveError?.message ?? '새 재료를 추가하지 못했습니다.');
+      setError(saveError?.message ?? 'Failed to add ingredient.');
     } finally {
       setSavingKey(null);
     }
@@ -885,7 +837,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
     const packages = Number(purchaseDraft.packages);
     const totalCost = Number(purchaseDraft.totalCost);
     if (!profile || !purchaseDraft.purchaseDate || packages <= 0 || !Number.isFinite(totalCost) || totalCost < 0) {
-      setError('재료를 선택하고 구매일, 팩 수와 전표 총액을 올바르게 입력해 주세요.');
+      setError('Choose an ingredient and enter valid packages, date, and total cost.');
       return;
     }
 
@@ -940,16 +892,16 @@ const CostInventoryWorkspace: React.FC<Props> = ({
         notes: '',
       }));
       setShowPurchaseForm(false);
-      setNotice('매입 내역을 저장했습니다.');
+      setNotice('Purchase entry saved.');
     } catch (saveError: any) {
-      setError(saveError?.message ?? '매입 내역을 저장하지 못했습니다.');
+      setError(saveError?.message ?? 'Failed to add purchase entry.');
     } finally {
       setSavingKey(null);
     }
   };
 
   const deletePurchase = async (purchase: PurchaseEntry) => {
-    if (!editable || !window.confirm('이 매입 내역을 삭제하시겠습니까?')) return;
+    if (!editable || !window.confirm('Delete this purchase entry?')) return;
     setSavingKey(`purchase-${purchase.id}`);
     setError(null);
     try {
@@ -964,7 +916,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
       setPurchases((current) => current.filter((row) => row.id !== purchase.id));
       await invalidateInventoryCount(purchase.ingredientId);
     } catch (deleteError: any) {
-      setError(deleteError?.message ?? '매입 내역을 삭제하지 못했습니다.');
+      setError(deleteError?.message ?? 'Failed to delete purchase entry.');
     } finally {
       setSavingKey(null);
     }
@@ -990,17 +942,17 @@ const CostInventoryWorkspace: React.FC<Props> = ({
       || row.closingQuantity < 0
       || !Number.isFinite(row.adjustmentQuantity)
     ) {
-      setError('재고수량과 단가는 올바른 숫자로 입력해야 하며 음수일 수 없습니다.');
+      setError('Inventory quantities and unit costs must be valid and cannot be negative.');
       return;
     }
     if (row.openingQuantity > 0 && row.openingUnitCost <= 0) {
-      setError('이 재료의 월초 단가를 입력한 뒤 재고 마감을 완료해 주세요.');
+      setError('Enter the opening unit cost before completing this ingredient count.');
       return;
     }
 
     const costRow = costBreakdownByIngredient.get(ingredientId);
     if (!costRow || costRow.invalid) {
-      setError('재고수량과 계산금액을 확인한 뒤 저장해 주세요.');
+      setError('Check the quantities and valuation before saving this ingredient count.');
       return;
     }
 
@@ -1041,9 +993,9 @@ const CostInventoryWorkspace: React.FC<Props> = ({
           closingUnitCost: costRow.closingUnitCost,
         },
       }));
-      setNotice('월말 재고수량과 계산금액을 저장했습니다.');
+      setNotice('Monthly inventory count and valuation saved.');
     } catch (saveError: any) {
-      setError(saveError?.message ?? '월말 재고를 저장하지 못했습니다.');
+      setError(saveError?.message ?? 'Failed to save monthly inventory count.');
     } finally {
       setSavingKey(null);
     }
@@ -1052,7 +1004,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
   if (loading) {
     return (
       <div className="rounded-2xl border border-gray-200 bg-white p-8 text-center text-sm text-gray-500">
-        원가·재고 데이터를 불러오는 중입니다…
+        Loading cost and inventory…
       </div>
     );
   }
@@ -1062,19 +1014,19 @@ const CostInventoryWorkspace: React.FC<Props> = ({
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <div className="text-xs font-black tracking-[0.12em] text-gray-400">
-            {mode === 'hq' ? '관리자 원가 검토' : '점포 원가 입력'}
+            {mode === 'hq' ? 'HQ COST REVIEW' : 'STORE COST INPUT'}
           </div>
-          <h2 className="mt-1 text-2xl font-extrabold">원가·매입·재고 관리</h2>
+          <h2 className="mt-1 text-2xl font-extrabold">Cost, Purchases & Inventory</h2>
           <p className="mt-1 text-sm text-gray-500">
             {mode === 'hq'
-              ? '이번 달 결과와 원인을 먼저 확인하고, 필요한 입력 자료를 검토합니다.'
-              : '매입과 월말 재고를 입력하면 실제 원가율과 개선 항목을 자동으로 계산합니다.'}
+              ? 'Review the monthly result first, then inspect the inputs behind it.'
+              : 'Record purchases and month-end counts to calculate actual cost and improvement opportunities.'}
           </p>
         </div>
         <div className="flex items-center gap-2">
           <div className="relative">
             <select
-              aria-label="원가·재고 기준월"
+              aria-label="Cost and inventory month"
               value={monthKey}
               onChange={(event) => setMonthKey(event.target.value)}
               className="appearance-none rounded-xl border border-gray-200 bg-white py-2.5 pl-3 pr-9 text-sm font-bold"
@@ -1082,7 +1034,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
               {monthOptions.map((key) => (
                 <option key={key} value={key}>
                   {monthLabel(key)}
-                  {isTestStore && reportedMonthKeys.has(key) ? ' · 테스트 자료' : ''}
+                  {isTestStore && reportedMonthKeys.has(key) ? ' · TEST DATA' : ''}
                 </option>
               ))}
             </select>
@@ -1090,7 +1042,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
           </div>
           <button
             type="button"
-            aria-label="원가·재고 다시 불러오기"
+            aria-label="Reload cost and inventory"
             onClick={() => void loadData()}
             className="rounded-xl border border-gray-200 bg-white p-2.5 text-gray-600 hover:bg-gray-50"
           >
@@ -1099,11 +1051,11 @@ const CostInventoryWorkspace: React.FC<Props> = ({
         </div>
       </div>
 
-      <nav className="flex overflow-x-auto rounded-2xl border border-gray-200 bg-white p-1.5" aria-label="원가 관리 화면">
+      <nav className="flex overflow-x-auto rounded-2xl border border-gray-200 bg-white p-1.5" aria-label="Cost management sections">
         {([
-          ['summary', '요약·분석'],
-          ['purchases', '재료·매입'],
-          ['inventory', `재고 마감 ${completedCounts}/${activeProfiles.length}`],
+          ['summary', 'Overview'],
+          ['purchases', 'Ingredients & Purchases'],
+          ['inventory', `Inventory Close ${completedCounts}/${activeProfiles.length}`],
         ] as Array<[WorkspaceSection, string]>).map(([key, label]) => (
           <button
             key={key}
@@ -1127,18 +1079,18 @@ const CostInventoryWorkspace: React.FC<Props> = ({
           <section className="rounded-2xl border border-gray-200 bg-white p-5">
             <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
               <div>
-                <div className="text-xs font-black tracking-[0.12em] text-gray-400">이번 달 원가 결론</div>
+                <div className="text-xs font-black tracking-[0.12em] text-gray-400">MONTHLY COST RESULT</div>
                 <h3 className="mt-1 text-xl font-extrabold">
                   {inventoryComplete
                     ? targetVariance === null
-                      ? '재고 마감 완료 · 목표 원가율을 설정해 주세요'
+                      ? 'Inventory is complete · Set a target cost rate'
                       : targetVariance <= 0
-                        ? '목표 원가율 안에서 관리되고 있습니다'
-                        : `목표보다 ${formatAmount(targetVariance, 1)}%p 높습니다`
-                    : `재고 마감 ${activeProfiles.length - completedCounts}개가 남았습니다`}
+                        ? 'Cost is within target'
+                        : `${formatAmount(targetVariance, 1)} points above target`
+                    : `${activeProfiles.length - completedCounts} inventory count(s) still open`}
                 </h3>
                 <p className="mt-1 text-sm text-gray-500">
-                  원가율 계산식: 월초 재고금액 + 당월 매입금액 - 월말 재고금액
+                  Formula: opening stock value + monthly purchases − closing stock value
                 </p>
               </div>
               <div className="flex flex-wrap gap-2">
@@ -1150,10 +1102,10 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                       : 'bg-emerald-100 text-emerald-700'
                 }`}>
                   {!inventoryComplete
-                    ? '계산 중'
+                    ? 'IN PROGRESS'
                     : targetVariance !== null && targetVariance > 0
-                      ? '개선 필요'
-                      : '정상'}
+                      ? 'ACTION NEEDED'
+                      : 'ON TRACK'}
                 </span>
                 <button
                   type="button"
@@ -1161,35 +1113,35 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                   onClick={() => setShowMonthlySettings((current) => !current)}
                   className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-bold hover:bg-gray-50"
                 >
-                  목표·월 설정 {showMonthlySettings ? '닫기' : '열기'}
+                  Monthly Settings {showMonthlySettings ? 'Close' : 'Open'}
                 </button>
               </div>
             </div>
 
             <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <div className="rounded-2xl bg-gray-950 p-5 text-white">
-                <div className="text-xs font-bold text-gray-400">실제 원가율</div>
+                <div className="text-xs font-bold text-gray-400">ACTUAL COST RATE</div>
                 <div className="mt-2 text-3xl font-black">
                   {actualCostPercentage === null ? '—' : `${formatAmount(actualCostPercentage, 1)}%`}
                 </div>
                 <div className="mt-2 text-sm font-bold text-gray-300">
-                  실제 원가 {store.currency} {formatAmount(actualCost)}
+                  Actual cost {store.currency} {formatAmount(actualCost)}
                 </div>
               </div>
               <div className="rounded-2xl border border-gray-200 p-5">
-                <div className="text-xs font-bold text-gray-500">매출액</div>
+                <div className="text-xs font-bold text-gray-500">NET SALES</div>
                 <div className="mt-2 text-2xl font-extrabold">{store.currency} {formatAmount(netSales)}</div>
                 <div className="mt-2 text-xs text-gray-500">
-                  {costControl.netSalesOverride !== null ? '수동 입력값 적용' : '일일 매출보고 자동 집계'}
+                  {costControl.netSalesOverride !== null ? 'Manual override applied' : 'From daily sales reports'}
                 </div>
               </div>
               <div className="rounded-2xl border border-gray-200 p-5">
-                <div className="text-xs font-bold text-gray-500">이론 원가율</div>
+                <div className="text-xs font-bold text-gray-500">RECIPE COST RATE</div>
                 <div className="mt-2 text-2xl font-extrabold">
                   {theoreticalCostPercentage === null ? '—' : `${formatAmount(theoreticalCostPercentage, 1)}%`}
                 </div>
                 <div className="mt-2 text-xs text-gray-500">
-                  레시피 기준 {store.currency} {formatAmount(theoreticalAnalysis.theoreticalCost)}
+                  Recipe cost {store.currency} {formatAmount(theoreticalAnalysis.theoreticalCost)}
                 </div>
               </div>
               <div className={`rounded-2xl border p-5 ${
@@ -1197,27 +1149,27 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                   ? 'border-red-200'
                   : 'border-gray-200'
               }`}>
-                <div className="text-xs font-bold text-gray-500">실제 - 이론 차이</div>
+                <div className="text-xs font-bold text-gray-500">ACTUAL − RECIPE GAP</div>
                 <div className={`mt-2 text-2xl font-extrabold ${
                   varianceAnalysisReady && actualVsTheoreticalGap > 0 ? 'text-red-600' : ''
                 }`}>
                   {varianceAnalysisReady
                     ? `${actualVsTheoreticalGap > 0 ? '+' : ''}${store.currency} ${formatAmount(actualVsTheoreticalGap)}`
-                    : '확정 전'}
+                    : 'Not ready'}
                 </div>
                 <div className="mt-2 text-xs text-gray-500">
-                  {varianceAnalysisReady ? '폐기·과다 사용·단가 차이 확인' : '레시피·단가·재고 마감 필요'}
+                  {varianceAnalysisReady ? 'Waste, overuse, and price gap' : 'Complete recipes, costs, and inventory'}
                 </div>
               </div>
             </div>
 
             <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-5">
               {[
-                ['목표 원가율', costControl.targetCostPercentage === null ? '미설정' : `${formatAmount(costControl.targetCostPercentage, 1)}%`],
-                ['월초 재고', `${store.currency} ${formatAmount(openingInventoryValue)}`],
-                ['당월 매입', `${store.currency} ${formatAmount(purchaseTotal)}`],
-                ['월말 재고', `${store.currency} ${formatAmount(closingInventoryValue)}`],
-                ['폐기 금액', `${store.currency} ${formatAmount(totalWasteValue)}`],
+                ['Target rate', costControl.targetCostPercentage === null ? 'Not set' : `${formatAmount(costControl.targetCostPercentage, 1)}%`],
+                ['Opening stock', `${store.currency} ${formatAmount(openingInventoryValue)}`],
+                ['Purchases', `${store.currency} ${formatAmount(purchaseTotal)}`],
+                ['Closing stock', `${store.currency} ${formatAmount(closingInventoryValue)}`],
+                ['Waste value', `${store.currency} ${formatAmount(totalWasteValue)}`],
               ].map(([label, value]) => (
                 <div key={label} className="rounded-xl bg-gray-50 p-3">
                   <div className="text-[11px] font-bold text-gray-500">{label}</div>
@@ -1233,14 +1185,14 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                 {previousRateDelta <= 0
                   ? <ArrowDownRight className="h-4 w-4" />
                   : <ArrowUpRight className="h-4 w-4" />}
-                전월보다 {formatAmount(Math.abs(previousRateDelta), 1)}%p {previousRateDelta > 0 ? '상승했습니다' : '개선되었습니다'}.
+                {formatAmount(Math.abs(previousRateDelta), 1)} points {previousRateDelta > 0 ? 'higher' : 'better'} than last month.
               </div>
             )}
 
             {showMonthlySettings && (
               <div className="mt-4 grid grid-cols-1 gap-3 rounded-xl border border-gray-200 bg-gray-50 p-4 md:grid-cols-2 xl:grid-cols-[160px_220px_1fr_auto]">
                 <label className="text-xs font-bold text-gray-600">
-                  목표 원가율(%)
+                  Target cost rate (%)
                   <input
                     type="number"
                     min="0"
@@ -1252,11 +1204,11 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                       targetCostPercentage: event.target.value === '' ? null : Number(event.target.value),
                     }))}
                     className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900"
-                    placeholder="예: 30"
+                    placeholder="e.g. 30"
                   />
                 </label>
                 <label className="text-xs font-bold text-gray-600">
-                  매출 수정값({store.currency})
+                  Net sales override ({store.currency})
                   <input
                     type="number"
                     min="0"
@@ -1267,16 +1219,16 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                       netSalesOverride: event.target.value === '' ? null : Number(event.target.value),
                     }))}
                     className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900"
-                    placeholder={`보고 매출: ${formatAmount(reportedSales)}`}
+                    placeholder={`Reported: ${formatAmount(reportedSales)}`}
                   />
                 </label>
                 <label className="text-xs font-bold text-gray-600">
-                  월 메모
+                  Monthly note
                   <input
                     value={costControl.notes}
                     onChange={(event) => setCostControl((current) => ({ ...current, notes: event.target.value }))}
                     className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900"
-                    placeholder="특이 매입, 재고 문제, 매출 수정 사유 등"
+                    placeholder="Unusual purchase, stock issue, sales correction, etc."
                   />
                 </label>
                 <button
@@ -1285,47 +1237,108 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                   onClick={() => void saveCostControl()}
                   className="self-end rounded-lg bg-black px-4 py-2 text-sm font-bold text-white disabled:opacity-40"
                 >
-                  설정 저장
+                  Save Settings
                 </button>
               </div>
             )}
           </section>
 
-          <section className="rounded-2xl border border-gray-200 bg-white p-5">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <div className="flex items-center gap-2">
-                  <Target className="h-5 w-5" />
-                  <h3 className="text-lg font-extrabold">이번 달 먼저 확인할 사항</h3>
-                </div>
-                <p className="mt-1 text-sm text-gray-500">금액 영향이 큰 항목부터 최대 3개만 표시합니다.</p>
+          <section className="grid gap-5 lg:grid-cols-2">
+            <div className="rounded-2xl border border-gray-200 bg-white p-5">
+              <div className="flex items-center gap-2">
+                <Gauge className="h-5 w-5" />
+                <h3 className="text-lg font-extrabold">Cost Rate Comparison</h3>
               </div>
-              {targetReductionAmount > 0 && inventoryComplete && (
-                <div className="rounded-xl bg-red-50 px-3 py-2 text-xs font-extrabold text-red-700">
-                  목표까지 {store.currency} {formatAmount(targetReductionAmount)} 절감 필요
+              <p className="mt-1 text-sm text-gray-500">Actual, target, and recipe cost rates on one common scale.</p>
+              <div className="mt-5 space-y-4">
+                {costRateSeries.map((series) => (
+                  <div key={series.id} className="grid grid-cols-[64px_1fr_58px] items-center gap-3">
+                    <div className="text-xs font-extrabold text-gray-600">{series.label}</div>
+                    <div className="h-3 overflow-hidden rounded-full bg-gray-100">
+                      {series.value !== null && (
+                        <div
+                          className={`h-full rounded-full ${series.color}`}
+                          style={{ width: `${Math.min(100, Math.max(1, (series.value / rateChartMaximum) * 100))}%` }}
+                        />
+                      )}
+                    </div>
+                    <div className="text-right text-sm font-black">
+                      {series.value === null ? '—' : `${formatAmount(series.value, 1)}%`}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-4 flex justify-between border-t border-gray-100 pt-3 text-[10px] font-bold text-gray-400">
+                <span>0%</span>
+                <span>{formatAmount(rateChartMaximum, 0)}%</span>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-gray-200 bg-white p-5">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <Target className="h-5 w-5" />
+                    <h3 className="text-lg font-extrabold">Excess Cost Drivers</h3>
+                  </div>
+                  <p className="mt-1 text-sm text-gray-500">Ingredients with the largest actual cost above recipe cost.</p>
+                </div>
+                {targetReductionAmount > 0 && inventoryComplete && (
+                  <div className="rounded-xl bg-red-50 px-3 py-2 text-right text-xs font-extrabold text-red-700">
+                    Reduce {store.currency} {formatAmount(targetReductionAmount)}
+                    <div className="mt-0.5 text-[10px] font-bold">to reach target</div>
+                  </div>
+                )}
+              </div>
+
+              {!inventoryComplete || recipeBlockerCount > 0 ? (
+                <div className="mt-4 space-y-2">
+                  {!inventoryComplete && (
+                    <div className="rounded-xl border-l-4 border-amber-500 bg-amber-50 p-4">
+                      <div className="text-sm font-extrabold">Complete inventory close</div>
+                      <div className="mt-1 text-xs text-amber-800">{completedCounts}/{activeProfiles.length} ingredient counts complete</div>
+                    </div>
+                  )}
+                  {recipeBlockerCount > 0 && (
+                    <div className="rounded-xl border-l-4 border-amber-500 bg-amber-50 p-4">
+                      <div className="text-sm font-extrabold">Complete recipes and ingredient costs</div>
+                      <div className="mt-1 text-xs text-amber-800">{recipeBlockerCount} item(s) still block the variance analysis</div>
+                    </div>
+                  )}
+                </div>
+              ) : excessCostDrivers.length > 0 ? (
+                <div className="mt-5 space-y-4">
+                  {excessCostDrivers.map((row, index) => {
+                    const ingredient = ingredientById.get(row.ingredientId);
+                    return (
+                      <div key={row.ingredientId}>
+                        <div className="mb-1.5 flex items-end justify-between gap-3">
+                          <div className="min-w-0">
+                            <span className="mr-2 text-[10px] font-black text-gray-400">#{index + 1}</span>
+                            <span className="truncate text-sm font-extrabold">{ingredient?.name ?? row.ingredientId}</span>
+                          </div>
+                          <div className="shrink-0 text-sm font-black text-red-600">
+                            +{store.currency} {formatAmount(row.varianceValue ?? 0)}
+                          </div>
+                        </div>
+                        <div className="h-2.5 overflow-hidden rounded-full bg-red-50">
+                          <div
+                            className="h-full rounded-full bg-red-500"
+                            style={{ width: `${Math.max(3, ((row.varianceValue ?? 0) / largestDriverValue) * 100)}%` }}
+                          />
+                        </div>
+                        <div className="mt-1 text-right text-[10px] text-gray-400">
+                          Usage gap {row.usageVariance !== null && row.usageVariance > 0 ? '+' : ''}{formatAmount(row.usageVariance ?? 0, 3)} {ingredient?.unit ?? ''}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="mt-4 rounded-xl bg-emerald-50 p-5 text-sm font-bold text-emerald-700">
+                  No positive ingredient cost variance detected for this month.
                 </div>
               )}
-            </div>
-            <div className="mt-4 grid gap-3 lg:grid-cols-3">
-              {priorityActions.map((action, index) => (
-                <div
-                  key={action.id}
-                  className={`rounded-xl border-l-4 bg-gray-50 p-4 ${
-                    action.tone === 'danger'
-                      ? 'border-red-500'
-                      : action.tone === 'warning'
-                        ? 'border-amber-500'
-                        : action.tone === 'success'
-                          ? 'border-emerald-500'
-                          : 'border-gray-300'
-                  }`}
-                >
-                  <div className="text-[11px] font-black text-gray-400">우선순위 {index + 1}</div>
-                  <div className="mt-1 text-sm font-extrabold">{action.title}</div>
-                  <div className="mt-2 text-base font-black">{action.value}</div>
-                  <p className="mt-2 text-xs leading-5 text-gray-600">{action.description}</p>
-                </div>
-              ))}
             </div>
           </section>
 
@@ -1333,9 +1346,9 @@ const CostInventoryWorkspace: React.FC<Props> = ({
             <summary className="flex cursor-pointer list-none items-center justify-between gap-3 p-5">
               <div>
                 <div className="flex items-center gap-2 font-extrabold">
-                  <Gauge className="h-4 w-4" /> 재료별 사용량 차이 전체 보기
+                  <Gauge className="h-4 w-4" /> View All Ingredient Usage Gaps
                 </div>
-                <div className="mt-1 text-xs text-gray-500">레시피 사용량과 실제 재고 사용량을 비교합니다.</div>
+                <div className="mt-1 text-xs text-gray-500">Compare recipe usage with actual usage calculated from inventory.</div>
               </div>
               <ChevronDown className="h-5 w-5 text-gray-400 transition group-open:rotate-180" />
             </summary>
@@ -1344,13 +1357,13 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                 <table className="w-full min-w-[980px] text-left text-sm">
                   <thead className="border-b border-gray-200 text-[11px] text-gray-400">
                     <tr>
-                      <th className="px-3 py-2">재료</th>
-                      <th className="px-3 py-2 text-right">이론 사용량</th>
-                      <th className="px-3 py-2 text-right">실제 사용량</th>
-                      <th className="px-3 py-2 text-right">사용량 차이</th>
-                      <th className="px-3 py-2 text-right">차이 금액</th>
-                      <th className="px-3 py-2 text-right">실제 원가 비중</th>
-                      <th className="px-3 py-2">확인 사항</th>
+                      <th className="px-3 py-2">Ingredient</th>
+                      <th className="px-3 py-2 text-right">Recipe Usage</th>
+                      <th className="px-3 py-2 text-right">Actual Usage</th>
+                      <th className="px-3 py-2 text-right">Usage Gap</th>
+                      <th className="px-3 py-2 text-right">Cost Gap</th>
+                      <th className="px-3 py-2 text-right">Share of Actual Cost</th>
+                      <th className="px-3 py-2">Check</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1360,18 +1373,18 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                       const gapHigh = row.variancePercentage !== null && row.variancePercentage > 10;
                       const gapLow = row.variancePercentage !== null && row.variancePercentage < -10;
                       const action = row.unitCost === null
-                        ? '구매단위와 가격 등록'
+                        ? 'Set purchase unit and price'
                         : !inventoryComplete || row.actualUsage === null
-                          ? '월말 재고 마감'
+                          ? 'Complete inventory close'
                           : gapHigh && row.wasteQuantity > 0
-                            ? '폐기와 과다 제공 확인'
+                            ? 'Check waste and over-portioning'
                             : gapHigh
-                              ? '폐기·제공량·레시피·재고 확인'
+                              ? 'Check waste, portions, recipe, and stock'
                               : gapLow
-                                ? '레시피 또는 실사 수량 확인'
+                                ? 'Check recipe or physical count'
                                 : row.wasteQuantity > 0
-                                  ? '폐기 기록 확인'
-                                  : '정상 범위';
+                                  ? 'Check waste record'
+                                  : 'Within range';
                       return (
                         <tr key={row.ingredientId} className={`border-b border-gray-100 ${gapHigh && inventoryComplete ? 'bg-red-50/50' : ''}`}>
                           <td className="px-3 py-3">
@@ -1399,7 +1412,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                       );
                     })}
                     {theoreticalAnalysis.ingredientRows.length === 0 && (
-                      <tr><td colSpan={7} className="px-3 py-8 text-center text-sm text-gray-400">판매수량과 메뉴 레시피를 입력하면 분석이 표시됩니다.</td></tr>
+                      <tr><td colSpan={7} className="px-3 py-8 text-center text-sm text-gray-400">Enter sales quantities and menu recipes to view this analysis.</td></tr>
                     )}
                   </tbody>
                 </table>
@@ -1411,19 +1424,19 @@ const CostInventoryWorkspace: React.FC<Props> = ({
             <summary className="flex cursor-pointer list-none items-center justify-between gap-3 p-5">
               <div>
                 <div className="flex items-center gap-2 font-extrabold">
-                  <ChefHat className="h-4 w-4" /> 메뉴·코스 수익성 상세 보기
+                  <ChefHat className="h-4 w-4" /> View Menu & Course Profitability
                 </div>
-                <div className="mt-1 text-xs text-gray-500">판매수량과 레시피를 기준으로 메뉴별 이론 원가를 확인합니다.</div>
+                <div className="mt-1 text-xs text-gray-500">Review recipe cost by menu using monthly sales quantities.</div>
               </div>
               <ChevronDown className="h-5 w-5 text-gray-400 transition group-open:rotate-180" />
             </summary>
             <div className="space-y-6 border-t border-gray-100 p-5 pt-3">
               <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
                 {[
-                  ['레시피 연결률', theoreticalAnalysis.recipeCoveragePercentage === null ? '—' : `${formatAmount(theoreticalAnalysis.recipeCoveragePercentage, 1)}%`],
-                  ['단가 계산 가능률', theoreticalAnalysis.costCoveragePercentage === null ? '—' : `${formatAmount(theoreticalAnalysis.costCoveragePercentage, 1)}%`],
-                  ['이론 원가', `${store.currency} ${formatAmount(theoreticalAnalysis.theoreticalCost)}`],
-                  ['미완료 항목', `${recipeBlockerCount}건`],
+                  ['Recipe coverage', theoreticalAnalysis.recipeCoveragePercentage === null ? '—' : `${formatAmount(theoreticalAnalysis.recipeCoveragePercentage, 1)}%`],
+                  ['Cost coverage', theoreticalAnalysis.costCoveragePercentage === null ? '—' : `${formatAmount(theoreticalAnalysis.costCoveragePercentage, 1)}%`],
+                  ['Recipe cost', `${store.currency} ${formatAmount(theoreticalAnalysis.theoreticalCost)}`],
+                  ['Incomplete items', `${recipeBlockerCount}`],
                 ].map(([label, value]) => (
                   <div key={label} className="rounded-xl bg-gray-50 p-4">
                     <div className="text-[11px] font-bold text-gray-500">{label}</div>
@@ -1435,13 +1448,13 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                 <table className="w-full min-w-[860px] text-left text-sm">
                   <thead className="border-b border-gray-200 text-[11px] text-gray-400">
                     <tr>
-                      <th className="px-3 py-2">메뉴</th>
-                      <th className="px-3 py-2 text-right">단품 / 코스 판매</th>
-                      <th className="px-3 py-2">레시피 상태</th>
-                      <th className="px-3 py-2 text-right">판매가</th>
-                      <th className="px-3 py-2 text-right">1개 이론 원가</th>
-                      <th className="px-3 py-2 text-right">이론 원가율</th>
-                      <th className="px-3 py-2 text-right">월 이론 원가</th>
+                      <th className="px-3 py-2">Menu</th>
+                      <th className="px-3 py-2 text-right">Single / Course Sales</th>
+                      <th className="px-3 py-2">Recipe Status</th>
+                      <th className="px-3 py-2 text-right">Selling Price</th>
+                      <th className="px-3 py-2 text-right">Recipe Cost / Unit</th>
+                      <th className="px-3 py-2 text-right">Recipe Cost Rate</th>
+                      <th className="px-3 py-2 text-right">Monthly Recipe Cost</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1454,10 +1467,10 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                         <td className="px-3 py-3 text-right">{formatAmount(row.directUnits, 1)} / {formatAmount(row.courseUnits, 1)}</td>
                         <td className="px-3 py-3 text-xs font-bold">
                           {!row.recipeReady
-                            ? <span className="text-red-600">레시피 없음</span>
+                            ? <span className="text-red-600">Missing recipe</span>
                             : !row.costReady
-                              ? <span className="text-amber-700">재료 단가 없음</span>
-                              : <span className="text-emerald-700">완료</span>}
+                              ? <span className="text-amber-700">Missing ingredient cost</span>
+                              : <span className="text-emerald-700">Ready</span>}
                         </td>
                         <td className="px-3 py-3 text-right">{formatAmount(row.price)}</td>
                         <td className="px-3 py-3 text-right">{row.theoreticalUnitCost === null ? '—' : formatAmount(row.theoreticalUnitCost)}</td>
@@ -1466,24 +1479,24 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                       </tr>
                     ))}
                     {theoreticalAnalysis.menuRows.length === 0 && (
-                      <tr><td colSpan={7} className="px-3 py-8 text-center text-sm text-gray-400">이번 달 판매수량이 입력된 메뉴가 없습니다.</td></tr>
+                      <tr><td colSpan={7} className="px-3 py-8 text-center text-sm text-gray-400">No menu sales quantities were reported for this month.</td></tr>
                     )}
                   </tbody>
                 </table>
               </div>
               {theoreticalAnalysis.courseRows.length > 0 && (
                 <div className="overflow-x-auto">
-                  <div className="mb-2 text-sm font-extrabold">코스·세트</div>
+                  <div className="mb-2 text-sm font-extrabold">Courses & Sets</div>
                   <table className="w-full min-w-[720px] text-left text-sm">
                     <thead className="border-b border-gray-200 text-[11px] text-gray-400">
                       <tr>
-                        <th className="px-3 py-2">코스·세트</th>
-                        <th className="px-3 py-2 text-right">판매수량</th>
-                        <th className="px-3 py-2 text-right">구성 메뉴</th>
-                        <th className="px-3 py-2 text-right">판매가</th>
-                        <th className="px-3 py-2 text-right">1개 이론 원가</th>
-                        <th className="px-3 py-2 text-right">이론 원가율</th>
-                        <th className="px-3 py-2 text-right">월 이론 원가</th>
+                        <th className="px-3 py-2">Course / Set</th>
+                        <th className="px-3 py-2 text-right">Units Sold</th>
+                        <th className="px-3 py-2 text-right">Components</th>
+                        <th className="px-3 py-2 text-right">Selling Price</th>
+                        <th className="px-3 py-2 text-right">Recipe Cost / Unit</th>
+                        <th className="px-3 py-2 text-right">Recipe Cost Rate</th>
+                        <th className="px-3 py-2 text-right">Monthly Recipe Cost</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1512,20 +1525,20 @@ const CostInventoryWorkspace: React.FC<Props> = ({
           <section className="rounded-2xl border border-gray-200 bg-white p-5">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div>
-                <h3 className="text-lg font-extrabold">1. 재료 구매단위·가격 설정</h3>
+                <h3 className="text-lg font-extrabold">1. Ingredient Purchase Setup</h3>
                 <p className="mt-1 text-sm text-gray-500">
-                  재료는 한 줄로 확인하고, 수정할 때만 상세 입력칸을 엽니다.
+                  Review each ingredient in one row and open the form only when changes are needed.
                 </p>
               </div>
               {editable && (
                 <div className="flex flex-wrap gap-2">
                   <select
-                    aria-label="설정할 재료"
+                    aria-label="Ingredient to configure"
                     value={selectedIngredientId}
                     onChange={(event) => setSelectedIngredientId(event.target.value)}
                     className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-bold"
                   >
-                    <option value="">등록된 재료 선택</option>
+                    <option value="">Select a registered ingredient</option>
                     {unconfiguredIngredients.map((ingredient) => (
                       <option key={ingredient.id} value={ingredient.id}>{ingredient.name} ({ingredient.unit})</option>
                     ))}
@@ -1536,14 +1549,14 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                     onClick={() => void addProfile(selectedIngredientId)}
                     className="inline-flex items-center gap-1 rounded-xl bg-black px-3 py-2 text-xs font-bold text-white disabled:opacity-40"
                   >
-                    <Plus className="h-4 w-4" /> 구매정보 등록
+                    <Plus className="h-4 w-4" /> Add Purchase Setup
                   </button>
                   <button
                     type="button"
                     onClick={() => setShowNewIngredient((current) => !current)}
                     className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-bold"
                   >
-                    새 재료 추가
+                    Add New Ingredient
                   </button>
                 </div>
               )}
@@ -1552,16 +1565,16 @@ const CostInventoryWorkspace: React.FC<Props> = ({
             {showNewIngredient && editable && (
               <div className="mt-4 grid grid-cols-1 gap-3 rounded-xl border border-gray-200 bg-gray-50 p-4 sm:grid-cols-[1fr_140px_auto]">
                 <label className="text-xs font-bold text-gray-600">
-                  재료명
+                  Ingredient name
                   <input
                     value={newIngredient.name}
                     onChange={(event) => setNewIngredient((current) => ({ ...current, name: event.target.value }))}
                     className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
-                    placeholder="예: 양배추"
+                    placeholder="e.g. Cabbage"
                   />
                 </label>
                 <label className="text-xs font-bold text-gray-600">
-                  기본 단위
+                  Base unit
                   <select
                     value={newIngredient.unit}
                     onChange={(event) => setNewIngredient((current) => ({ ...current, unit: event.target.value }))}
@@ -1569,7 +1582,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                   >
                     <option value="g">g</option>
                     <option value="ml">ml</option>
-                    <option value="pcs">개</option>
+                    <option value="pcs">pcs</option>
                     <option value="kg">kg</option>
                     <option value="L">L</option>
                   </select>
@@ -1580,7 +1593,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                   onClick={() => void createIngredient()}
                   className="self-end rounded-lg bg-black px-4 py-2 text-sm font-bold text-white disabled:opacity-40"
                 >
-                  추가
+                  Add
                 </button>
               </div>
             )}
@@ -1589,13 +1602,13 @@ const CostInventoryWorkspace: React.FC<Props> = ({
               <table className="w-full min-w-[900px] text-left text-sm">
                 <thead className="border-b border-gray-200 text-[11px] text-gray-400">
                   <tr>
-                    <th className="px-3 py-2">재료</th>
-                    <th className="px-3 py-2">구매단위</th>
-                    <th className="px-3 py-2 text-right">내용량</th>
-                    <th className="px-3 py-2 text-right">1팩 가격</th>
-                    <th className="px-3 py-2 text-right">기본단위 원가</th>
-                    <th className="px-3 py-2">공급처</th>
-                    {editable && <th className="px-3 py-2 text-right">수정</th>}
+                    <th className="px-3 py-2">Ingredient</th>
+                    <th className="px-3 py-2">Purchase Unit</th>
+                    <th className="px-3 py-2 text-right">Content</th>
+                    <th className="px-3 py-2 text-right">Pack Price</th>
+                    <th className="px-3 py-2 text-right">Base Unit Cost</th>
+                    <th className="px-3 py-2">Supplier</th>
+                    {editable && <th className="px-3 py-2 text-right">Edit</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -1623,7 +1636,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                                 onClick={() => setExpandedProfileId(expanded ? null : profile.ingredientId)}
                                 className="rounded-lg border border-gray-200 px-3 py-2 text-xs font-bold hover:bg-gray-50"
                               >
-                                {expanded ? '닫기' : '수정'}
+                                {expanded ? 'Close' : 'Edit'}
                               </button>
                             </td>
                           )}
@@ -1633,7 +1646,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                             <td colSpan={7} className="p-4">
                               <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
                                 <label className="text-xs font-bold text-gray-600">
-                                  분류
+                                  Category
                                   <select
                                     value={profile.category}
                                     onChange={(event) => setProfiles((current) => current.map((row) => row.ingredientId === profile.ingredientId ? { ...row, category: event.target.value as IngredientCategory } : row))}
@@ -1643,16 +1656,16 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                                   </select>
                                 </label>
                                 <label className="text-xs font-bold text-gray-600">
-                                  구매단위
+                                  Purchase unit
                                   <input
                                     value={profile.purchaseUnit}
                                     onChange={(event) => setProfiles((current) => current.map((row) => row.ingredientId === profile.ingredientId ? { ...row, purchaseUnit: event.target.value } : row))}
                                     className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
-                                    placeholder="박스 / 팩 / 병"
+                                    placeholder="case / pack / bottle"
                                   />
                                 </label>
                                 <label className="text-xs font-bold text-gray-600">
-                                  내용량({ingredient?.unit ?? 'unit'})
+                                  Content ({ingredient?.unit ?? 'unit'})
                                   <input
                                     type="number"
                                     min="0.001"
@@ -1663,7 +1676,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                                   />
                                 </label>
                                 <label className="text-xs font-bold text-gray-600">
-                                  1팩 가격({store.currency})
+                                  Pack price ({store.currency})
                                   <input
                                     type="number"
                                     min="0"
@@ -1674,12 +1687,12 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                                   />
                                 </label>
                                 <label className="text-xs font-bold text-gray-600">
-                                  공급처
+                                  Supplier
                                   <input
                                     value={profile.supplier}
                                     onChange={(event) => setProfiles((current) => current.map((row) => row.ingredientId === profile.ingredientId ? { ...row, supplier: event.target.value } : row))}
                                     className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
-                                    placeholder="선택 입력"
+                                    placeholder="Optional"
                                   />
                                 </label>
                               </div>
@@ -1690,7 +1703,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                                   onClick={() => void saveProfile(profile)}
                                   className="inline-flex items-center gap-1 rounded-lg bg-black px-4 py-2 text-xs font-bold text-white disabled:opacity-40"
                                 >
-                                  <Save className="h-4 w-4" /> 재료 설정 저장
+                                  <Save className="h-4 w-4" /> Save Ingredient Setup
                                 </button>
                               </div>
                             </td>
@@ -1700,7 +1713,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                     );
                   })}
                   {activeProfiles.length === 0 && (
-                    <tr><td colSpan={editable ? 7 : 6} className="px-3 py-8 text-center text-sm text-gray-400">구매정보가 등록된 재료가 없습니다.</td></tr>
+                    <tr><td colSpan={editable ? 7 : 6} className="px-3 py-8 text-center text-sm text-gray-400">No ingredient purchase setup has been registered.</td></tr>
                   )}
                 </tbody>
               </table>
@@ -1710,8 +1723,8 @@ const CostInventoryWorkspace: React.FC<Props> = ({
           <section className="rounded-2xl border border-gray-200 bg-white p-5">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div>
-                <h3 className="text-lg font-extrabold">2. 당월 매입 입력</h3>
-                <p className="mt-1 text-sm text-gray-500">구매한 팩 수와 전표 총액만 입력하면 기본단위 수량이 자동 계산됩니다.</p>
+                <h3 className="text-lg font-extrabold">2. Monthly Purchases</h3>
+                <p className="mt-1 text-sm text-gray-500">Enter package count and invoice total; base-unit quantity is calculated automatically.</p>
               </div>
               {editable && (
                 <button
@@ -1720,7 +1733,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                   onClick={() => setShowPurchaseForm((current) => !current)}
                   className="inline-flex items-center justify-center gap-1 rounded-xl bg-black px-4 py-2.5 text-xs font-bold text-white disabled:opacity-40"
                 >
-                  <Plus className="h-4 w-4" /> 매입 추가
+                  <Plus className="h-4 w-4" /> Add Purchase
                 </button>
               )}
             </div>
@@ -1729,7 +1742,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
               <div className="mt-4 rounded-xl border border-gray-200 bg-gray-50 p-4">
                 <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-6">
                   <label className="text-xs font-bold text-gray-600 xl:col-span-2">
-                    재료
+                    Ingredient
                     <select
                       value={purchaseDraft.ingredientId}
                       onChange={(event) => {
@@ -1750,7 +1763,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                     </select>
                   </label>
                   <label className="text-xs font-bold text-gray-600">
-                    구매일
+                    Purchase date
                     <input
                       type="date"
                       min={monthStart}
@@ -1761,7 +1774,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                     />
                   </label>
                   <label className="text-xs font-bold text-gray-600">
-                    구매 팩 수
+                    Packages
                     <input
                       type="number"
                       min="0.001"
@@ -1780,7 +1793,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                     />
                   </label>
                   <label className="text-xs font-bold text-gray-600">
-                    전표 총액({store.currency})
+                    Invoice total ({store.currency})
                     <input
                       type="number"
                       min="0"
@@ -1791,43 +1804,43 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                     />
                   </label>
                   <label className="text-xs font-bold text-gray-600">
-                    공급처
+                    Supplier
                     <input
                       value={purchaseDraft.supplier}
                       onChange={(event) => setPurchaseDraft((current) => ({ ...current, supplier: event.target.value }))}
                       className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
-                      placeholder="선택 입력"
+                      placeholder="Optional"
                     />
                   </label>
                 </div>
                 <label className="mt-3 block text-xs font-bold text-gray-600">
-                  메모
+                  Notes
                   <input
                     value={purchaseDraft.notes}
                     onChange={(event) => setPurchaseDraft((current) => ({ ...current, notes: event.target.value }))}
                     className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
-                    placeholder="전표번호, 가격변동, 납품 문제 등"
+                    placeholder="Invoice number, price change, delivery issue, etc."
                   />
                 </label>
                 <div className="mt-3 flex justify-end gap-2">
-                  <button type="button" onClick={() => setShowPurchaseForm(false)} className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-bold">취소</button>
-                  <button type="button" disabled={savingKey !== null} onClick={() => void addPurchase()} className="rounded-lg bg-black px-4 py-2 text-xs font-bold text-white disabled:opacity-40">매입 저장</button>
+                  <button type="button" onClick={() => setShowPurchaseForm(false)} className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-bold">Cancel</button>
+                  <button type="button" disabled={savingKey !== null} onClick={() => void addPurchase()} className="rounded-lg bg-black px-4 py-2 text-xs font-bold text-white disabled:opacity-40">Save Purchase</button>
                 </div>
               </div>
             )}
 
             <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-3">
               <div className="rounded-xl bg-gray-50 p-4">
-                <div className="text-xs font-bold text-gray-500">이번 달 매입 총액</div>
+                <div className="text-xs font-bold text-gray-500">MONTHLY PURCHASES</div>
                 <div className="mt-1 text-xl font-extrabold">{store.currency} {formatAmount(purchaseTotal)}</div>
               </div>
               <div className="rounded-xl bg-gray-50 p-4">
-                <div className="text-xs font-bold text-gray-500">매입 건수</div>
-                <div className="mt-1 text-xl font-extrabold">{purchases.length}건</div>
+                <div className="text-xs font-bold text-gray-500">PURCHASE ENTRIES</div>
+                <div className="mt-1 text-xl font-extrabold">{purchases.length}</div>
               </div>
               <div className="rounded-xl bg-gray-50 p-4">
-                <div className="text-xs font-bold text-gray-500">등록 재료</div>
-                <div className="mt-1 text-xl font-extrabold">{activeProfiles.length}개</div>
+                <div className="text-xs font-bold text-gray-500">CONFIGURED INGREDIENTS</div>
+                <div className="mt-1 text-xl font-extrabold">{activeProfiles.length}</div>
               </div>
             </div>
 
@@ -1835,13 +1848,13 @@ const CostInventoryWorkspace: React.FC<Props> = ({
               <table className="w-full min-w-[760px] text-left text-sm">
                 <thead className="border-b border-gray-200 text-[11px] text-gray-400">
                   <tr>
-                    <th className="px-3 py-2">구매일</th>
-                    <th className="px-3 py-2">재료</th>
-                    <th className="px-3 py-2 text-right">팩 수</th>
-                    <th className="px-3 py-2 text-right">기본 수량</th>
-                    <th className="px-3 py-2 text-right">총액</th>
-                    <th className="px-3 py-2">공급처·메모</th>
-                    {editable && <th className="px-3 py-2 text-right">삭제</th>}
+                    <th className="px-3 py-2">Date</th>
+                    <th className="px-3 py-2">Ingredient</th>
+                    <th className="px-3 py-2 text-right">Packages</th>
+                    <th className="px-3 py-2 text-right">Base Quantity</th>
+                    <th className="px-3 py-2 text-right">Total</th>
+                    <th className="px-3 py-2">Supplier / Notes</th>
+                    {editable && <th className="px-3 py-2 text-right">Delete</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -1852,7 +1865,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                       <tr key={purchase.id} className="border-b border-gray-100">
                         <td className="px-3 py-3 font-bold">{purchase.purchaseDate}</td>
                         <td className="px-3 py-3">{ingredient?.name ?? purchase.ingredientId}</td>
-                        <td className="px-3 py-3 text-right">{formatAmount(purchase.packages, 3)} {profile?.purchaseUnit ?? '팩'}</td>
+                        <td className="px-3 py-3 text-right">{formatAmount(purchase.packages, 3)} {profile?.purchaseUnit ?? 'pack'}</td>
                         <td className="px-3 py-3 text-right">{formatAmount(purchase.baseQuantity, 3)} {ingredient?.unit ?? ''}</td>
                         <td className="px-3 py-3 text-right font-bold">{purchase.currency} {formatAmount(purchase.totalCost)}</td>
                         <td className="px-3 py-3 text-xs text-gray-500">{[purchase.supplier, purchase.notes].filter(Boolean).join(' · ') || '—'}</td>
@@ -1860,7 +1873,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                           <td className="px-3 py-3 text-right">
                             <button
                               type="button"
-                              aria-label={`${purchase.purchaseDate} ${ingredient?.name ?? purchase.ingredientId} 매입 삭제`}
+                              aria-label={`Delete ${purchase.purchaseDate} ${ingredient?.name ?? purchase.ingredientId} purchase`}
                               disabled={savingKey !== null}
                               onClick={() => void deletePurchase(purchase)}
                               className="rounded-lg p-2 text-gray-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-30"
@@ -1873,7 +1886,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                     );
                   })}
                   {purchases.length === 0 && (
-                    <tr><td colSpan={editable ? 7 : 6} className="px-3 py-8 text-center text-sm text-gray-400">이번 달 매입 내역이 없습니다.</td></tr>
+                    <tr><td colSpan={editable ? 7 : 6} className="px-3 py-8 text-center text-sm text-gray-400">No purchase entries for this month.</td></tr>
                   )}
                 </tbody>
               </table>
@@ -1886,35 +1899,35 @@ const CostInventoryWorkspace: React.FC<Props> = ({
         <section className="rounded-2xl border border-gray-200 bg-white p-5">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div>
-              <h3 className="text-lg font-extrabold">월말 재고 마감</h3>
+              <h3 className="text-lg font-extrabold">Month-End Inventory Close</h3>
               <p className="mt-1 text-sm text-gray-500">
-                월초 + 매입 + 조정 - 월말 = 실제 사용량입니다. 기본 수량만 입력하고 상세 단가는 필요할 때 펼쳐 보세요.
+                Opening + purchases + adjustment − closing = actual usage. Enter quantities first and expand valuation details only when needed.
               </p>
             </div>
             <div className={`rounded-xl px-4 py-2 text-sm font-extrabold ${
               inventoryComplete ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-800'
             }`}>
-              {completedCounts}/{activeProfiles.length}개 마감 완료
+              {completedCounts}/{activeProfiles.length} counts complete
             </div>
           </div>
 
           <div className="mt-4 rounded-xl bg-gray-50 p-4 text-xs leading-5 text-gray-600">
-            실제로 수량을 센 재료는 <strong>실사 완료</strong>를 체크한 뒤 저장해 주세요.
-            수량이 맞지 않는 행만 빨간색으로 표시됩니다.
+            Check <strong>Count complete</strong> only after physically counting the ingredient, then save.
+            Only rows with invalid quantities are highlighted in red.
           </div>
 
           <div className="mt-4 overflow-x-auto">
             <table className="w-full min-w-[880px] text-left text-sm">
               <thead className="border-b border-gray-200 text-[11px] text-gray-400">
                 <tr>
-                  <th className="px-3 py-2">재료</th>
-                  <th className="px-2 py-2 text-right">월초</th>
-                  <th className="px-2 py-2 text-right">매입</th>
-                  <th className="px-2 py-2 text-right">폐기</th>
-                  <th className="px-2 py-2 text-right">조정(+/-)</th>
-                  <th className="px-2 py-2 text-right">월말</th>
-                  <th className="px-3 py-2 text-right">실제 사용량</th>
-                  <th className="px-3 py-2 text-center">마감</th>
+                  <th className="px-3 py-2">Ingredient</th>
+                  <th className="px-2 py-2 text-right">Opening</th>
+                  <th className="px-2 py-2 text-right">Purchased</th>
+                  <th className="px-2 py-2 text-right">Waste</th>
+                  <th className="px-2 py-2 text-right">Adjust (+/-)</th>
+                  <th className="px-2 py-2 text-right">Closing</th>
+                  <th className="px-3 py-2 text-right">Actual Usage</th>
+                  <th className="px-3 py-2 text-center">Close</th>
                 </tr>
               </thead>
               <tbody>
@@ -1933,19 +1946,19 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                         <td className="px-3 py-3">
                           <div className="font-extrabold">{ingredient?.name ?? profile.ingredientId}</div>
                           <div className="mt-1 text-[10px] text-gray-400">{ingredient?.unit ?? 'unit'}</div>
-                          {invalidUsage && <div className="mt-1 text-[10px] font-bold text-red-600">수량 확인 필요</div>}
+                          {invalidUsage && <div className="mt-1 text-[10px] font-bold text-red-600">Check quantities</div>}
                           <button
                             type="button"
                             aria-expanded={expanded}
                             onClick={() => setExpandedInventoryId(expanded ? null : profile.ingredientId)}
                             className="mt-2 text-[10px] font-bold text-gray-500 underline underline-offset-2 hover:text-black"
                           >
-                            {expanded ? '단가·메모 닫기' : '단가·메모'}
+                            {expanded ? 'Close valuation details' : 'Valuation details'}
                           </button>
                         </td>
                         <td className="px-2 py-3 text-right">
                           <input
-                            aria-label={`${ingredient?.name ?? profile.ingredientId} 월초 재고`}
+                            aria-label={`${ingredient?.name ?? profile.ingredientId} opening inventory`}
                             type="number"
                             min="0"
                             step="0.001"
@@ -1960,7 +1973,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                         </td>
                         <td className="px-2 py-3 text-right">
                           <input
-                            aria-label={`${ingredient?.name ?? profile.ingredientId} 폐기 수량`}
+                            aria-label={`${ingredient?.name ?? profile.ingredientId} waste quantity`}
                             type="number"
                             min="0"
                             step="0.001"
@@ -1972,7 +1985,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                         </td>
                         <td className="px-2 py-3 text-right">
                           <input
-                            aria-label={`${ingredient?.name ?? profile.ingredientId} 재고 조정`}
+                            aria-label={`${ingredient?.name ?? profile.ingredientId} inventory adjustment`}
                             type="number"
                             step="0.001"
                             value={row.adjustmentQuantity}
@@ -1983,7 +1996,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                         </td>
                         <td className="px-2 py-3 text-right">
                           <input
-                            aria-label={`${ingredient?.name ?? profile.ingredientId} 월말 재고`}
+                            aria-label={`${ingredient?.name ?? profile.ingredientId} closing inventory`}
                             type="number"
                             min="0"
                             step="0.001"
@@ -2006,7 +2019,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                                 onChange={(event) => updateInventoryDraft(profile.ingredientId, { countComplete: event.target.checked })}
                                 className="h-4 w-4 rounded border-gray-300"
                               />
-                              {row.countComplete ? '완료' : '미완료'}
+                              {row.countComplete ? 'Complete' : 'Open'}
                             </label>
                             {editable && (
                               <button
@@ -2015,7 +2028,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                                 onClick={() => void saveInventoryRow(profile.ingredientId)}
                                 className="inline-flex items-center gap-1 rounded-lg bg-black px-3 py-2 text-xs font-bold text-white disabled:opacity-40"
                               >
-                                <Save className="h-4 w-4" /> 저장
+                                <Save className="h-4 w-4" /> Save
                               </button>
                             )}
                           </div>
@@ -2026,7 +2039,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                           <td colSpan={8} className="p-4">
                             <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
                               <label className="text-xs font-bold text-gray-600">
-                                월초 단가({store.currency}/{ingredient?.unit ?? 'unit'})
+                                Opening unit cost ({store.currency}/{ingredient?.unit ?? 'unit'})
                                 <input
                                   type="number"
                                   min="0"
@@ -2038,37 +2051,37 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                                 />
                                 <span className="mt-1 block text-[10px] font-normal text-gray-400">
                                   {previousClosingCosts[profile.ingredientId] > 0
-                                    ? `전월 말 단가: ${formatAmount(previousClosingCosts[profile.ingredientId], 6)}`
-                                    : '첫 달은 공급처 단가를 확인해 주세요'}
+                                    ? `Previous closing cost: ${formatAmount(previousClosingCosts[profile.ingredientId], 6)}`
+                                    : 'For the first month, confirm the supplier unit cost'}
                                 </span>
                               </label>
                               <div className="text-xs font-bold text-gray-600">
-                                이동평균 월말 단가
+                                Moving-average closing cost
                                 <div className="mt-1 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900">
                                   {formatAmount(valuation?.closingUnitCost ?? 0, 6)}
                                 </div>
-                                <div className="mt-1 text-[10px] font-normal text-gray-400">자동 계산</div>
+                                <div className="mt-1 text-[10px] font-normal text-gray-400">Calculated automatically</div>
                               </div>
                               <div className="text-xs font-bold text-gray-600">
-                                월초 재고금액
+                                Opening stock value
                                 <div className="mt-1 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900">
                                   {store.currency} {formatAmount(valuation?.openingValue ?? 0)}
                                 </div>
                               </div>
                               <div className="text-xs font-bold text-gray-600">
-                                월말 재고금액
+                                Closing stock value
                                 <div className="mt-1 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900">
                                   {store.currency} {formatAmount(valuation?.closingValue ?? 0)}
                                 </div>
                               </div>
                               <label className="text-xs font-bold text-gray-600">
-                                메모
+                                Notes
                                 <input
                                   value={row.notes}
                                   disabled={!editable}
                                   onChange={(event) => updateInventoryDraft(profile.ingredientId, { notes: event.target.value })}
                                   className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm disabled:bg-gray-100"
-                                  placeholder="수량 차이 사유 등"
+                                  placeholder="Reason for count difference, etc."
                                 />
                               </label>
                             </div>
@@ -2079,7 +2092,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                   );
                 })}
                 {activeProfiles.length === 0 && (
-                  <tr><td colSpan={8} className="px-3 py-8 text-center text-sm text-gray-400">먼저 재료 구매정보를 등록해 주세요.</td></tr>
+                  <tr><td colSpan={8} className="px-3 py-8 text-center text-sm text-gray-400">Register ingredient purchase setup first.</td></tr>
                 )}
               </tbody>
             </table>
