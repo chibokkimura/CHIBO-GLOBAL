@@ -299,7 +299,7 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
     ...(overdueTaxEvents.length > 0 ? [`${overdueTaxEvents.length} overdue tax/compliance item(s)`] : []),
   ];
   const canSubmit = warnings.length === 0;
-  const lockedForOwner = mode === 'owner' && period?.status === 'approved';
+  const lockedForOwner = mode === 'owner' && (period?.status === 'submitted' || period?.status === 'approved');
 
   const monthOptions = useMemo(() => {
     const keys = new Set<string>([initialMonthKey, monthKey, formatLocalDate(new Date()).slice(0, 7)]);
@@ -738,6 +738,7 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
         <div className="flex items-center gap-2">
           <div className="relative">
             <select
+              aria-label="Month close month"
               value={monthKey}
               onChange={(event) => setMonthKey(event.target.value)}
               className="appearance-none rounded-xl border border-gray-200 bg-white py-2.5 pl-3 pr-9 text-sm font-bold"
@@ -988,7 +989,15 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
                   </td>
                   <td className="px-3 py-3 text-xs text-gray-500">{voucher.referenceNumber || '—'}</td>
                   <td className="px-3 py-3 text-right">
-                    <button type="button" disabled={lockedForOwner} onClick={() => void deleteVoucher(voucher)} className="rounded-lg p-2 text-gray-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-30"><Trash2 className="h-4 w-4" /></button>
+                    <button
+                      type="button"
+                      aria-label={`Delete voucher ${voucher.voucherDate} ${PAYMENT_METHOD_LABELS[voucher.paymentMethod]}`}
+                      disabled={lockedForOwner}
+                      onClick={() => void deleteVoucher(voucher)}
+                      className="rounded-lg p-2 text-gray-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-30"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
                   </td>
                 </tr>
               ))}
@@ -1055,6 +1064,7 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
               <div key={event.id} className={`flex items-center gap-3 rounded-xl border p-3 ${overdue ? 'border-red-200 bg-red-50' : 'border-gray-200'}`}>
                 <button
                   type="button"
+                  aria-label={`${event.status === 'completed' ? 'Mark pending' : 'Mark completed'}: ${event.title}`}
                   disabled={lockedForOwner}
                   onClick={() => void toggleTaxEvent(event)}
                   className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${event.status === 'completed' ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-500'}`}
@@ -1069,7 +1079,15 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
                   </div>
                   <div className="mt-1 text-xs text-gray-500">Due {event.dueDate}{event.notes ? ` · ${event.notes}` : ''}</div>
                 </div>
-                <button type="button" disabled={lockedForOwner} onClick={() => void deleteTaxEvent(event)} className="rounded-lg p-2 text-gray-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-30"><Trash2 className="h-4 w-4" /></button>
+                <button
+                  type="button"
+                  aria-label={`Delete deadline: ${event.title}`}
+                  disabled={lockedForOwner}
+                  onClick={() => void deleteTaxEvent(event)}
+                  className="rounded-lg p-2 text-gray-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-30"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
               </div>
             );
           })}
@@ -1105,14 +1123,20 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
             {mode === 'hq' && (
               <>
                 {period?.status === 'approved' && <button type="button" disabled={saving} onClick={() => void savePeriod('reopened')} className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-bold">Reopen</button>}
-                <button type="button" disabled={saving || !canSubmit || period?.status === 'approved'} onClick={() => void savePeriod('approved')} className="rounded-xl bg-black px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-40">Approve Month</button>
+                <button type="button" disabled={saving || !canSubmit || period?.status !== 'submitted'} onClick={() => void savePeriod('approved')} className="rounded-xl bg-black px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-40">Approve Month</button>
               </>
             )}
           </div>
         </div>
       </section>
 
-      {lockedForOwner && <div className="rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm font-bold text-blue-800">This month is approved and locked. Ask HQ to reopen it before editing.</div>}
+      {lockedForOwner && (
+        <div className="rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm font-bold text-blue-800">
+          {period?.status === 'approved'
+            ? 'This month is approved and locked. Ask HQ to reopen it before editing.'
+            : 'This month was submitted to HQ. Reopen the draft before making changes.'}
+        </div>
+      )}
       {notice && <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm font-bold text-emerald-700">{notice}</div>}
       {error && <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-bold text-red-700">{error}</div>}
     </div>
