@@ -11,6 +11,7 @@ import * as XLSX from 'xlsx-js-style';
 import { isSupabaseConfigured, supabase } from './supabaseClient';
 import { signInWithEmailPassword, signInWithGoogle, signOut, signUpWithEmailPassword } from './auth';
 import { MOCK_EMPLOYEES, MOCK_INGREDIENTS, MOCK_MENUS, MOCK_SALES, MOCK_STORES, MOCK_USERS } from './constants';
+import MonthlyCloseWorkspace from './MonthlyCloseWorkspace';
 
 
 // --- Supabase Data Layer ---
@@ -5434,7 +5435,7 @@ const HQStoreDetail: React.FC<{
     const [invoiceError, setInvoiceError] = useState<string | null>(null);
     const [invoiceGenerating, setInvoiceGenerating] = useState(false);
     const [invoiceManualFxDraft, setInvoiceManualFxDraft] = useState<string>('');
-    const [detailSection, setDetailSection] = useState<'sales' | 'inventory' | 'invoice' | 'menu' | 'staff' | 'accounts'>('sales');
+    const [detailSection, setDetailSection] = useState<'sales' | 'close' | 'inventory' | 'invoice' | 'menu' | 'staff' | 'accounts'>('sales');
     const [menuSection, setMenuSection] = useState<'items' | 'sets'>('items');
     const hqNavReadyRef = useRef(false);
     const hqPopLockRef = useRef(false);
@@ -5469,6 +5470,7 @@ const HQStoreDetail: React.FC<{
         const queryMenuSection = url.searchParams.get('hm');
         const fromQuerySection = (
             querySection === 'sales' ||
+            querySection === 'close' ||
             querySection === 'inventory' ||
             querySection === 'invoice' ||
             querySection === 'menu' ||
@@ -5482,6 +5484,7 @@ const HQStoreDetail: React.FC<{
             ? {
                 section: (
                     state.section === 'sales' ||
+                    state.section === 'close' ||
                     state.section === 'inventory' ||
                     state.section === 'invoice' ||
                     state.section === 'menu' ||
@@ -5547,6 +5550,7 @@ const HQStoreDetail: React.FC<{
             hqPopLockRef.current = true;
             setDetailSection(
                 state.section === 'sales' ||
+                state.section === 'close' ||
                 state.section === 'inventory' ||
                 state.section === 'invoice' ||
                 state.section === 'menu' ||
@@ -6804,6 +6808,7 @@ const HQStoreDetail: React.FC<{
                 <div className="inline-flex items-center gap-2 rounded-2xl border border-gray-200 bg-white p-1 min-w-max">
                     {[
                         { key: 'sales', label: 'Sales' },
+                        { key: 'close', label: 'Month Close' },
                         { key: 'inventory', label: 'Inventory' },
                         { key: 'invoice', label: 'Invoice' },
                         { key: 'menu', label: 'Menu' },
@@ -6813,7 +6818,7 @@ const HQStoreDetail: React.FC<{
                         <button
                             key={tab.key}
                             type="button"
-                            onClick={() => setDetailSection(tab.key as 'sales' | 'inventory' | 'invoice' | 'menu' | 'staff' | 'accounts')}
+                            onClick={() => setDetailSection(tab.key as 'sales' | 'close' | 'inventory' | 'invoice' | 'menu' | 'staff' | 'accounts')}
                             className={`px-4 py-2 rounded-xl text-sm font-bold transition ${
                                 detailSection === tab.key
                                     ? 'bg-black text-white'
@@ -6825,6 +6830,17 @@ const HQStoreDetail: React.FC<{
                     ))}
                 </div>
             </div>
+
+            {detailSection === 'close' && (
+                <div className="mb-8">
+                    <MonthlyCloseWorkspace
+                        store={store}
+                        sales={sales}
+                        initialMonthKey={salesMonthFilter === 'all' ? defaultSalesMonthKey : salesMonthFilter}
+                        mode="hq"
+                    />
+                </div>
+            )}
 
             {detailSection === 'invoice' && (
             <div className="bg-white p-5 rounded-2xl shadow-sm border mb-8">
@@ -9407,98 +9423,16 @@ const StoreDashboard: React.FC<{
                     )}
 
                     {view === 'month' && (
-                        <div className="space-y-6">
-                            <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3">
-                                <div>
-                                    <div className="text-xs font-black uppercase tracking-[0.18em] text-gray-400">Monthly readiness</div>
-                                    <h2 className="text-2xl font-extrabold mt-1">Month Close</h2>
-                                    <p className="text-sm text-gray-500 mt-1">{formatMonthKeyLabel(dashboardMonthKey)} · daily sales report check</p>
-                                </div>
-                                <button
-                                    type="button"
-                                    onClick={() => { setReportDate(todayDate); setView('report'); }}
-                                    className="inline-flex items-center justify-center gap-2 rounded-xl bg-black px-4 py-2.5 text-sm font-bold text-white hover:bg-gray-800"
-                                >
-                                    <FileText className="w-4 h-4" />
-                                    Open Today's Report
-                                </button>
-                            </div>
-
-                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                <div className="bg-white rounded-2xl border border-gray-200 p-5">
-                                    <div className="text-xs font-bold uppercase text-gray-500">Reporting progress</div>
-                                    <div className="text-3xl font-extrabold mt-2">
-                                        {currentMonthReportStatus.expected > 0
-                                            ? Math.round((currentMonthReportStatus.submitted / currentMonthReportStatus.expected) * 100)
-                                            : 100}%
-                                    </div>
-                                    <div className="text-xs text-gray-500 mt-1">
-                                        {currentMonthReportStatus.submitted} of {currentMonthReportStatus.expected} due dates submitted
-                                    </div>
-                                </div>
-                                <div className="bg-white rounded-2xl border border-gray-200 p-5">
-                                    <div className="text-xs font-bold uppercase text-gray-500">Missing reports</div>
-                                    <div className={`text-3xl font-extrabold mt-2 ${
-                                        currentMonthReportStatus.missingDates.length > 0 ? 'text-red-600' : 'text-emerald-600'
-                                    }`}>
-                                        {currentMonthReportStatus.missingDates.length}
-                                    </div>
-                                    <div className="text-xs text-gray-500 mt-1">Dates requiring action before close</div>
-                                </div>
-                                <div className="bg-white rounded-2xl border border-gray-200 p-5">
-                                    <div className="text-xs font-bold uppercase text-gray-500">Reported sales</div>
-                                    <div className="text-2xl font-extrabold mt-2">{store.currency} {formatMoneyDisplay(currentMonthSales)}</div>
-                                    <div className="text-xs text-gray-500 mt-1">Total from submitted daily reports</div>
-                                </div>
-                            </div>
-
-                            <div className={`rounded-2xl border p-6 ${
-                                currentMonthReportStatus.missingDates.length > 0
-                                    ? 'bg-red-50 border-red-200'
-                                    : 'bg-emerald-50 border-emerald-200'
-                            }`}>
-                                <div className="flex items-start gap-3">
-                                    {currentMonthReportStatus.missingDates.length > 0
-                                        ? <AlertOctagon className="w-6 h-6 text-red-600 shrink-0" />
-                                        : <CheckCircle2 className="w-6 h-6 text-emerald-600 shrink-0" />}
-                                    <div className="min-w-0">
-                                        <h3 className={`font-extrabold ${
-                                            currentMonthReportStatus.missingDates.length > 0 ? 'text-red-900' : 'text-emerald-900'
-                                        }`}>
-                                            {currentMonthReportStatus.missingDates.length > 0
-                                                ? 'Complete these reports before month close'
-                                                : 'Daily report check is complete'}
-                                        </h3>
-                                        <p className={`text-sm mt-1 ${
-                                            currentMonthReportStatus.missingDates.length > 0 ? 'text-red-700' : 'text-emerald-700'
-                                        }`}>
-                                            Today is handled separately. The list below covers completed days through yesterday.
-                                        </p>
-                                        {currentMonthReportStatus.missingDates.length > 0 && (
-                                            <div className="flex flex-wrap gap-2 mt-4">
-                                                {currentMonthReportStatus.missingDates.map((date) => (
-                                                    <button
-                                                        key={date}
-                                                        type="button"
-                                                        onClick={() => { setReportDate(date); setView('report'); }}
-                                                        className="rounded-lg border border-red-200 bg-white px-3 py-2 text-xs font-bold text-red-700 hover:bg-red-100"
-                                                    >
-                                                        {date}
-                                                    </button>
-                                                ))}
-                                            </div>
-                                        )}
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div className="rounded-2xl border border-dashed border-gray-300 bg-white p-5">
-                                <div className="font-bold">Next monthly-close functions</div>
-                                <p className="text-sm text-gray-500 mt-1">
-                                    The close checklist, tax schedule, payment details, and final approval are added in Update 4. No accounting data is written from this preparation screen.
-                                </p>
-                            </div>
-                        </div>
+                        <MonthlyCloseWorkspace
+                            store={store}
+                            sales={sales}
+                            initialMonthKey={dashboardMonthKey}
+                            mode="owner"
+                            onOpenSalesReport={(date) => {
+                                setReportDate(date);
+                                setView('report');
+                            }}
+                        />
                     )}
 
                     {view === 'report' && (
