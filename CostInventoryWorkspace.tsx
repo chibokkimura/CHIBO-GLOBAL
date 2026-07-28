@@ -407,6 +407,11 @@ const CostInventoryWorkspace: React.FC<Props> = ({
     : null;
   const actualVsTheoreticalGap = actualCost - theoreticalAnalysis.theoreticalCost;
   const varianceAnalysisReady = inventoryComplete && theoreticalAnalysis.analysisReady;
+  const recipeRateVariance = varianceAnalysisReady
+    && actualCostPercentage !== null
+    && theoreticalCostPercentage !== null
+    ? actualCostPercentage - theoreticalCostPercentage
+    : null;
   const recipeBlockerCount = theoreticalAnalysis.soldMenuRowsMissingRecipe
     + theoreticalAnalysis.soldMenuRowsMissingCost
     + (theoreticalAnalysis.unknownDirectUnits > 0 ? 1 : 0)
@@ -421,25 +426,22 @@ const CostInventoryWorkspace: React.FC<Props> = ({
       id: 'actual',
       label: 'Actual',
       value: actualCostPercentage,
-      color: targetVariance !== null && targetVariance > 0 ? 'bg-red-500' : 'bg-gray-950',
     },
     {
       id: 'target',
       label: 'Target',
       value: costControl.targetCostPercentage,
-      color: 'bg-emerald-500',
     },
     {
       id: 'recipe',
       label: 'Recipe',
       value: theoreticalCostPercentage,
-      color: 'bg-indigo-500',
     },
   ];
   const rateChartMaximum = Math.max(
     5,
     Math.ceil(
-      Math.max(...costRateSeries.map((series) => series.value ?? 0)) / 5,
+      (Math.max(...costRateSeries.map((series) => series.value ?? 0)) * 1.1) / 5,
     ) * 5,
   );
   const excessCostDrivers = useMemo(
@@ -1244,33 +1246,85 @@ const CostInventoryWorkspace: React.FC<Props> = ({
           </section>
 
           <section className="grid gap-5 lg:grid-cols-2">
-            <div className="rounded-2xl border border-gray-200 bg-white p-5">
+            <div className="self-start rounded-2xl border border-gray-200 bg-white p-5">
               <div className="flex items-center gap-2">
                 <Gauge className="h-5 w-5" />
-                <h3 className="text-lg font-extrabold">Cost Rate Comparison</h3>
+                <h3 className="text-lg font-extrabold">Cost Control Position</h3>
               </div>
-              <p className="mt-1 text-sm text-gray-500">Actual, target, and recipe cost rates on one common scale.</p>
-              <div className="mt-5 space-y-4">
+              <p className="mt-1 text-sm text-gray-500">
+                One actual-cost bar with target and recipe reference markers.
+              </p>
+
+              <div
+                className="mt-7"
+                role="img"
+                aria-label={`Actual cost rate ${actualCostPercentage === null ? 'not available' : `${formatAmount(actualCostPercentage, 1)} percent`}; target ${costControl.targetCostPercentage === null ? 'not set' : `${formatAmount(costControl.targetCostPercentage, 1)} percent`}; recipe ${theoreticalCostPercentage === null ? 'not available' : `${formatAmount(theoreticalCostPercentage, 1)} percent`}`}
+              >
+                <div className="relative h-3 rounded-full bg-gray-100">
+                  {actualCostPercentage !== null && (
+                    <div
+                      className="h-full rounded-full bg-gray-950"
+                      style={{ width: `${Math.min(100, Math.max(1, (actualCostPercentage / rateChartMaximum) * 100))}%` }}
+                    />
+                  )}
+                  {costControl.targetCostPercentage !== null && (
+                    <div
+                      className="absolute -top-1 h-5 w-0.5 bg-amber-500"
+                      style={{ left: `${Math.min(100, Math.max(0, (costControl.targetCostPercentage / rateChartMaximum) * 100))}%` }}
+                    />
+                  )}
+                  {theoreticalCostPercentage !== null && (
+                    <div
+                      className="absolute -top-1 h-5 border-l-2 border-dashed border-gray-500"
+                      style={{ left: `${Math.min(100, Math.max(0, (theoreticalCostPercentage / rateChartMaximum) * 100))}%` }}
+                    />
+                  )}
+                </div>
+                <div className="mt-2 flex justify-between text-[10px] font-bold text-gray-400">
+                  <span>0%</span>
+                  <span>{formatAmount(rateChartMaximum, 0)}%</span>
+                </div>
+              </div>
+
+              <div className="mt-5 grid grid-cols-3 gap-2">
                 {costRateSeries.map((series) => (
-                  <div key={series.id} className="grid grid-cols-[64px_1fr_58px] items-center gap-3">
-                    <div className="text-xs font-extrabold text-gray-600">{series.label}</div>
-                    <div className="h-3 overflow-hidden rounded-full bg-gray-100">
-                      {series.value !== null && (
-                        <div
-                          className={`h-full rounded-full ${series.color}`}
-                          style={{ width: `${Math.min(100, Math.max(1, (series.value / rateChartMaximum) * 100))}%` }}
-                        />
-                      )}
+                  <div key={series.id} className="rounded-xl bg-gray-50 p-3">
+                    <div className="flex items-center gap-1.5 text-[10px] font-extrabold text-gray-500">
+                      <span className={`h-2.5 w-2.5 ${
+                        series.id === 'actual'
+                          ? 'rounded-full bg-gray-950'
+                          : series.id === 'target'
+                            ? 'bg-amber-500'
+                            : 'border-l-2 border-dashed border-gray-500'
+                      }`} />
+                      {series.label}
                     </div>
-                    <div className="text-right text-sm font-black">
+                    <div className="mt-1 text-lg font-black">
                       {series.value === null ? '—' : `${formatAmount(series.value, 1)}%`}
                     </div>
                   </div>
                 ))}
               </div>
-              <div className="mt-4 flex justify-between border-t border-gray-100 pt-3 text-[10px] font-bold text-gray-400">
-                <span>0%</span>
-                <span>{formatAmount(rateChartMaximum, 0)}%</span>
+
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <div className="rounded-xl border border-gray-200 p-3">
+                  <div className="text-[10px] font-extrabold text-gray-400">TO REACH TARGET</div>
+                  <div className={`mt-1 text-sm font-black ${targetReductionAmount > 0 ? 'text-red-600' : 'text-gray-900'}`}>
+                    {targetVariance === null
+                      ? 'Set target'
+                      : targetReductionAmount > 0
+                        ? `Reduce ${store.currency} ${formatAmount(targetReductionAmount)}`
+                        : 'Target achieved'}
+                  </div>
+                </div>
+                <div className="rounded-xl border border-gray-200 p-3">
+                  <div className="text-[10px] font-extrabold text-gray-400">ACTUAL VS RECIPE</div>
+                  <div className={`mt-1 text-sm font-black ${recipeRateVariance !== null && recipeRateVariance > 0 ? 'text-red-600' : 'text-gray-900'}`}>
+                    {recipeRateVariance === null
+                      ? 'Not ready'
+                      : `${recipeRateVariance > 0 ? '+' : ''}${formatAmount(recipeRateVariance, 1)} pt · ${actualVsTheoreticalGap > 0 ? '+' : ''}${store.currency} ${formatAmount(actualVsTheoreticalGap)}`}
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -1283,12 +1337,6 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                   </div>
                   <p className="mt-1 text-sm text-gray-500">Ingredients with the largest actual cost above recipe cost.</p>
                 </div>
-                {targetReductionAmount > 0 && inventoryComplete && (
-                  <div className="rounded-xl bg-red-50 px-3 py-2 text-right text-xs font-extrabold text-red-700">
-                    Reduce {store.currency} {formatAmount(targetReductionAmount)}
-                    <div className="mt-0.5 text-[10px] font-bold">to reach target</div>
-                  </div>
-                )}
               </div>
 
               {!inventoryComplete || recipeBlockerCount > 0 ? (
@@ -1317,13 +1365,13 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                             <span className="mr-2 text-[10px] font-black text-gray-400">#{index + 1}</span>
                             <span className="truncate text-sm font-extrabold">{ingredient?.name ?? row.ingredientId}</span>
                           </div>
-                          <div className="shrink-0 text-sm font-black text-red-600">
+                          <div className="shrink-0 text-sm font-black text-gray-900">
                             +{store.currency} {formatAmount(row.varianceValue ?? 0)}
                           </div>
                         </div>
-                        <div className="h-2.5 overflow-hidden rounded-full bg-red-50">
+                        <div className="h-2.5 overflow-hidden rounded-full bg-gray-100">
                           <div
-                            className="h-full rounded-full bg-red-500"
+                            className={`h-full rounded-full ${index === 0 ? 'bg-gray-950' : 'bg-gray-600'}`}
                             style={{ width: `${Math.max(3, ((row.varianceValue ?? 0) / largestDriverValue) * 100)}%` }}
                           />
                         </div>
@@ -1335,7 +1383,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                   })}
                 </div>
               ) : (
-                <div className="mt-4 rounded-xl bg-emerald-50 p-5 text-sm font-bold text-emerald-700">
+                <div className="mt-4 rounded-xl bg-gray-50 p-5 text-sm font-bold text-gray-700">
                   No positive ingredient cost variance detected for this month.
                 </div>
               )}
