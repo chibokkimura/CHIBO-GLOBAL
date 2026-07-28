@@ -705,10 +705,10 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
       </section>
 
       <div className="rounded-2xl border border-blue-200 bg-blue-50 p-5">
-        <div className="font-extrabold text-blue-900">Next update: actual cost control</div>
+        <div className="font-extrabold text-blue-900">Continue in Cost & Inventory</div>
         <p className="mt-1 text-sm text-blue-800">
-          Opening inventory, purchases, waste/adjustments, and closing inventory will be entered here next.
-          The system will then calculate actual cost and compare it with target and theoretical recipe cost.
+          Enter ingredient purchase packs, monthly purchases, waste/adjustments, and opening and closing stock in Cost & Inventory.
+          Once those counts are complete, the next update will calculate actual food cost and cost percentage.
         </p>
       </div>
 

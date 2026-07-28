@@ -12,6 +12,7 @@ import { isSupabaseConfigured, supabase } from './supabaseClient';
 import { signInWithEmailPassword, signInWithGoogle, signOut, signUpWithEmailPassword } from './auth';
 import { MOCK_EMPLOYEES, MOCK_INGREDIENTS, MOCK_MENUS, MOCK_SALES, MOCK_STORES, MOCK_USERS } from './constants';
 import MonthlyCloseWorkspace from './MonthlyCloseWorkspace';
+import CostInventoryWorkspace from './CostInventoryWorkspace';
 
 
 // --- Supabase Data Layer ---
@@ -7175,71 +7176,13 @@ const HQStoreDetail: React.FC<{
             )}
 
             {detailSection === 'inventory' && (
-                <div className="bg-white p-6 rounded-2xl shadow-sm border border-black/10 mb-8">
-                    <div className="flex justify-between items-center mb-6">
-                        <h2 className="text-xl font-bold flex items-center gap-2">
-                            <Package className="w-5 h-5"/> Real-time Inventory (Est.)
-                        </h2>
-                        <div className="flex items-center gap-2">
-                            <span className="text-xs font-bold bg-gray-100 px-2 py-1 rounded text-gray-500">Auto-Calculated</span>
-                            <button
-                                type="button"
-                                onClick={() => setShowStockEditor(true)}
-                                className="text-xs font-bold bg-white border border-gray-200 px-2 py-1 rounded hover:bg-gray-50"
-                            >
-                                Edit Stock
-                            </button>
-                        </div>
-                    </div>
-                    <div className="space-y-4">
-                        {Object.entries(inventoryStats).map(([name, data]) => {
-                            const hasConfiguredStock = data.configured;
-                            const remaining = data.remaining;
-                            const percentUsed = hasConfiguredStock
-                                ? (data.par > 0 ? Math.min(100, (data.used / data.par) * 100) : (data.used > 0 ? 100 : 0))
-                                : 0;
-                            const isLow = hasConfiguredStock
-                                ? (data.reorder > 0 ? (remaining !== null && remaining <= data.reorder) : percentUsed > 80)
-                                : false;
-
-                            return (
-                                <div key={name} className="p-4 border rounded-xl hover:border-black transition">
-                                    <div className="flex justify-between items-end mb-2">
-                                        <div>
-                                            <div className="font-bold text-gray-800">{name}</div>
-                                            <div className="text-xs text-gray-500">Standard Ingredient</div>
-                                        </div>
-                                        <div className="text-right">
-                                            <div className="text-lg font-extrabold">
-                                                {data.used.toLocaleString()}
-                                                <span className="text-xs font-medium text-gray-400"> {data.unit} used</span>
-                                            </div>
-                                            <div className="text-xs text-gray-500">
-                                                {hasConfiguredStock ? (
-                                                    <>Remaining: {(remaining ?? 0).toLocaleString()} {data.unit}</>
-                                                ) : (
-                                                    <>Set stock in Store Settings</>
-                                                )}
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <div className="h-3 w-full bg-gray-100 rounded-full overflow-hidden relative">
-                                        <div
-                                            className={`h-full rounded-full ${isLow ? 'bg-red-500' : 'bg-black'}`}
-                                            style={{ width: `${percentUsed}%` }}
-                                        />
-                                    </div>
-                                    <div className="flex justify-between mt-2 text-[10px] font-bold text-gray-400 uppercase">
-                                        <span>Current Consumption</span>
-                                        {isLow && <span className="text-red-500 flex items-center gap-1"><AlertCircle className="w-3 h-3"/> Reorder Recommended</span>}
-                                    </div>
-                                </div>
-                            );
-                        })}
-                        {Object.keys(inventoryStats).length === 0 && (
-                            <div className="text-center py-8 text-gray-400 italic">No standard ingredients configured.</div>
-                        )}
-                    </div>
+                <div className="mb-8">
+                    <CostInventoryWorkspace
+                        store={store}
+                        ingredients={ingredients}
+                        initialMonthKey={salesMonthFilter === 'all' ? defaultSalesMonthKey : salesMonthFilter}
+                        mode="hq"
+                    />
                 </div>
             )}
 
@@ -9458,10 +9401,19 @@ const StoreDashboard: React.FC<{
 
                     {view === 'menu' && (
                         <div className="space-y-6">
+                            <CostInventoryWorkspace
+                                store={store}
+                                ingredients={ingredients}
+                                initialMonthKey={dashboardMonthKey}
+                                mode="owner"
+                                onAddIngredient={onAddIngredient}
+                            />
+
+                            <div className="border-t border-gray-200 pt-6">
                             <div>
-                                <div className="text-xs font-black uppercase tracking-[0.18em] text-gray-400">Prepare cost management</div>
-                                <h2 className="text-2xl font-extrabold mt-1">Cost & Inventory</h2>
-                                <p className="text-sm text-gray-500 mt-1">Register single-item recipes first, then build courses and sets from those items.</p>
+                                <div className="text-xs font-black uppercase tracking-[0.18em] text-gray-400">Recipe setup</div>
+                                <h2 className="text-2xl font-extrabold mt-1">Menus, Courses & Recipes</h2>
+                                <p className="text-sm text-gray-500 mt-1">Register ingredients per single item, then build courses and sets from those items.</p>
                             </div>
 
                             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -9531,6 +9483,7 @@ const StoreDashboard: React.FC<{
                                     onDelete={onDeleteSetMenu}
                                 />
                             )}
+                            </div>
                         </div>
                     )}
 
