@@ -6,7 +6,9 @@ import {
   Calculator,
   CheckCircle2,
   ChevronDown,
+  ChefHat,
   ClipboardList,
+  Gauge,
   PackagePlus,
   Plus,
   RefreshCw,
@@ -16,8 +18,9 @@ import {
   TrendingDown,
   Warehouse,
 } from 'lucide-react';
-import { Ingredient, Sale, Store } from './types';
+import { Ingredient, Menu, Sale, SetMenu, Store } from './types';
 import { supabase } from './supabaseClient';
+import { buildTheoreticalCostAnalysis } from './theoreticalCost';
 
 type IngredientCategory = 'main' | 'secondary' | 'packaging' | 'other';
 
@@ -77,6 +80,8 @@ type PreviousCostSummary = {
 type Props = {
   store: Store;
   ingredients: Ingredient[];
+  menus: Menu[];
+  setMenus: SetMenu[];
   sales: Sale[];
   initialMonthKey: string;
   mode: 'owner' | 'hq';
@@ -200,6 +205,8 @@ function emptyInventoryRow(
 const CostInventoryWorkspace: React.FC<Props> = ({
   store,
   ingredients,
+  menus,
+  setMenus,
   sales,
   initialMonthKey,
   mode,
@@ -374,6 +381,33 @@ const CostInventoryWorkspace: React.FC<Props> = ({
         : targetVariance <= 2
           ? 'border-amber-200 bg-amber-50 text-amber-900'
           : 'border-red-200 bg-red-50 text-red-900';
+  const ingredientCostInputs = useMemo(() => new Map(costBreakdown.map((row) => [
+    row.ingredientId,
+    {
+      unitCost: Number.isFinite(row.closingUnitCost) ? row.closingUnitCost : null,
+      actualUsage: Number.isFinite(row.actualUsage) ? row.actualUsage : null,
+      wasteQuantity: inventoryRows[row.ingredientId]?.wasteQuantity ?? 0,
+    },
+  ])), [costBreakdown, inventoryRows]);
+  const theoreticalAnalysis = useMemo(() => buildTheoreticalCostAnalysis({
+    storeId: store.id,
+    monthKey,
+    sales,
+    menus,
+    setMenus,
+    ingredientCosts: ingredientCostInputs,
+  }), [ingredientCostInputs, menus, monthKey, sales, setMenus, store.id]);
+  const theoreticalCostPercentage = netSales > 0
+    ? (theoreticalAnalysis.theoreticalCost / netSales) * 100
+    : null;
+  const actualVsTheoreticalGap = actualCost - theoreticalAnalysis.theoreticalCost;
+  const varianceAnalysisReady = inventoryComplete && theoreticalAnalysis.analysisReady;
+  const recipeBlockerCount = theoreticalAnalysis.soldMenuRowsMissingRecipe
+    + theoreticalAnalysis.soldMenuRowsMissingCost
+    + (theoreticalAnalysis.unknownDirectUnits > 0 ? 1 : 0)
+    + (theoreticalAnalysis.unknownCourseSalesUnits > 0 ? 1 : 0)
+    + (theoreticalAnalysis.setsWithoutComponentsUnits > 0 ? 1 : 0)
+    + (theoreticalAnalysis.categoryBreakdownMismatchUnits > 0 ? 1 : 0);
 
   const seedPreview = useCallback(() => {
     const sampleIngredients = localIngredients.slice(0, 3);
@@ -1081,6 +1115,254 @@ const CostInventoryWorkspace: React.FC<Props> = ({
         </div>
       </section>
 
+      <section className="rounded-2xl border border-gray-200 bg-white p-5">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <div className="flex items-center gap-2">
+              <ChefHat className="h-5 w-5" />
+              <h3 className="font-extrabold">Theoretical Recipe Cost & Usage Gap</h3>
+            </div>
+            <p className="mt-1 text-xs text-gray-500">
+              Direct item sales and course components are expanded through each recipe. Course ingredients are counted once, not duplicated.
+            </p>
+          </div>
+          <div className={`rounded-xl px-3 py-2 text-xs font-bold ${
+            varianceAnalysisReady
+              ? actualVsTheoreticalGap <= 0
+                ? 'bg-emerald-50 text-emerald-700'
+                : 'bg-red-50 text-red-700'
+              : 'bg-amber-50 text-amber-800'
+          }`}>
+            {varianceAnalysisReady
+              ? actualVsTheoreticalGap <= 0
+                ? 'Actual usage is within the recipe plan'
+                : `${store.currency} ${formatAmount(actualVsTheoreticalGap)} actual cost above theory`
+              : `${recipeBlockerCount} recipe/cost issue(s) · inventory ${completedCounts}/${activeProfiles.length}`}
+          </div>
+        </div>
+
+        <div className="mt-4 grid grid-cols-2 gap-3 xl:grid-cols-4">
+          <div className="rounded-xl border border-gray-200 p-4">
+            <div className="text-[11px] font-bold uppercase text-gray-500">Recipe sales coverage</div>
+            <div className="mt-1 text-2xl font-extrabold">
+              {theoreticalAnalysis.recipeCoveragePercentage === null
+                ? '—'
+                : `${formatAmount(theoreticalAnalysis.recipeCoveragePercentage, 1)}%`}
+            </div>
+            <div className="mt-1 text-[10px] text-gray-500">
+              {formatAmount(theoreticalAnalysis.recipeCoveredUnits, 1)} / {formatAmount(theoreticalAnalysis.totalKnownMenuUnits + theoreticalAnalysis.categoryBreakdownMismatchUnits, 1)} sold item units
+            </div>
+          </div>
+          <div className="rounded-xl border border-gray-200 p-4">
+            <div className="text-[11px] font-bold uppercase text-gray-500">Costed sales coverage</div>
+            <div className="mt-1 text-2xl font-extrabold">
+              {theoreticalAnalysis.costCoveragePercentage === null
+                ? '—'
+                : `${formatAmount(theoreticalAnalysis.costCoveragePercentage, 1)}%`}
+            </div>
+            <div className="mt-1 text-[10px] text-gray-500">Recipe ingredients with a usable unit cost</div>
+          </div>
+          <div className="rounded-xl border border-gray-200 p-4">
+            <div className="text-[11px] font-bold uppercase text-gray-500">Theoretical food cost</div>
+            <div className="mt-1 text-2xl font-extrabold">
+              {store.currency} {formatAmount(theoreticalAnalysis.theoreticalCost)}
+            </div>
+            <div className="mt-1 text-[10px] text-gray-500">
+              {theoreticalCostPercentage === null ? 'No net sales' : `${formatAmount(theoreticalCostPercentage, 1)}% of net sales`}
+              {!theoreticalAnalysis.analysisReady ? ' · partial' : ''}
+            </div>
+          </div>
+          <div className={`rounded-xl border p-4 ${
+            varianceAnalysisReady && actualVsTheoreticalGap > 0
+              ? 'border-red-200 bg-red-50'
+              : varianceAnalysisReady
+                ? 'border-emerald-200 bg-emerald-50'
+                : 'border-amber-200 bg-amber-50'
+          }`}>
+            <div className="text-[11px] font-bold uppercase text-gray-500">Actual − theoretical</div>
+            <div className="mt-1 text-2xl font-extrabold">
+              {varianceAnalysisReady
+                ? `${actualVsTheoreticalGap > 0 ? '+' : ''}${store.currency} ${formatAmount(actualVsTheoreticalGap)}`
+                : 'Draft'}
+            </div>
+            <div className="mt-1 text-[10px] text-gray-500">
+              Complete recipes, costs, and stock counts before using this gap
+            </div>
+          </div>
+        </div>
+
+        {!theoreticalAnalysis.analysisReady && (
+          <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4">
+            <div className="flex items-center gap-2 text-sm font-extrabold text-amber-900">
+              <AlertTriangle className="h-4 w-4" /> Finish these items before treating theoretical cost as final
+            </div>
+            <div className="mt-2 grid gap-1 text-xs text-amber-800 md:grid-cols-2">
+              {theoreticalAnalysis.totalKnownMenuUnits === 0 && <div>• No item or course quantities were reported for this month.</div>}
+              {theoreticalAnalysis.soldMenuRowsMissingRecipe > 0 && <div>• {theoreticalAnalysis.soldMenuRowsMissingRecipe} sold menu item(s) have no complete recipe.</div>}
+              {theoreticalAnalysis.soldMenuRowsMissingCost > 0 && <div>• {theoreticalAnalysis.soldMenuRowsMissingCost} sold menu item(s) use ingredients without unit cost.</div>}
+              {theoreticalAnalysis.unknownDirectUnits > 0 && <div>• {formatAmount(theoreticalAnalysis.unknownDirectUnits, 1)} direct-sale unit(s) no longer match a menu.</div>}
+              {theoreticalAnalysis.unknownCourseSalesUnits > 0 && <div>• {formatAmount(theoreticalAnalysis.unknownCourseSalesUnits, 1)} course/component unit(s) cannot be matched.</div>}
+              {theoreticalAnalysis.setsWithoutComponentsUnits > 0 && <div>• {formatAmount(theoreticalAnalysis.setsWithoutComponentsUnits, 1)} sold course unit(s) have no components.</div>}
+              {theoreticalAnalysis.categoryBreakdownMismatchUnits > 0 && <div>• {formatAmount(theoreticalAnalysis.categoryBreakdownMismatchUnits, 1)} direct unit(s) do not match the category-to-menu breakdown.</div>}
+            </div>
+          </div>
+        )}
+
+        <div className="mt-5">
+          <div className="flex items-center gap-2">
+            <Gauge className="h-4 w-4 text-gray-500" />
+            <h4 className="text-sm font-extrabold">Ingredient usage diagnosis</h4>
+          </div>
+          <div className="mt-3 overflow-x-auto">
+            <table className="w-full min-w-[880px] text-left text-sm">
+              <thead className="border-b border-gray-200 text-[11px] uppercase text-gray-400">
+                <tr>
+                  <th className="px-3 py-2">Ingredient</th>
+                  <th className="px-3 py-2 text-right">Recipe usage</th>
+                  <th className="px-3 py-2 text-right">Actual usage</th>
+                  <th className="px-3 py-2 text-right">Usage gap</th>
+                  <th className="px-3 py-2 text-right">Gap value</th>
+                  <th className="px-3 py-2">What to check</th>
+                </tr>
+              </thead>
+              <tbody>
+                {theoreticalAnalysis.ingredientRows.map((row) => {
+                  const ingredient = ingredientById.get(row.ingredientId);
+                  const gapHigh = row.variancePercentage !== null && row.variancePercentage > 10;
+                  const gapLow = row.variancePercentage !== null && row.variancePercentage < -10;
+                  const action = row.unitCost === null
+                    ? 'Set purchase unit and price'
+                    : !inventoryComplete || row.actualUsage === null
+                      ? 'Complete monthly stock count'
+                      : gapHigh && row.wasteQuantity > 0
+                        ? 'Check recorded waste and over-portioning'
+                        : gapHigh
+                          ? 'Check waste, portions, theft, or recipe quantity'
+                          : gapLow
+                            ? 'Check recipe quantity or physical count'
+                            : row.wasteQuantity > 0
+                              ? 'Review recorded waste'
+                              : 'Near recipe plan';
+                  return (
+                    <tr key={row.ingredientId} className={`border-b border-gray-100 ${gapHigh && inventoryComplete ? 'bg-red-50' : ''}`}>
+                      <td className="px-3 py-3">
+                        <div className="font-bold">{ingredient?.name ?? row.ingredientId}</div>
+                        <div className="text-[10px] text-gray-400">{ingredient?.unit ?? 'unit'}</div>
+                      </td>
+                      <td className="px-3 py-3 text-right">{formatAmount(row.theoreticalUsage, 3)}</td>
+                      <td className="px-3 py-3 text-right">{row.actualUsage === null ? '—' : formatAmount(row.actualUsage, 3)}</td>
+                      <td className="px-3 py-3 text-right font-bold">
+                        {row.usageVariance === null
+                          ? '—'
+                          : `${row.usageVariance > 0 ? '+' : ''}${formatAmount(row.usageVariance, 3)}`}
+                        {row.variancePercentage !== null && (
+                          <div className="text-[10px] text-gray-400">
+                            {row.variancePercentage > 0 ? '+' : ''}{formatAmount(row.variancePercentage, 1)}%
+                          </div>
+                        )}
+                      </td>
+                      <td className="px-3 py-3 text-right">
+                        {row.varianceValue === null
+                          ? '—'
+                          : `${row.varianceValue > 0 ? '+' : ''}${formatAmount(row.varianceValue)}`}
+                      </td>
+                      <td className={`px-3 py-3 text-xs font-bold ${gapHigh && inventoryComplete ? 'text-red-700' : 'text-gray-600'}`}>
+                        {action}
+                      </td>
+                    </tr>
+                  );
+                })}
+                {theoreticalAnalysis.ingredientRows.length === 0 && (
+                  <tr>
+                    <td colSpan={6} className="px-3 py-8 text-center text-sm text-gray-400">
+                      Enter sold-item quantities and menu recipes to calculate theoretical ingredient usage.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="mt-6">
+          <h4 className="text-sm font-extrabold">Sold menu profitability</h4>
+          <div className="mt-3 overflow-x-auto">
+            <table className="w-full min-w-[860px] text-left text-sm">
+              <thead className="border-b border-gray-200 text-[11px] uppercase text-gray-400">
+                <tr>
+                  <th className="px-3 py-2">Menu</th>
+                  <th className="px-3 py-2 text-right">Direct / course units</th>
+                  <th className="px-3 py-2">Recipe status</th>
+                  <th className="px-3 py-2 text-right">Price</th>
+                  <th className="px-3 py-2 text-right">Theoretical unit cost</th>
+                  <th className="px-3 py-2 text-right">Food cost %</th>
+                  <th className="px-3 py-2 text-right">Monthly cost</th>
+                </tr>
+              </thead>
+              <tbody>
+                {theoreticalAnalysis.menuRows.map((row) => (
+                  <tr key={row.menuId} className={`border-b border-gray-100 ${!row.costReady ? 'bg-amber-50' : ''}`}>
+                    <td className="px-3 py-3">
+                      <div className="font-bold">{row.name}</div>
+                      <div className="text-[10px] text-gray-400">{row.category}</div>
+                    </td>
+                    <td className="px-3 py-3 text-right">{formatAmount(row.directUnits, 1)} / {formatAmount(row.courseUnits, 1)}</td>
+                    <td className="px-3 py-3 text-xs font-bold">
+                      {!row.recipeReady
+                        ? <span className="text-red-600">Recipe missing</span>
+                        : !row.costReady
+                          ? <span className="text-amber-700">Unit cost missing</span>
+                          : <span className="text-emerald-700">Ready</span>}
+                    </td>
+                    <td className="px-3 py-3 text-right">{formatAmount(row.price)}</td>
+                    <td className="px-3 py-3 text-right">{row.theoreticalUnitCost === null ? '—' : formatAmount(row.theoreticalUnitCost)}</td>
+                    <td className="px-3 py-3 text-right">{row.theoreticalCostPercentage === null ? '—' : `${formatAmount(row.theoreticalCostPercentage, 1)}%`}</td>
+                    <td className="px-3 py-3 text-right font-bold">{row.monthlyTheoreticalCost === null ? '—' : formatAmount(row.monthlyTheoreticalCost)}</td>
+                  </tr>
+                ))}
+                {theoreticalAnalysis.menuRows.length === 0 && (
+                  <tr><td colSpan={7} className="px-3 py-8 text-center text-sm text-gray-400">No sold menu quantities for this month.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {theoreticalAnalysis.courseRows.length > 0 && (
+          <div className="mt-6">
+            <h4 className="text-sm font-extrabold">Sold course & set profitability</h4>
+            <div className="mt-3 overflow-x-auto">
+              <table className="w-full min-w-[720px] text-left text-sm">
+                <thead className="border-b border-gray-200 text-[11px] uppercase text-gray-400">
+                  <tr>
+                    <th className="px-3 py-2">Course / set</th>
+                    <th className="px-3 py-2 text-right">Sold</th>
+                    <th className="px-3 py-2 text-right">Components</th>
+                    <th className="px-3 py-2 text-right">Price</th>
+                    <th className="px-3 py-2 text-right">Theoretical unit cost</th>
+                    <th className="px-3 py-2 text-right">Food cost %</th>
+                    <th className="px-3 py-2 text-right">Monthly cost</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {theoreticalAnalysis.courseRows.map((row) => (
+                    <tr key={row.setMenuId} className={`border-b border-gray-100 ${!row.costReady ? 'bg-amber-50' : ''}`}>
+                      <td className="px-3 py-3 font-bold">{row.name}</td>
+                      <td className="px-3 py-3 text-right">{formatAmount(row.soldUnits, 1)}</td>
+                      <td className="px-3 py-3 text-right">{row.componentCount}</td>
+                      <td className="px-3 py-3 text-right">{formatAmount(row.price)}</td>
+                      <td className="px-3 py-3 text-right">{row.theoreticalUnitCost === null ? '—' : formatAmount(row.theoreticalUnitCost)}</td>
+                      <td className="px-3 py-3 text-right">{row.theoreticalCostPercentage === null ? '—' : `${formatAmount(row.theoreticalCostPercentage, 1)}%`}</td>
+                      <td className="px-3 py-3 text-right font-bold">{row.monthlyTheoreticalCost === null ? '—' : formatAmount(row.monthlyTheoreticalCost)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </section>
+
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         <div className="rounded-2xl border border-gray-200 bg-white p-5">
           <div className="flex items-center justify-between text-xs font-bold uppercase text-gray-500">
@@ -1704,10 +1986,10 @@ const CostInventoryWorkspace: React.FC<Props> = ({
       </section>
 
       <div className="rounded-2xl border border-blue-200 bg-blue-50 p-5">
-        <div className="font-extrabold text-blue-900">Next: theoretical recipe cost and labor</div>
+        <div className="font-extrabold text-blue-900">Next: staff hours and labor cost</div>
         <p className="mt-1 text-sm text-blue-800">
-          Actual food cost now uses opening stock value + purchases − closing stock value.
-          Update 7 will compare this result with menu and course recipes, theoretical usage, and labor cost.
+          Recipe usage, course expansion, theoretical food cost, and actual-versus-theoretical variance are now connected.
+          The next update will add work hours, overtime, payroll, and labor-cost percentage.
         </p>
       </div>
 

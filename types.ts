@@ -81,7 +81,8 @@ export interface Sale {
   storeId: string;
   date: string; // ISO Date string YYYY-MM-DD
   totalAmount: number;
-  items: SaleItem[];
+  items: SaleItem[]; // Existing category-level quantities used by daily sales reporting.
+  menuItems?: SaleItem[]; // Direct menu-level quantities used by recipe-cost analysis.
   setItems?: SaleSetItem[];
   receiptImage?: string;
   hasReceipt?: boolean;

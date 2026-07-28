@@ -103,6 +103,7 @@ let salesIsClosedColumnSupported: boolean | null = null;
 let salesCommentColumnSupported: boolean | null = null;
 let setMenuTableSupported: boolean | null = null;
 let saleSetItemsTableSupported: boolean | null = null;
+let saleMenuItemsTableSupported: boolean | null = null;
 const SALES_RECEIPT_IMAGE_RESIZE = { maxWidth: 1800, maxHeight: 1800, quality: 0.85 };
 const MENU_IMAGE_RESIZE = { maxWidth: 1400, maxHeight: 1400, quality: 0.82 };
 const STAFF_IMAGE_RESIZE = { maxWidth: 640, maxHeight: 640, quality: 0.82 };
@@ -739,6 +740,25 @@ async function loadSales(daysBack?: number): Promise<Sale[]> {
     }
   }
 
+  let menuItemData: any[] = [];
+  if (saleIds.length > 0 && saleMenuItemsTableSupported !== false) {
+    const { data, error: menuItemErr } = await supabase
+      .from('sale_menu_items')
+      .select('sale_id,menu_id,quantity')
+      .in('sale_id', saleIds);
+    if (menuItemErr) {
+      if (isSkippableSalesChildTableError(menuItemErr, 'sale_menu_items')) {
+        saleMenuItemsTableSupported = false;
+        console.warn('Skipping sale_menu_items load until the Phase 7 table is active.', menuItemErr);
+      } else {
+        throw menuItemErr;
+      }
+    } else {
+      saleMenuItemsTableSupported = true;
+      menuItemData = data ?? [];
+    }
+  }
+
   const itemsBySale: Record<string, SaleItem[]> = {};
   itemData.forEach((r: any) => {
     const arr = itemsBySale[r.sale_id] ?? [];
@@ -753,12 +773,20 @@ async function loadSales(daysBack?: number): Promise<Sale[]> {
     setItemsBySale[r.sale_id] = arr;
   });
 
+  const menuItemsBySale: Record<string, SaleItem[]> = {};
+  menuItemData.forEach((r: any) => {
+    const arr = menuItemsBySale[r.sale_id] ?? [];
+    arr.push({ menuId: r.menu_id, quantity: Number(r.quantity) });
+    menuItemsBySale[r.sale_id] = arr;
+  });
+
   const mappedSales = (salesData ?? []).map((s: any) => ({
     id: s.id,
     storeId: s.store_id,
     date: s.date,
     totalAmount: Number(s.total_amount),
     items: itemsBySale[s.id] ?? [],
+    menuItems: menuItemsBySale[s.id] ?? [],
     setItems: setItemsBySale[s.id] ?? [],
     hasReceipt: receiptIds.has(s.id),
     isClosed: Boolean(s.is_closed),
@@ -1186,6 +1214,44 @@ async function addSale(sale: Sale) {
     if (error) {
       const message = error.message || 'Unknown sale items error';
       throw new Error(`Failed to save sale items: ${message}`);
+    }
+  }
+
+  if (existingSaleId && saleMenuItemsTableSupported !== false) {
+    const { error: clearMenuItemsErr } = await supabase
+      .from('sale_menu_items')
+      .delete()
+      .eq('sale_id', targetSaleId);
+    if (clearMenuItemsErr) {
+      if (isSkippableSalesChildTableError(clearMenuItemsErr, 'sale_menu_items')) {
+        saleMenuItemsTableSupported = false;
+        console.warn('Skipping sale_menu_items update until the Phase 7 table is active.', clearMenuItemsErr);
+      } else {
+        throw new Error(`Failed to refresh direct menu quantities: ${clearMenuItemsErr.message || 'Unknown error'}`);
+      }
+    }
+  }
+
+  if (sale.menuItems?.length && saleMenuItemsTableSupported !== false) {
+    const menuRows = sale.menuItems
+      .filter((item) => item.menuId && Number(item.quantity) > 0)
+      .map((item) => ({
+        sale_id: targetSaleId,
+        menu_id: item.menuId,
+        quantity: Number(item.quantity),
+      }));
+    if (menuRows.length > 0) {
+      const { error: menuItemsError } = await supabase.from('sale_menu_items').insert(menuRows);
+      if (menuItemsError) {
+        if (isSkippableSalesChildTableError(menuItemsError, 'sale_menu_items')) {
+          saleMenuItemsTableSupported = false;
+          console.warn('Skipping sale_menu_items save until the Phase 7 table is active.', menuItemsError);
+        } else {
+          throw new Error(`Failed to save direct menu quantities: ${menuItemsError.message || 'Unknown error'}`);
+        }
+      } else {
+        saleMenuItemsTableSupported = true;
+      }
     }
   }
 
@@ -4030,7 +4096,9 @@ const SalesReporter: React.FC<{
 }> = ({ store, sales, menus, setMenus, categories, initialDate, onSave, onCancel }) => {
   const [date, setDate] = useState(initialDate || formatDate(new Date()));
   const [items, setItems] = useState<SaleItem[]>([]); // Store category name in menuId
+  const [directMenuItems, setDirectMenuItems] = useState<SaleItem[]>([]);
   const [setMenuItems, setSetMenuItems] = useState<SaleSetItem[]>([]);
+  const [menuFilter, setMenuFilter] = useState('');
   const [isClosed, setIsClosed] = useState(false);
   const [receiptImage, setReceiptImage] = useState<string | null>(null);
   const [manualRevenue, setManualRevenue] = useState<string>('');
@@ -4054,14 +4122,39 @@ const SalesReporter: React.FC<{
       .sort((a, b) => String(b.id).localeCompare(String(a.id)));
     return rows[0] ?? null;
   }, [sales, store.id, date]);
+  const menuByIdForReport = useMemo(
+    () => new Map(menus.map((menu) => [menu.id, menu])),
+    [menus],
+  );
+  const setMenuByIdForReport = useMemo(
+    () => new Map(setMenus.map((setMenu) => [setMenu.id, setMenu])),
+    [setMenus],
+  );
 
   useEffect(() => {
     if (existingSaleForDate) {
+      const existingSetItems = (existingSaleForDate.setItems ?? []).map((item) => ({ ...item }));
+      const directCategoryTotals = new Map(
+        (existingSaleForDate.items ?? []).map((item) => [item.menuId, Number(item.quantity || 0)]),
+      );
+      existingSetItems.forEach((setEntry) => {
+        const setMenu = setMenuByIdForReport.get(setEntry.setMenuId);
+        setMenu?.items.forEach((component) => {
+          const componentMenu = menuByIdForReport.get(component.menuId);
+          if (!componentMenu) return;
+          const includedUnits = Number(setEntry.quantity) * Number(component.quantity);
+          const storedTotal = directCategoryTotals.get(componentMenu.category) ?? 0;
+          directCategoryTotals.set(componentMenu.category, Math.max(0, storedTotal - includedUnits));
+        });
+      });
       setIsClosed(Boolean(existingSaleForDate.isClosed));
       setReceiptImage(null);
       setManualRevenue(existingSaleForDate.isClosed ? '' : formatDecimalForInput(existingSaleForDate.totalAmount || 0));
-      setItems((existingSaleForDate.items ?? []).map((item) => ({ ...item })));
-      setSetMenuItems((existingSaleForDate.setItems ?? []).map((item) => ({ ...item })));
+      setItems(Array.from(directCategoryTotals.entries())
+        .filter(([, quantity]) => quantity > 0)
+        .map(([menuId, quantity]) => ({ menuId, quantity })));
+      setDirectMenuItems((existingSaleForDate.menuItems ?? []).map((item) => ({ ...item })));
+      setSetMenuItems(existingSetItems);
       setClosedReason(existingSaleForDate.closedReason ?? '');
       setComment(existingSaleForDate.comment ?? '');
       return;
@@ -4070,16 +4163,18 @@ const SalesReporter: React.FC<{
     setReceiptImage(null);
     setManualRevenue('');
     setItems([]);
+    setDirectMenuItems([]);
     setSetMenuItems([]);
     setClosedReason('');
     setComment('');
-  }, [existingSaleForDate]);
+  }, [existingSaleForDate, menuByIdForReport, setMenuByIdForReport]);
 
   useEffect(() => {
     if (isClosed) {
       setReceiptImage(null);
       setManualRevenue('');
       setItems([]);
+      setDirectMenuItems([]);
       setSetMenuItems([]);
     }
   }, [isClosed]);
@@ -4136,6 +4231,25 @@ const SalesReporter: React.FC<{
       if (newQty > 0) return [...prev, { setMenuId, quantity: newQty }];
       return prev;
     });
+  };
+
+  const handleDirectMenuQuantityInput = (menuId: string, val: string) => {
+    const clean = normalizeNumberInput(val);
+    const newQty = clean === '' ? 0 : parseInt(clean, 10);
+    if (newQty < 0) return;
+    setDirectMenuItems((current) => {
+      const existing = current.find((item) => item.menuId === menuId);
+      if (existing) {
+        if (newQty === 0) return current.filter((item) => item.menuId !== menuId);
+        return current.map((item) => item.menuId === menuId ? { ...item, quantity: newQty } : item);
+      }
+      return newQty > 0 ? [...current, { menuId, quantity: newQty }] : current;
+    });
+  };
+
+  const handleDirectMenuQuantityChange = (menuId: string, delta: number) => {
+    const current = directMenuItems.find((item) => item.menuId === menuId)?.quantity ?? 0;
+    handleDirectMenuQuantityInput(menuId, String(Math.max(0, current + delta)));
   };
 
   const handleSetQuantityChange = (setMenuId: string, delta: number) => {
@@ -4220,6 +4334,11 @@ const SalesReporter: React.FC<{
       date,
       totalAmount,
       items: isClosed ? [] : expandedCategoryItems,
+      menuItems: isClosed
+        ? []
+        : directMenuItems
+          .filter((item) => item.menuId && Number(item.quantity) > 0)
+          .map((item) => ({ menuId: item.menuId, quantity: Number(item.quantity) })),
       setItems: isClosed ? [] : normalizedSetItems,
       isClosed,
       receiptImage: isClosed ? undefined : receiptImage || undefined,
@@ -4243,6 +4362,38 @@ const SalesReporter: React.FC<{
   const canSubmit = isClosed
     ? closedReason.trim().length > 0
     : Boolean(receiptImage || existingSaleForDate?.hasReceipt);
+  const directMenuTotalsByCategory = useMemo(() => {
+    const totals = new Map<string, number>();
+    directMenuItems.forEach((item) => {
+      const menu = menuByIdForReport.get(item.menuId);
+      if (!menu) return;
+      totals.set(menu.category, (totals.get(menu.category) ?? 0) + Number(item.quantity || 0));
+    });
+    return totals;
+  }, [directMenuItems, menuByIdForReport]);
+  const directMenuQuantityById = useMemo(
+    () => new Map(directMenuItems.map((item) => [item.menuId, item.quantity])),
+    [directMenuItems],
+  );
+  const categoryBreakdownRows = useMemo(() => categories.map((category) => {
+    const categoryTotal = items.find((item) => item.menuId === category)?.quantity ?? 0;
+    const menuTotal = directMenuTotalsByCategory.get(category) ?? 0;
+    return {
+      category,
+      categoryTotal,
+      menuTotal,
+      matches: categoryTotal === menuTotal,
+    };
+  }), [categories, directMenuTotalsByCategory, items]);
+  const categoryBreakdownReady = categoryBreakdownRows.every((row) => row.matches);
+  const visibleMenus = useMemo(() => {
+    const query = menuFilter.trim().toLowerCase();
+    return menus
+      .filter((menu) => !query
+        || menu.name.toLowerCase().includes(query)
+        || menu.category.toLowerCase().includes(query))
+      .sort((left, right) => left.category.localeCompare(right.category) || left.name.localeCompare(right.name));
+  }, [menuFilter, menus]);
 
   return (
     <div className="max-w-2xl mx-auto">
@@ -4355,6 +4506,103 @@ const SalesReporter: React.FC<{
                     </div>
                 );
                 })}
+            </div>
+
+            <div className="mt-8 rounded-2xl border border-gray-200 bg-gray-50 p-4">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <h3 className="font-bold text-lg">Direct Menu Breakdown</h3>
+                  <div className="mt-1 text-xs text-gray-500">
+                    Enter direct single-item sales by menu. Course and set components are calculated separately below.
+                  </div>
+                </div>
+                <div className={`self-start rounded-full px-3 py-1 text-xs font-bold ${
+                  categoryBreakdownReady
+                    ? 'bg-emerald-100 text-emerald-700'
+                    : 'bg-amber-100 text-amber-800'
+                }`}>
+                  {categoryBreakdownReady ? 'Matches category totals' : 'Breakdown incomplete'}
+                </div>
+              </div>
+
+              <div className="mt-3 flex flex-wrap gap-2">
+                {categoryBreakdownRows
+                  .filter((row) => row.categoryTotal > 0 || row.menuTotal > 0)
+                  .map((row) => (
+                    <div
+                      key={row.category}
+                      className={`rounded-lg border px-2.5 py-1 text-[11px] font-bold ${
+                        row.matches
+                          ? 'border-emerald-200 bg-white text-emerald-700'
+                          : 'border-amber-200 bg-amber-50 text-amber-800'
+                      }`}
+                    >
+                      {row.category}: {row.menuTotal}/{row.categoryTotal}
+                    </div>
+                  ))}
+              </div>
+
+              {!categoryBreakdownReady && (
+                <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+                  The sales report can still be saved, but recipe cost stays partial until each category total matches its menu breakdown.
+                </div>
+              )}
+
+              <label className="relative mt-4 block">
+                <span className="sr-only">Search direct menus</span>
+                <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
+                <input
+                  type="search"
+                  value={menuFilter}
+                  onChange={(event) => setMenuFilter(event.target.value)}
+                  placeholder="Search menu or category"
+                  className="w-full rounded-xl border border-gray-200 bg-white py-2 pl-9 pr-3 text-sm outline-none focus:border-black"
+                />
+              </label>
+
+              <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                {visibleMenus.map((menu) => {
+                  const quantity = directMenuQuantityById.get(menu.id) ?? 0;
+                  return (
+                    <div key={menu.id} className="flex items-center justify-between gap-2 rounded-xl border border-gray-200 bg-white p-3">
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-bold">{menu.name}</div>
+                        <div className="truncate text-[10px] text-gray-400">{menu.category}</div>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-1">
+                        <button
+                          type="button"
+                          aria-label={`Decrease ${menu.name}`}
+                          onClick={() => handleDirectMenuQuantityChange(menu.id, -1)}
+                          className="flex h-7 w-7 items-center justify-center rounded-full bg-gray-100 font-bold hover:bg-gray-200"
+                        >
+                          -
+                        </button>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          pattern="[0-9]*"
+                          aria-label={`${menu.name} direct quantity`}
+                          value={String(quantity)}
+                          onChange={(event) => handleDirectMenuQuantityInput(menu.id, event.target.value)}
+                          className="w-12 rounded-lg border border-gray-200 p-1.5 text-center text-sm font-bold outline-none focus:border-black"
+                        />
+                        <button
+                          type="button"
+                          aria-label={`Increase ${menu.name}`}
+                          onClick={() => handleDirectMenuQuantityChange(menu.id, 1)}
+                          className="flex h-7 w-7 items-center justify-center rounded-full bg-black font-bold text-white hover:bg-gray-800"
+                        >
+                          +
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              {visibleMenus.length === 0 && (
+                <div className="py-6 text-center text-sm text-gray-400">No menus match this search.</div>
+              )}
             </div>
 
             {setMenus.length > 0 && (
@@ -7180,6 +7428,8 @@ const HQStoreDetail: React.FC<{
                     <CostInventoryWorkspace
                         store={store}
                         ingredients={ingredients}
+                        menus={storeMenus}
+                        setMenus={storeSetMenus}
                         sales={canonicalStoreSales}
                         initialMonthKey={salesMonthFilter === 'all' ? defaultSalesMonthKey : salesMonthFilter}
                         mode="hq"
@@ -7330,6 +7580,21 @@ const HQStoreDetail: React.FC<{
                                                     <div className="mb-3 text-xs font-semibold text-gray-700">
                                                         Comment: <span className="font-medium text-gray-600">{sale.comment}</span>
                                                     </div>
+                                                )}
+                                                <div className="text-xs font-bold text-gray-500 uppercase mb-2">Direct Menu Quantities</div>
+                                                {sale.menuItems?.length ? (
+                                                    <div className="mb-4 flex flex-wrap gap-2">
+                                                        {sale.menuItems.map((item, idx) => {
+                                                            const menu = storeMenus.find((row) => row.id === item.menuId);
+                                                            return (
+                                                                <div key={`${item.menuId}-${idx}`} className="bg-white border border-gray-200 px-2 py-1 rounded text-xs font-bold text-gray-700">
+                                                                    {menu?.name ?? 'Unknown Menu'} • {item.quantity}
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                ) : (
+                                                    <div className="text-xs text-amber-600 mb-4">No direct-menu breakdown for this report.</div>
                                                 )}
                                                 <div className="text-xs font-bold text-gray-500 uppercase mb-2">Set Menu Quantities</div>
                                                 {sale.setItems?.length ? (
@@ -9405,6 +9670,8 @@ const StoreDashboard: React.FC<{
                             <CostInventoryWorkspace
                                 store={store}
                                 ingredients={ingredients}
+                                menus={storeMenus}
+                                setMenus={storeSetMenus}
                                 sales={canonicalStoreSales}
                                 initialMonthKey={dashboardMonthKey}
                                 mode="owner"
@@ -10406,6 +10673,7 @@ VITE_SUPABASE_ANON_KEY=...`}</div>
       .on('postgres_changes', { event: '*', schema: 'public', table: 'stores' }, () => schedulePartialRefresh(['stores']))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'sales' }, () => schedulePartialRefresh(['sales']))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'sale_items' }, () => schedulePartialRefresh(['sales']))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'sale_menu_items' }, () => schedulePartialRefresh(['sales']))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'sale_set_items' }, () => schedulePartialRefresh(['sales']))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'menus' }, () => schedulePartialRefresh(['menus']))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'menu_recipe_items' }, () => schedulePartialRefresh(['menus']))

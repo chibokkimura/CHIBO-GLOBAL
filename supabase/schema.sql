@@ -104,6 +104,15 @@ create table if not exists public.sale_items (
   primary key (sale_id, menu_id)
 );
 
+create table if not exists public.sale_menu_items (
+  sale_id text not null references public.sales(id) on delete cascade,
+  menu_id text not null references public.menus(id) on delete restrict,
+  quantity integer not null check (quantity > 0),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  primary key (sale_id, menu_id)
+);
+
 create table if not exists public.sale_set_items (
   sale_id text not null references public.sales(id) on delete cascade,
   set_menu_id text not null references public.set_menus(id) on delete restrict,
@@ -343,6 +352,7 @@ alter table public.set_menus enable row level security;
 alter table public.set_menu_items enable row level security;
 alter table public.sales enable row level security;
 alter table public.sale_items enable row level security;
+alter table public.sale_menu_items enable row level security;
 alter table public.sale_set_items enable row level security;
 
 -- app_users: users can read/update their own profile; HQ can read all
@@ -832,6 +842,68 @@ using (
   )
 );
 
+-- sale_menu_items: direct menu-level quantities for recipe cost.
+drop policy if exists "sale_menu_items_select_store_member" on public.sale_menu_items;
+create policy "sale_menu_items_select_store_member"
+on public.sale_menu_items for select
+to authenticated
+using (
+  exists (
+    select 1 from public.sales s
+    where s.id = sale_menu_items.sale_id
+      and public.is_store_member(s.store_id)
+  )
+);
+
+drop policy if exists "sale_menu_items_insert_store_member" on public.sale_menu_items;
+create policy "sale_menu_items_insert_store_member"
+on public.sale_menu_items for insert
+to authenticated
+with check (
+  exists (
+    select 1
+    from public.sales s
+    join public.menus m on m.id = sale_menu_items.menu_id
+    where s.id = sale_menu_items.sale_id
+      and m.store_id = s.store_id
+      and public.is_store_member(s.store_id)
+  )
+);
+
+drop policy if exists "sale_menu_items_update_store_member" on public.sale_menu_items;
+create policy "sale_menu_items_update_store_member"
+on public.sale_menu_items for update
+to authenticated
+using (
+  exists (
+    select 1 from public.sales s
+    where s.id = sale_menu_items.sale_id
+      and public.is_store_member(s.store_id)
+  )
+)
+with check (
+  exists (
+    select 1
+    from public.sales s
+    join public.menus m on m.id = sale_menu_items.menu_id
+    where s.id = sale_menu_items.sale_id
+      and m.store_id = s.store_id
+      and public.is_store_member(s.store_id)
+  )
+);
+
+drop policy if exists "sale_menu_items_delete_store_member" on public.sale_menu_items;
+create policy "sale_menu_items_delete_store_member"
+on public.sale_menu_items for delete
+to authenticated
+using (
+  exists (
+    select 1 from public.sales s
+    where s.id = sale_menu_items.sale_id
+      and public.is_store_member(s.store_id)
+  )
+);
+
 -- sale_set_items: HQ all; OWNER own store via sales join
 drop policy if exists "sale_set_items_select_hq_or_own" on public.sale_set_items;
 create policy "sale_set_items_select_hq_or_own"
@@ -900,6 +972,7 @@ using (
 
 create index if not exists sales_store_date_idx on public.sales (store_id, date);
 create index if not exists sale_items_sale_id_idx on public.sale_items (sale_id);
+create index if not exists sale_menu_items_menu_id_idx on public.sale_menu_items (menu_id);
 create index if not exists sale_set_items_sale_id_idx on public.sale_set_items (sale_id);
 create index if not exists sale_set_items_set_menu_id_idx on public.sale_set_items (set_menu_id);
 create index if not exists menu_recipe_items_menu_id_idx on public.menu_recipe_items (menu_id);

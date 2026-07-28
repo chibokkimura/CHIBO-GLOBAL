@@ -94,7 +94,13 @@ Supabase Dashboard → SQL Editor 에서 아래 순서대로 실행합니다.
 5) `supabase/migrations/20260728032928_tighten_phase5_table_grants.sql`
 6) `supabase/migrations/20260728035448_phase6_actual_cost_controls_and_summary.sql`
 7) `supabase/migrations/20260728035610_phase6_actual_cost_summary_view.sql`
-8) (선택) `supabase/seed.sql`
+8) `supabase/migrations/20260728051618_phase7_direct_menu_quantities.sql`
+9) `supabase/migrations/20260728052254_tighten_phase7_sale_menu_item_grants.sql`
+10) (선택) `supabase/seed.sql`
+
+업데이트 7A는 기존 카테고리 합계 `sale_items`를 그대로 보존하고,
+신규 `sale_menu_items`에 직접 판매한 단품 메뉴수량만 저장합니다.
+코스·세트는 기존 `sale_set_items`와 구성 메뉴를 자동 전개합니다.
 
 ### 2) Redirect URL 설정 (로그인 후 튕김 방지)
 Supabase Dashboard → Authentication → URL Configuration
