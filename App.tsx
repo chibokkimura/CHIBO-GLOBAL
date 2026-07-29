@@ -13,6 +13,7 @@ import { signInWithEmailPassword, signInWithGoogle, signOut, signUpWithEmailPass
 import { MOCK_EMPLOYEES, MOCK_INGREDIENTS, MOCK_MENUS, MOCK_SALES, MOCK_STORES, MOCK_USERS } from './constants';
 import MonthlyCloseWorkspace from './MonthlyCloseWorkspace';
 import CostInventoryWorkspace from './CostInventoryWorkspace';
+import HQProfitabilityAnalysis from './HQProfitabilityAnalysis';
 
 
 // --- Supabase Data Layer ---
@@ -8143,6 +8144,10 @@ const HQDashboard: React.FC<{
   );
   const navRestoreRef = useRef(false);
   const { rates: fxRates, status: fxStatus, sourceText: fxSourceText, refreshNow: refreshFxNow } = useFxRates();
+  const convertHqAmountToJpy = useCallback(
+    (amount: number, currency: string) => convertToJPY(amount, currency, fxRates),
+    [fxRates],
+  );
 
   // Tabs for Settings
   const [settingsTab, setSettingsTab] = useState<'general' | 'locations' | 'finance' | 'ops' | 'menu'>('general');
@@ -8340,9 +8345,11 @@ const HQDashboard: React.FC<{
       : historyState?.screen === 'hq'
         ? historyState.selectedStoreId ?? null
         : null;
-    const persistedStoreId = hasAppHistory
-      ? historyStoreId
-      : window.localStorage.getItem(HQ_SELECTED_STORE_STORAGE_KEY);
+    const persistedStoreId = isLocalHqPreviewMode()
+      ? null
+      : hasAppHistory
+        ? historyStoreId
+        : window.localStorage.getItem(HQ_SELECTED_STORE_STORAGE_KEY);
     if (persistedStoreId && stores.length === 0) return;
 
     const restoredStore = persistedStoreId
@@ -8813,6 +8820,16 @@ const HQDashboard: React.FC<{
                   </div>
               </div>
            </div>
+
+           <HQProfitabilityAnalysis
+             stores={filteredStores}
+             monthKey={selectedMonthKey}
+             monthLabel={formatMonthKeyLabel(selectedMonthKey)}
+             fxLabel={formatFxSourceLabel(fxStatus, fxSourceText)}
+             preview={isLocalHqPreviewMode()}
+             convertToJpy={convertHqAmountToJpy}
+             onOpenStore={(store, section) => openHqStore(store, section, selectedMonthKey)}
+           />
 
            {/* Financials Table */}
            <FinancialsTable
