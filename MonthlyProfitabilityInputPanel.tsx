@@ -96,8 +96,10 @@ const MonthlyProfitabilityInputPanel: React.FC<Props> = ({
   const editable = mode === 'owner' && !lockedForOwner;
   const commissionCovered = draft.salesLinkedFees.trim() !== '' || settingsConfigured;
   const completedRequiredCount = BASE_REQUIRED_KEYS.filter((key) => draft[key].trim() !== '').length
-    + (commissionCovered ? 1 : 0);
-  const requiredComplete = completedRequiredCount === BASE_REQUIRED_KEYS.length + 1;
+    + (!settingsConfigured && draft.salesLinkedFees.trim() !== '' ? 1 : 0);
+  const requiredTotal = BASE_REQUIRED_KEYS.length + (settingsConfigured ? 0 : 1);
+  const requiredComplete = BASE_REQUIRED_KEYS.every((key) => draft[key].trim() !== '')
+    && commissionCovered;
 
   const loadInput = useCallback(async () => {
     setLoading(true);
@@ -227,6 +229,7 @@ const MonthlyProfitabilityInputPanel: React.FC<Props> = ({
       key: 'laborCost' as const,
       label: 'Total labor cost',
       hint: 'One monthly total from payroll',
+      required: true,
     },
     {
       key: 'salesLinkedFees' as const,
@@ -234,16 +237,19 @@ const MonthlyProfitabilityInputPanel: React.FC<Props> = ({
       hint: settingsConfigured
         ? `Optional: blank uses the HQ default rate (${defaultCommissionRate ?? 0}%)`
         : 'Mall, delivery, card and channel fees',
+      required: !settingsConfigured,
     },
     {
       key: 'utilitiesCost' as const,
       label: 'Utilities',
       hint: 'Electricity, gas and water total',
+      required: true,
     },
     {
       key: 'otherOperatingCost' as const,
       label: 'Other operating costs',
       hint: 'Supplies, cleaning, repairs and marketing',
+      required: true,
     },
   ];
 
@@ -265,7 +271,7 @@ const MonthlyProfitabilityInputPanel: React.FC<Props> = ({
                 ? 'bg-emerald-100 text-emerald-700'
                 : 'bg-gray-100 text-gray-600'
             }`}>
-              {completedRequiredCount}/{BASE_REQUIRED_KEYS.length + 1} required
+              {completedRequiredCount}/{requiredTotal} required
             </span>
           </div>
           <p className="mt-1 text-xs text-gray-500">
@@ -315,6 +321,7 @@ const MonthlyProfitabilityInputPanel: React.FC<Props> = ({
             <label className="rounded-xl border border-gray-200 p-4">
               <span className="flex items-center gap-2 text-xs font-extrabold text-gray-700">
                 <Clock3 className="h-4 w-4" /> Total labor hours
+                <span className="rounded-full bg-red-50 px-2 py-0.5 text-[9px] font-extrabold text-red-700">Required</span>
               </span>
               <input
                 type="number"
@@ -344,7 +351,14 @@ const MonthlyProfitabilityInputPanel: React.FC<Props> = ({
           <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
             {amountFields.map((field) => (
               <label key={field.key} className="rounded-xl border border-gray-200 p-4">
-                <span className="text-xs font-extrabold text-gray-700">{field.label}</span>
+                <span className="flex flex-wrap items-center gap-2 text-xs font-extrabold text-gray-700">
+                  {field.label}
+                  <span className={`rounded-full px-2 py-0.5 text-[9px] font-extrabold ${
+                    field.required ? 'bg-red-50 text-red-700' : 'bg-gray-100 text-gray-500'
+                  }`}>
+                    {field.required ? 'Required' : 'Optional · HQ default'}
+                  </span>
+                </span>
                 <div className="mt-3 flex items-center gap-2">
                   <span className="text-xs font-bold text-gray-500">{store.currency}</span>
                   <input
@@ -365,7 +379,10 @@ const MonthlyProfitabilityInputPanel: React.FC<Props> = ({
           </div>
 
           <label className="mt-4 block text-xs font-bold text-gray-600">
-            Monthly note
+            <span className="flex items-center gap-2">
+              Monthly note
+              <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[9px] font-extrabold text-gray-500">Optional</span>
+            </span>
             <textarea
               value={draft.notes}
               disabled={!editable || saving}
@@ -382,7 +399,7 @@ const MonthlyProfitabilityInputPanel: React.FC<Props> = ({
                 ? 'HQ reviews the totals entered by the store.'
                 : requiredComplete
                   ? 'All required monthly totals are entered.'
-                  : `${BASE_REQUIRED_KEYS.length + 1 - completedRequiredCount} required total(s) still blank. A partial draft can still be saved.`}
+                  : `${requiredTotal - completedRequiredCount} required total(s) still blank. A partial draft can still be saved.`}
             </div>
             {mode === 'owner' ? (
               <button

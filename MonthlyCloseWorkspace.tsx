@@ -192,6 +192,7 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
   const [reviewNote, setReviewNote] = useState('');
   const [showAllMissingDates, setShowAllMissingDates] = useState(false);
   const [showAllMissingReceipts, setShowAllMissingReceipts] = useState(false);
+  const [submissionAttempted, setSubmissionAttempted] = useState(false);
   const [profitabilityRefreshKey, setProfitabilityRefreshKey] = useState(0);
   const [profitabilityProgress, setProfitabilityProgress] = useState<ProfitabilityProgress>(
     EMPTY_PROFITABILITY_PROGRESS,
@@ -204,6 +205,7 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
   useEffect(() => {
     setShowAllMissingDates(false);
     setShowAllMissingReceipts(false);
+    setSubmissionAttempted(false);
   }, [monthKey, store.id]);
 
   const { start: monthStart, end: monthEnd } = useMemo(() => monthBounds(monthKey), [monthKey]);
@@ -460,6 +462,21 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
     }
   };
 
+  const submitOwnerMonth = () => {
+    if (warnings.length > 0) {
+      setSubmissionAttempted(true);
+      setError(null);
+      setNotice(null);
+      document.getElementById('submission-requirements')?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'center',
+      });
+      return;
+    }
+    setSubmissionAttempted(false);
+    void savePeriod('submitted');
+  };
+
   const saveNotes = async () => {
     await savePeriod(period?.status ?? 'draft');
   };
@@ -689,7 +706,13 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
         </div>
       </div>
 
-      <div className={`rounded-2xl border p-5 ${warnings.length ? 'border-red-200 bg-red-50' : 'border-emerald-200 bg-emerald-50'}`}>
+      <div
+        id="submission-requirements"
+        role={submissionAttempted && warnings.length > 0 ? 'alert' : undefined}
+        className={`scroll-mt-24 rounded-2xl border p-5 ${
+          warnings.length ? 'border-red-200 bg-red-50' : 'border-emerald-200 bg-emerald-50'
+        } ${submissionAttempted && warnings.length > 0 ? 'ring-2 ring-red-400 ring-offset-2' : ''}`}
+      >
         <div className="flex items-start gap-3">
           {warnings.length
             ? <AlertOctagon className="mt-0.5 h-5 w-5 shrink-0 text-red-600" />
@@ -697,7 +720,11 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
           <div className="min-w-0 flex-1">
             <div className={`font-extrabold ${warnings.length ? 'text-red-900' : 'text-emerald-900'}`}>
               {warnings.length
-                ? (mode === 'hq' ? 'This store is not ready for approval' : 'Complete these items before submission')
+                ? (mode === 'hq'
+                  ? 'This store is not ready for approval'
+                  : submissionAttempted
+                    ? 'Submission blocked — complete the required items below'
+                    : 'Complete these items before submission')
                 : (mode === 'hq' ? 'Store submission is complete' : 'Ready to submit to HQ')}
             </div>
             {warnings.length > 0 && (
@@ -877,7 +904,12 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
       <section className="rounded-2xl border border-gray-200 bg-white p-5">
         <div className="mb-4 flex items-center justify-between gap-3">
           <div>
-            <h3 className="font-extrabold">{mode === 'hq' ? '6. Store Confirmation' : 'Final check before submission'}</h3>
+            <h3 className="flex flex-wrap items-center gap-2 font-extrabold">
+              {mode === 'hq' ? '6. Store Confirmation' : 'Final check before submission'}
+              {mode === 'owner' ? (
+                <span className="rounded-full bg-red-50 px-2 py-0.5 text-[9px] font-extrabold text-red-700">Required</span>
+              ) : null}
+            </h3>
             <p className="mt-1 text-xs text-gray-500">
               {mode === 'hq'
                 ? 'This is confirmed by the store before submission. HQ reviews it without changing it.'
@@ -926,7 +958,10 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
         </h3>
         <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
           <label className="text-xs font-bold text-gray-600">
-            Store note
+            <span className="flex items-center gap-2">
+              Store note
+              <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[9px] font-extrabold text-gray-500">Optional</span>
+            </span>
             <textarea
               value={ownerNote}
               disabled={lockedForOwner || mode === 'hq'}
@@ -937,7 +972,12 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
             />
           </label>
           <label className="text-xs font-bold text-gray-600">
-            HQ review note
+            <span className="flex items-center gap-2">
+              HQ review note
+              <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[9px] font-extrabold text-gray-500">
+                {mode === 'hq' ? 'Optional' : 'HQ only'}
+              </span>
+            </span>
             <textarea
               value={reviewNote}
               disabled={mode !== 'hq'}
@@ -974,8 +1014,8 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
                 {period?.status !== 'submitted' && (
                   <button
                     type="button"
-                    disabled={saving || !canSubmit}
-                    onClick={() => void savePeriod('submitted')}
+                    disabled={saving}
+                    onClick={submitOwnerMonth}
                     className="rounded-xl bg-black px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     Submit to HQ
@@ -1007,6 +1047,11 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
             )}
           </div>
         </div>
+        {mode === 'owner' && submissionAttempted && warnings.length > 0 ? (
+          <div role="alert" className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-bold text-red-700">
+            Submission was not completed. {warnings.length} required item(s) are still incomplete. Review the red checklist above.
+          </div>
+        ) : null}
       </section>
 
       <div className="rounded-2xl border border-blue-200 bg-blue-50 p-5">

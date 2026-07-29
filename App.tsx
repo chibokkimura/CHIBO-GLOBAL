@@ -4097,6 +4097,9 @@ const SalesReporter: React.FC<{
   onSave: (sale: Sale) => Promise<void> | void;
   onCancel: () => void;
 }> = ({ store, sales, menus, setMenus, categories, initialDate, onSave, onCancel }) => {
+  type SalesReportField = 'date' | 'revenue' | 'items' | 'receipt' | 'closedReason';
+  type SalesReportFieldErrors = Partial<Record<SalesReportField, string>>;
+
   const [date, setDate] = useState(initialDate || formatDate(new Date()));
   const [items, setItems] = useState<SaleItem[]>([]); // Legacy/unassigned direct category quantity; new reports derive category totals from menu quantities.
   const [directMenuItems, setDirectMenuItems] = useState<SaleItem[]>([]);
@@ -4108,6 +4111,7 @@ const SalesReporter: React.FC<{
   const [comment, setComment] = useState<string>('');
   const [closedReason, setClosedReason] = useState<string>('');
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<SalesReportFieldErrors>({});
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
@@ -4117,6 +4121,7 @@ const SalesReporter: React.FC<{
       setDate(formatDate(new Date()));
     }
     setSubmitError(null);
+    setFieldErrors({});
   }, [initialDate]);
 
   const existingSaleForDate = useMemo(() => {
@@ -4126,11 +4131,11 @@ const SalesReporter: React.FC<{
     return rows[0] ?? null;
   }, [sales, store.id, date]);
   const menuByIdForReport = useMemo(
-    () => new Map(menus.map((menu) => [menu.id, menu])),
+    () => new Map<string, Menu>(menus.map((menu) => [menu.id, menu])),
     [menus],
   );
   const setMenuByIdForReport = useMemo(
-    () => new Map(setMenus.map((setMenu) => [setMenu.id, setMenu])),
+    () => new Map<string, SetMenu>(setMenus.map((setMenu) => [setMenu.id, setMenu])),
     [setMenus],
   );
 
@@ -4138,7 +4143,7 @@ const SalesReporter: React.FC<{
     if (existingSaleForDate) {
       const existingSetItems = (existingSaleForDate.setItems ?? []).map((item) => ({ ...item }));
       const existingDirectMenuItems = (existingSaleForDate.menuItems ?? []).map((item) => ({ ...item }));
-      const directCategoryTotals = new Map(
+      const directCategoryTotals = new Map<string, number>(
         (existingSaleForDate.items ?? []).map((item) => [item.menuId, Number(item.quantity || 0)]),
       );
       existingSetItems.forEach((setEntry) => {
@@ -4187,6 +4192,8 @@ const SalesReporter: React.FC<{
       setDirectMenuItems([]);
       setSetMenuItems([]);
     }
+    setFieldErrors({});
+    setSubmitError(null);
   }, [isClosed]);
 
   const normalizeNumberInput = (value: string) => {
@@ -4211,6 +4218,8 @@ const SalesReporter: React.FC<{
             return prev;
         }
     });
+    setFieldErrors((current) => ({ ...current, items: undefined }));
+    setSubmitError(null);
   };
 
   const handleSetQuantityInput = (setMenuId: string, val: string) => {
@@ -4227,6 +4236,8 @@ const SalesReporter: React.FC<{
       if (newQty > 0) return [...prev, { setMenuId, quantity: newQty }];
       return prev;
     });
+    setFieldErrors((current) => ({ ...current, items: undefined }));
+    setSubmitError(null);
   };
 
   const handleDirectMenuQuantityInput = (menuId: string, val: string) => {
@@ -4254,6 +4265,8 @@ const SalesReporter: React.FC<{
       }
       return newQty > 0 ? [...current, { menuId, quantity: newQty }] : current;
     });
+    setFieldErrors((current) => ({ ...current, items: undefined }));
+    setSubmitError(null);
   };
 
   const handleDirectMenuQuantityChange = (menuId: string, delta: number) => {
@@ -4272,6 +4285,8 @@ const SalesReporter: React.FC<{
       if (delta > 0) return [...prev, { setMenuId, quantity: delta }];
       return prev;
     });
+    setFieldErrors((current) => ({ ...current, items: undefined }));
+    setSubmitError(null);
   };
 
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -4284,6 +4299,7 @@ const SalesReporter: React.FC<{
         fallbackToOriginal: false,
       });
       setReceiptImage(resized);
+      setFieldErrors((current) => ({ ...current, receipt: undefined }));
     } catch (error) {
       console.error('Failed to process receipt image', error);
       setReceiptImage(null);
@@ -4294,13 +4310,45 @@ const SalesReporter: React.FC<{
 
   const handleSave = async () => {
     const hasAnyReceipt = Boolean(receiptImage || existingSaleForDate?.hasReceipt);
-    if (!isClosed && !hasAnyReceipt) {
-      setSubmitError('Receipt image is required for open days.');
+    const totalAmount = Number(manualRevenue);
+    const soldItemQuantity = directMenuItems.reduce((sum, item) => sum + Number(item.quantity || 0), 0)
+      + setMenuItems.reduce((sum, item) => sum + Number(item.quantity || 0), 0)
+      + items.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+    const hasConfiguredSalesItems = menus.length > 0 || setMenus.length > 0;
+    const nextFieldErrors: SalesReportFieldErrors = {};
+
+    if (!date) {
+      nextFieldErrors.date = 'Select the report date.';
+    }
+    if (isClosed) {
+      if (!closedReason.trim()) {
+        nextFieldErrors.closedReason = 'Enter the reason for closure.';
+      }
+    } else {
+      if (manualRevenue.trim() === '' || !Number.isFinite(totalAmount) || totalAmount < 0) {
+        nextFieldErrors.revenue = 'Enter the confirmed daily revenue. Enter 0 only when sales were actually zero.';
+      }
+      if (totalAmount > 0 && hasConfiguredSalesItems && soldItemQuantity <= 0) {
+        nextFieldErrors.items = 'Enter at least one single item or course/set quantity.';
+      }
+      if (!hasAnyReceipt) {
+        nextFieldErrors.receipt = 'Upload the receipt or daily sales report image.';
+      }
+    }
+
+    if (Object.keys(nextFieldErrors).length > 0) {
+      setFieldErrors(nextFieldErrors);
+      setSubmitError('The report was not submitted. Complete the required fields marked below.');
+      const firstField = (['date', 'closedReason', 'revenue', 'items', 'receipt'] as SalesReportField[])
+        .find((field) => nextFieldErrors[field]);
+      if (firstField) {
+        document.getElementById(`sales-report-${firstField}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
       return;
     }
+
     const reason = closedReason.trim();
-    if (isClosed && !reason) return;
-    const totalAmount = isClosed ? 0 : (parseFloat(manualRevenue) || 0);
+    const submittedTotalAmount = isClosed ? 0 : totalAmount;
     const normalizedSetItems = isClosed
       ? []
       : setMenuItems
@@ -4324,8 +4372,8 @@ const SalesReporter: React.FC<{
         });
 
       if (normalizedSetItems.length > 0) {
-        const setMenuById = new Map(setMenus.map((setMenu) => [setMenu.id, setMenu]));
-        const menuById = new Map(menus.map((menu) => [menu.id, menu]));
+        const setMenuById = new Map<string, SetMenu>(setMenus.map((setMenu) => [setMenu.id, setMenu]));
+        const menuById = new Map<string, Menu>(menus.map((menu) => [menu.id, menu]));
         normalizedSetItems.forEach((setEntry) => {
           const setMenu = setMenuById.get(setEntry.setMenuId);
           if (!setMenu) return;
@@ -4349,7 +4397,7 @@ const SalesReporter: React.FC<{
       id: `SALE_${Date.now()}`,
       storeId: store.id,
       date,
-      totalAmount,
+      totalAmount: submittedTotalAmount,
       items: isClosed ? [] : expandedCategoryItems,
       menuItems: isClosed
         ? []
@@ -4364,6 +4412,7 @@ const SalesReporter: React.FC<{
       comment: comment.trim() || undefined,
     };
     setSubmitError(null);
+    setFieldErrors({});
     setSubmitting(true);
     try {
       await Promise.resolve(onSave(newSale));
@@ -4376,9 +4425,6 @@ const SalesReporter: React.FC<{
     }
   };
 
-  const canSubmit = isClosed
-    ? closedReason.trim().length > 0
-    : Boolean(receiptImage || existingSaleForDate?.hasReceipt);
   const directMenuTotalsByCategory = useMemo(() => {
     const totals = new Map<string, number>();
     directMenuItems.forEach((item) => {
@@ -4425,14 +4471,25 @@ const SalesReporter: React.FC<{
             Existing report found for {date}. Submitting will update this report.
           </div>
         )}
-        <div>
-          <label className="block text-sm font-bold text-gray-700 mb-2">Report Date</label>
+        <div id="sales-report-date" className="scroll-mt-24">
+          <label className="mb-2 flex items-center gap-2 text-sm font-bold text-gray-700">
+            Report Date
+            <span className="rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-extrabold text-red-700">Required</span>
+          </label>
           <input
             type="date"
             value={date}
-            onChange={e => setDate(e.target.value)}
-            className="w-full p-3 bg-gray-50 rounded-xl border-none font-medium"
+            onChange={(event) => {
+              setDate(event.target.value);
+              setFieldErrors((current) => ({ ...current, date: undefined }));
+              setSubmitError(null);
+            }}
+            aria-invalid={Boolean(fieldErrors.date)}
+            className={`w-full rounded-xl border p-3 font-medium outline-none ${
+              fieldErrors.date ? 'border-red-400 bg-red-50' : 'border-transparent bg-gray-50'
+            }`}
           />
+          {fieldErrors.date && <div className="mt-2 text-xs font-bold text-red-600">{fieldErrors.date}</div>}
         </div>
 
         <div className="flex items-center gap-3 p-4 bg-gray-50 rounded-xl">
@@ -4447,41 +4504,63 @@ const SalesReporter: React.FC<{
         </div>
 
         {isClosed && (
-            <div>
-              <label className="block text-sm font-bold text-gray-700 mb-2">Reason for closure</label>
+            <div id="sales-report-closedReason" className="scroll-mt-24">
+              <label className="mb-2 flex items-center gap-2 text-sm font-bold text-gray-700">
+                Reason for closure
+                <span className="rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-extrabold text-red-700">Required</span>
+              </label>
               <textarea
                 value={closedReason}
-                onChange={e => setClosedReason(e.target.value)}
+                onChange={(event) => {
+                  setClosedReason(event.target.value);
+                  setFieldErrors((current) => ({ ...current, closedReason: undefined }));
+                  setSubmitError(null);
+                }}
                 placeholder="Reason for closure (e.g. maintenance)"
                 rows={3}
-                className="w-full p-4 bg-gray-50 rounded-xl border border-gray-200 focus:border-black outline-none resize-none"
+                aria-invalid={Boolean(fieldErrors.closedReason)}
+                className={`w-full resize-none rounded-xl border p-4 outline-none focus:border-black ${
+                  fieldErrors.closedReason ? 'border-red-400 bg-red-50' : 'border-gray-200 bg-gray-50'
+                }`}
               />
-              {closedReason.trim() === '' && (
-                <div className="mt-2 text-xs text-red-600">Reason is required to submit.</div>
-              )}
+              {fieldErrors.closedReason && <div className="mt-2 text-xs font-bold text-red-600">{fieldErrors.closedReason}</div>}
             </div>
         )}
 
         {!isClosed && (
             <div>
-              <div className="mb-8">
-                <label className="block text-sm font-bold text-gray-700 mb-2">Total Daily Revenue ({store.currency})</label>
+              <div id="sales-report-revenue" className="mb-8 scroll-mt-24">
+                <label className="mb-2 flex items-center gap-2 text-sm font-bold text-gray-700">
+                  Total Daily Revenue ({store.currency})
+                  <span className="rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-extrabold text-red-700">Required</span>
+                </label>
                 <input
                   type="text"
                   inputMode="decimal"
                   pattern="[0-9]*[.]?[0-9]*"
                   value={manualRevenue}
-                  onChange={e => setManualRevenue(normalizeDecimalInput(e.target.value, 2))}
+                  onChange={(event) => {
+                    setManualRevenue(normalizeDecimalInput(event.target.value, 2));
+                    setFieldErrors((current) => ({ ...current, revenue: undefined }));
+                    setSubmitError(null);
+                  }}
                   placeholder="Enter total sales amount"
-                  className="w-full p-4 bg-gray-50 rounded-xl font-bold text-2xl border border-gray-200 focus:border-black outline-none"
+                  aria-invalid={Boolean(fieldErrors.revenue)}
+                  className={`w-full rounded-xl border p-4 text-2xl font-bold outline-none focus:border-black ${
+                    fieldErrors.revenue ? 'border-red-400 bg-red-50' : 'border-gray-200 bg-gray-50'
+                  }`}
                 />
+                {fieldErrors.revenue && <div className="mt-2 text-xs font-bold text-red-600">{fieldErrors.revenue}</div>}
                 {!receiptImage && existingSaleForDate?.hasReceipt && (
                   <div className="mt-2 text-xs text-gray-500">Current receipt image will be kept.</div>
                 )}
               </div>
 
               <div className="mb-8">
-                <label className="block text-sm font-bold text-gray-700 mb-2">Comments (Optional)</label>
+                <label className="mb-2 flex items-center gap-2 text-sm font-bold text-gray-700">
+                  Comments
+                  <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-extrabold text-gray-500">Optional</span>
+                </label>
                 <textarea
                   value={comment}
                   onChange={e => setComment(e.target.value)}
@@ -4491,10 +4570,26 @@ const SalesReporter: React.FC<{
                 />
               </div>
 
-            <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4">
+            <div
+              id="sales-report-items"
+              className={`scroll-mt-24 rounded-2xl border p-4 ${
+                fieldErrors.items ? 'border-red-400 bg-red-50' : 'border-gray-200 bg-gray-50'
+              }`}
+            >
               <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                 <div>
-                  <h3 className="font-bold text-lg">1. Single Item Quantities</h3>
+                  <h3 className="flex flex-wrap items-center gap-2 text-lg font-bold">
+                    1. Single Item Quantities
+                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-extrabold ${
+                      menus.length > 0 || setMenus.length > 0
+                        ? 'bg-red-50 text-red-700'
+                        : 'bg-gray-200 text-gray-600'
+                    }`}>
+                      {menus.length > 0 || setMenus.length > 0
+                        ? 'Single or course quantity required when revenue is above 0'
+                        : 'Quantity entry starts after menus are registered'}
+                    </span>
+                  </h3>
                   <div className="mt-1 text-xs text-gray-500">
                     Enter each directly sold menu once. Category totals are calculated automatically.
                   </div>
@@ -4507,6 +4602,7 @@ const SalesReporter: React.FC<{
                   {categoryBreakdownReady ? 'Category totals automatic' : 'Legacy quantities remain'}
                 </div>
               </div>
+              {fieldErrors.items && <div className="mt-3 text-xs font-bold text-red-600">{fieldErrors.items}</div>}
 
               <div className="mt-3 flex flex-wrap gap-2">
                 {categoryBreakdownRows
@@ -4653,14 +4749,22 @@ const SalesReporter: React.FC<{
         )}
 
         {!isClosed && (
-          <div className="border-2 border-dashed border-gray-300 rounded-xl p-6 text-center">
+          <div
+            id="sales-report-receipt"
+            className={`scroll-mt-24 rounded-xl border-2 border-dashed p-6 text-center ${
+              fieldErrors.receipt ? 'border-red-400 bg-red-50' : 'border-gray-300'
+            }`}
+          >
               <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" id="receipt-upload" />
               <label htmlFor="receipt-upload" className="cursor-pointer flex flex-col items-center gap-2 hover:opacity-70 transition">
                   <div className="w-12 h-12 bg-gray-100 rounded-full flex items-center justify-center">
                       <Camera className="w-6 h-6 text-gray-500" />
                   </div>
                   <div>
-                      <div className="text-sm font-bold text-gray-700">Upload Receipt / Daily Report</div>
+                      <div className="flex flex-wrap items-center justify-center gap-2 text-sm font-bold text-gray-700">
+                        Upload Receipt / Daily Report
+                        <span className="rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-extrabold text-red-700">Required</span>
+                      </div>
                       <div className="text-xs text-gray-400">Click to browse (JPG, PNG)</div>
                   </div>
               </label>
@@ -4670,22 +4774,25 @@ const SalesReporter: React.FC<{
                       <button onClick={() => setReceiptImage(null)} className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-1 shadow-md hover:bg-red-600 transition"><X className="w-4 h-4" /></button>
                   </div>
               )}
+              {fieldErrors.receipt && <div className="mt-3 text-xs font-bold text-red-600">{fieldErrors.receipt}</div>}
           </div>
         )}
 
+        {submitError && (
+          <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-semibold text-red-700">
+            {submitError}
+          </div>
+        )}
         <div className="flex gap-4 pt-4">
             <button onClick={onCancel} className="flex-1 py-3 font-bold text-gray-500 hover:bg-gray-50 rounded-xl">Cancel</button>
             <button
               onClick={handleSave}
-              disabled={!canSubmit || submitting}
-              className={`flex-1 py-3 bg-black text-white font-bold rounded-xl shadow-lg ${(canSubmit && !submitting) ? 'hover:bg-gray-800' : 'opacity-50 cursor-not-allowed'}`}
+              disabled={submitting}
+              className="flex-1 rounded-xl bg-black py-3 font-bold text-white shadow-lg hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {submitting ? 'Submitting...' : 'Submit Report'}
             </button>
         </div>
-        {submitError && (
-          <div className="text-sm text-red-600 font-semibold">{submitError}</div>
-        )}
       </div>
     </div>
   );
@@ -4711,7 +4818,7 @@ const MenuManager: React.FC<{
           onClick={() => onCreate({
             id: createLocalEntityId('M'),
             storeId: store.id,
-            category: 'Main', // Default will be overwritten by editor
+            category: '',
             name: 'New Item',
             price: 0,
             recipe: []
@@ -4851,7 +4958,10 @@ const SetMenuEditor: React.FC<{
                 <div className="p-6 overflow-y-auto space-y-6">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div>
-                            <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Set Name</label>
+                            <label className="mb-1 flex items-center gap-2 text-xs font-bold uppercase text-gray-500">
+                                Set Name
+                                <span className="rounded-full bg-red-50 px-2 py-0.5 text-[9px] text-red-700">Required</span>
+                            </label>
                             <input
                                 value={editedSet.name}
                                 onChange={(e) => setEditedSet({ ...editedSet, name: e.target.value })}
@@ -4860,7 +4970,10 @@ const SetMenuEditor: React.FC<{
                             />
                         </div>
                         <div>
-                            <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Set Price</label>
+                            <label className="mb-1 flex items-center gap-2 text-xs font-bold uppercase text-gray-500">
+                                Set Price
+                                <span className="rounded-full bg-red-50 px-2 py-0.5 text-[9px] text-red-700">Required</span>
+                            </label>
                             <input
                                 type="number"
                                 value={Number.isFinite(editedSet.price) ? editedSet.price : 0}
@@ -4872,7 +4985,10 @@ const SetMenuEditor: React.FC<{
 
                     <div className="pt-2 border-t">
                         <div className="flex items-center justify-between mb-3">
-                            <h3 className="font-bold text-lg">Set Components</h3>
+                            <h3 className="flex items-center gap-2 text-lg font-bold">
+                                Set Components
+                                <span className="rounded-full bg-red-50 px-2 py-0.5 text-[9px] font-extrabold text-red-700">At least 1 required</span>
+                            </h3>
                             <button
                                 type="button"
                                 onClick={addSetItemRow}
@@ -4927,7 +5043,7 @@ const SetMenuEditor: React.FC<{
                             </div>
                         )}
                     </div>
-                    {error && <div className="text-sm text-red-600 font-semibold">{error}</div>}
+                    {error && <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-semibold text-red-700">{error}</div>}
                 </div>
                 <div className="p-4 border-t bg-gray-50 flex justify-end gap-3">
                     <button onClick={onBack} className="px-6 py-3 font-bold text-gray-500 hover:bg-gray-100 rounded-xl transition">Cancel</button>
@@ -5070,9 +5186,15 @@ const RecipeEditor: React.FC<{
     const handleAddIngredientToRecipe = async () => {
         const name = newIngName.trim();
         const unit = newIngUnit.trim();
-        if (!name || !unit || !newIngQty) return;
+        if (!name || !unit || !newIngQty) {
+            setRecipeError('Enter the ingredient name, quantity, and unit before adding it.');
+            return;
+        }
         const qty = parseFloat(newIngQty);
-        if (qty <= 0) return;
+        if (!Number.isFinite(qty) || qty <= 0) {
+            setRecipeError('Ingredient quantity must be greater than 0.');
+            return;
+        }
         setRecipeError(null);
 
         const ingredientPool = [...localIngredients, ...ingredients];
@@ -5144,7 +5266,10 @@ const RecipeEditor: React.FC<{
                 <div className="p-6 overflow-y-auto space-y-6">
                     {/* Image Upload */}
                     <div className="mb-6">
-                        <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Item Image</label>
+                        <label className="mb-2 flex items-center gap-2 text-xs font-bold uppercase text-gray-500">
+                            Item Image
+                            <span className="rounded-full bg-gray-200 px-2 py-0.5 text-[9px] text-gray-500">Optional</span>
+                        </label>
                         <div className="border-2 border-dashed border-gray-300 rounded-xl p-6 text-center relative bg-gray-50 hover:bg-gray-100 transition group">
                             <input ref={imageInputRef} type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
                             {editedMenu.imageUrl ? (
@@ -5183,11 +5308,17 @@ const RecipeEditor: React.FC<{
 
                     <div className="grid grid-cols-2 gap-4">
                         <div>
-                            <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Name</label>
+                            <label className="mb-1 flex items-center gap-2 text-xs font-bold uppercase text-gray-500">
+                                Name
+                                <span className="rounded-full bg-red-50 px-2 py-0.5 text-[9px] text-red-700">Required</span>
+                            </label>
                             <input value={editedMenu.name} onChange={e => setEditedMenu({...editedMenu, name: e.target.value})} className="w-full p-3 bg-gray-50 rounded-xl font-bold border border-gray-200 focus:border-black outline-none" />
                         </div>
                         <div>
-                            <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Category</label>
+                            <label className="mb-1 flex items-center gap-2 text-xs font-bold uppercase text-gray-500">
+                                Category
+                                <span className="rounded-full bg-red-50 px-2 py-0.5 text-[9px] text-red-700">Required</span>
+                            </label>
                             <select
                                 value={editedMenu.category}
                                 onChange={e => setEditedMenu({...editedMenu, category: e.target.value})}
@@ -5200,7 +5331,10 @@ const RecipeEditor: React.FC<{
                             </select>
                         </div>
                         <div className="col-span-2">
-                            <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Price</label>
+                            <label className="mb-1 flex items-center gap-2 text-xs font-bold uppercase text-gray-500">
+                                Price
+                                <span className="rounded-full bg-red-50 px-2 py-0.5 text-[9px] text-red-700">Required</span>
+                            </label>
                             <input
                                 type="number"
                                 value={editedMenu.price.toString()}
@@ -5217,6 +5351,7 @@ const RecipeEditor: React.FC<{
                     <div className="pt-6 border-t">
                         <h3 className="font-bold text-lg mb-4 flex items-center gap-2">
                             <UtensilsCrossed className="w-5 h-5"/> Recipe Configuration
+                            <span className="rounded-full bg-red-50 px-2 py-0.5 text-[9px] font-extrabold text-red-700">At least 1 ingredient required</span>
                         </h3>
 
                         {/* Add Ingredient Form */}
@@ -5264,8 +5399,8 @@ const RecipeEditor: React.FC<{
                                 />
                                 <button
                                     onClick={handleAddIngredientToRecipe}
-                                    className="bg-black text-white px-4 rounded-lg font-bold text-sm hover:bg-gray-800 disabled:opacity-50"
-                                    disabled={!newIngName || !newIngQty || !newIngUnit}
+                                    className="bg-black text-white px-4 rounded-lg font-bold text-sm hover:bg-gray-800"
+                                    aria-label="Add ingredient to recipe"
                                 >
                                     <Plus className="w-4 h-4"/>
                                 </button>
@@ -5303,7 +5438,7 @@ const RecipeEditor: React.FC<{
                                 <div className="text-center py-8 text-gray-400 text-sm italic">No ingredients configured for this item.</div>
                             )}
                             {recipeError && (
-                                <div className="text-sm text-red-600 font-semibold">{recipeError}</div>
+                                <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-semibold text-red-700">{recipeError}</div>
                             )}
                         </div>
                     </div>
@@ -5314,6 +5449,23 @@ const RecipeEditor: React.FC<{
                     <button
                         onClick={async () => {
                             if (savingItem) return;
+                            const name = editedMenu.name.trim();
+                            if (!name) {
+                                setRecipeError('Item name is required.');
+                                return;
+                            }
+                            if (!editedMenu.category.trim() || !categories.includes(editedMenu.category)) {
+                                setRecipeError('Select a valid category.');
+                                return;
+                            }
+                            if (!Number.isFinite(editedMenu.price) || editedMenu.price < 0) {
+                                setRecipeError('Price must be 0 or greater.');
+                                return;
+                            }
+                            if (editedMenu.recipe.length === 0) {
+                                setRecipeError('Add at least one ingredient to the recipe.');
+                                return;
+                            }
                             const missing = editedMenu.recipe.filter(r => !localIngredients.find(i => i.id === r.ingredientId));
                             if (missing.length > 0) {
                                 setRecipeError('Some ingredients are missing. Remove and re-add them.');
@@ -5327,7 +5479,7 @@ const RecipeEditor: React.FC<{
                             setRecipeError(null);
                             setSavingItem(true);
                             try {
-                                await Promise.resolve(onSave(editedMenu));
+                                await Promise.resolve(onSave({ ...editedMenu, name }));
                             } catch (e) {
                                 console.error('Failed to save menu item', e);
                                 const message = e instanceof Error ? e.message : 'Failed to save item.';
@@ -5360,6 +5512,7 @@ const StaffEditor: React.FC<{
 }> = ({ employee, positions, onSave, onBack }) => {
     const [editedEmp, setEditedEmp] = useState(employee);
     const [imageError, setImageError] = useState<string | null>(null);
+    const [formError, setFormError] = useState<string | null>(null);
 
     const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
@@ -5399,23 +5552,36 @@ const StaffEditor: React.FC<{
                             </div>
                         </div>
                     </div>
+                    <div className="text-center text-[10px] font-extrabold uppercase text-gray-400">Photo · Optional</div>
                     {imageError && <div className="text-sm text-red-600 font-semibold text-center">{imageError}</div>}
 
                     <div>
-                        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Full Name</label>
+                        <label className="mb-1 flex items-center gap-2 text-xs font-bold uppercase text-gray-500">
+                            Full Name
+                            <span className="rounded-full bg-red-50 px-2 py-0.5 text-[9px] text-red-700">Required</span>
+                        </label>
                         <input
                             value={editedEmp.name}
-                            onChange={e => setEditedEmp({...editedEmp, name: e.target.value})}
+                            onChange={(event) => {
+                                setEditedEmp({...editedEmp, name: event.target.value});
+                                setFormError(null);
+                            }}
                             className="w-full p-3 bg-gray-50 rounded-xl font-bold border border-gray-200 focus:border-black outline-none"
                             placeholder="e.g. John Doe"
                         />
                     </div>
 
                     <div>
-                         <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Position</label>
+                         <label className="mb-1 flex items-center gap-2 text-xs font-bold uppercase text-gray-500">
+                            Position
+                            <span className="rounded-full bg-red-50 px-2 py-0.5 text-[9px] text-red-700">Required</span>
+                         </label>
                          <select
                             value={editedEmp.position}
-                            onChange={e => setEditedEmp({...editedEmp, position: e.target.value})}
+                            onChange={(event) => {
+                                setEditedEmp({...editedEmp, position: event.target.value});
+                                setFormError(null);
+                            }}
                             className="w-full p-3 bg-gray-50 rounded-xl font-bold border border-gray-200 focus:border-black outline-none"
                          >
                             <option value="">Select Position</option>
@@ -5424,13 +5590,28 @@ const StaffEditor: React.FC<{
                             ))}
                          </select>
                     </div>
+                    {formError && (
+                        <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-bold text-red-700">
+                            {formError}
+                        </div>
+                    )}
                 </div>
                 <div className="p-4 border-t bg-gray-50 flex justify-end gap-3">
                     <button onClick={onBack} className="px-6 py-3 font-bold text-gray-500 hover:bg-gray-100 rounded-xl transition">Cancel</button>
                     <button
-                        onClick={() => onSave(editedEmp)}
-                        disabled={!editedEmp.name || !editedEmp.position}
-                        className="bg-black text-white px-8 py-3 rounded-xl font-bold hover:bg-gray-800 shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                        onClick={() => {
+                            const missing = [
+                                ...(!editedEmp.name.trim() ? ['full name'] : []),
+                                ...(!editedEmp.position.trim() ? ['position'] : []),
+                            ];
+                            if (missing.length > 0) {
+                                setFormError(`Staff was not saved. Enter: ${missing.join(', ')}.`);
+                                return;
+                            }
+                            setFormError(null);
+                            onSave({ ...editedEmp, name: editedEmp.name.trim() });
+                        }}
+                        className="bg-black text-white px-8 py-3 rounded-xl font-bold hover:bg-gray-800 shadow-lg"
                     >
                         Save Staff
                     </button>

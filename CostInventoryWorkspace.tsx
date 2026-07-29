@@ -242,6 +242,17 @@ const CostInventoryWorkspace: React.FC<Props> = ({
     notes: '',
   });
 
+  const showInputError = (message: string) => {
+    setError(message);
+    setNotice(null);
+    window.requestAnimationFrame(() => {
+      document.getElementById('cost-workspace-feedback')?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'center',
+      });
+    });
+  };
+
   useEffect(() => {
     setMonthKey(initialMonthKey);
   }, [initialMonthKey, store.id]);
@@ -721,8 +732,13 @@ const CostInventoryWorkspace: React.FC<Props> = ({
 
   const saveProfile = async (profile: IngredientProfile) => {
     if (!editable) return;
-    if (!profile.purchaseUnit.trim() || profile.contentQuantity <= 0 || profile.currentPackPrice < 0) {
-      setError('Enter a purchase unit, content quantity above 0, and a valid pack price.');
+    const missingFields = [
+      ...(!profile.purchaseUnit.trim() ? ['purchase unit'] : []),
+      ...(!Number.isFinite(profile.contentQuantity) || profile.contentQuantity <= 0 ? ['content quantity above 0'] : []),
+      ...(!Number.isFinite(profile.currentPackPrice) || profile.currentPackPrice < 0 ? ['pack price of 0 or more'] : []),
+    ];
+    if (missingFields.length > 0) {
+      showInputError(`Ingredient setup was not saved. Enter: ${missingFields.join(', ')}.`);
       return;
     }
 
@@ -786,7 +802,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
 
   const createIngredient = async () => {
     if (!editable || !newIngredient.name.trim() || !newIngredient.unit.trim()) {
-      setError('Enter the ingredient name and base unit.');
+      showInputError('Ingredient was not added. Enter the required ingredient name and base unit.');
       return;
     }
     const ingredient: Ingredient = {
@@ -839,8 +855,14 @@ const CostInventoryWorkspace: React.FC<Props> = ({
     const profile = activeProfiles.find((row) => row.ingredientId === purchaseDraft.ingredientId);
     const packages = Number(purchaseDraft.packages);
     const totalCost = Number(purchaseDraft.totalCost);
-    if (!profile || !purchaseDraft.purchaseDate || packages <= 0 || !Number.isFinite(totalCost) || totalCost < 0) {
-      setError('Choose an ingredient and enter valid packages, date, and total cost.');
+    const missingFields = [
+      ...(!profile ? ['ingredient'] : []),
+      ...(!purchaseDraft.purchaseDate ? ['purchase date'] : []),
+      ...(purchaseDraft.packages.trim() === '' || !Number.isFinite(packages) || packages <= 0 ? ['package count above 0'] : []),
+      ...(purchaseDraft.totalCost.trim() === '' || !Number.isFinite(totalCost) || totalCost < 0 ? ['invoice total of 0 or more'] : []),
+    ];
+    if (missingFields.length > 0) {
+      showInputError(`Purchase was not saved. Enter: ${missingFields.join(', ')}.`);
       return;
     }
 
@@ -945,17 +967,17 @@ const CostInventoryWorkspace: React.FC<Props> = ({
       || row.closingQuantity < 0
       || !Number.isFinite(row.adjustmentQuantity)
     ) {
-      setError('Inventory quantities and unit costs must be valid and cannot be negative.');
+      showInputError('Inventory was not saved. Quantities and unit costs must be valid; only adjustment may be negative.');
       return;
     }
     if (row.openingQuantity > 0 && row.openingUnitCost <= 0) {
-      setError('Enter the opening unit cost before completing this ingredient count.');
+      showInputError('Inventory was not saved. Enter the opening unit cost when opening stock is above 0.');
       return;
     }
 
     const costRow = costBreakdownByIngredient.get(ingredientId);
     if (!costRow || costRow.invalid) {
-      setError('Check the quantities and valuation before saving this ingredient count.');
+      showInputError('Inventory was not saved. Check the required quantities and valuation.');
       return;
     }
 
@@ -1078,8 +1100,10 @@ const CostInventoryWorkspace: React.FC<Props> = ({
         ))}
       </nav>
 
-      {notice && <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm font-bold text-emerald-700">{notice}</div>}
-      {error && <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-bold text-red-700">{error}</div>}
+      <div id="cost-workspace-feedback" className="scroll-mt-24">
+        {notice && <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm font-bold text-emerald-700">{notice}</div>}
+        {error && <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-bold text-red-700">{error}</div>}
+      </div>
 
       {activeSection === 'summary' && (
         <>
@@ -1628,7 +1652,10 @@ const CostInventoryWorkspace: React.FC<Props> = ({
             {showNewIngredient && editable && (
               <div className="mt-4 grid grid-cols-1 gap-3 rounded-xl border border-gray-200 bg-gray-50 p-4 sm:grid-cols-[1fr_140px_auto]">
                 <label className="text-xs font-bold text-gray-600">
-                  Ingredient name
+                  <span className="flex items-center gap-2">
+                    Ingredient name
+                    <span className="rounded-full bg-red-50 px-2 py-0.5 text-[9px] font-extrabold text-red-700">Required</span>
+                  </span>
                   <input
                     value={newIngredient.name}
                     onChange={(event) => setNewIngredient((current) => ({ ...current, name: event.target.value }))}
@@ -1637,7 +1664,10 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                   />
                 </label>
                 <label className="text-xs font-bold text-gray-600">
-                  Base unit
+                  <span className="flex items-center gap-2">
+                    Base unit
+                    <span className="rounded-full bg-red-50 px-2 py-0.5 text-[9px] font-extrabold text-red-700">Required</span>
+                  </span>
                   <select
                     value={newIngredient.unit}
                     onChange={(event) => setNewIngredient((current) => ({ ...current, unit: event.target.value }))}
@@ -1709,7 +1739,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                             <td colSpan={7} className="p-4">
                               <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
                                 <label className="text-xs font-bold text-gray-600">
-                                  Category
+                                  Category <span className="text-[9px] font-extrabold text-red-700">Required</span>
                                   <select
                                     value={profile.category}
                                     onChange={(event) => setProfiles((current) => current.map((row) => row.ingredientId === profile.ingredientId ? { ...row, category: event.target.value as IngredientCategory } : row))}
@@ -1719,7 +1749,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                                   </select>
                                 </label>
                                 <label className="text-xs font-bold text-gray-600">
-                                  Purchase unit
+                                  Purchase unit <span className="text-[9px] font-extrabold text-red-700">Required</span>
                                   <input
                                     value={profile.purchaseUnit}
                                     onChange={(event) => setProfiles((current) => current.map((row) => row.ingredientId === profile.ingredientId ? { ...row, purchaseUnit: event.target.value } : row))}
@@ -1728,7 +1758,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                                   />
                                 </label>
                                 <label className="text-xs font-bold text-gray-600">
-                                  Content ({ingredient?.unit ?? 'unit'})
+                                  Content ({ingredient?.unit ?? 'unit'}) <span className="text-[9px] font-extrabold text-red-700">Required</span>
                                   <input
                                     type="number"
                                     min="0.001"
@@ -1739,7 +1769,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                                   />
                                 </label>
                                 <label className="text-xs font-bold text-gray-600">
-                                  Pack price ({store.currency})
+                                  Pack price ({store.currency}) <span className="text-[9px] font-extrabold text-red-700">Required</span>
                                   <input
                                     type="number"
                                     min="0"
@@ -1750,7 +1780,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                                   />
                                 </label>
                                 <label className="text-xs font-bold text-gray-600">
-                                  Supplier
+                                  Supplier <span className="text-[9px] font-extrabold text-gray-400">Optional</span>
                                   <input
                                     value={profile.supplier}
                                     onChange={(event) => setProfiles((current) => current.map((row) => row.ingredientId === profile.ingredientId ? { ...row, supplier: event.target.value } : row))}
@@ -1805,7 +1835,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
               <div className="mt-4 rounded-xl border border-gray-200 bg-gray-50 p-4">
                 <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-6">
                   <label className="text-xs font-bold text-gray-600 xl:col-span-2">
-                    Ingredient
+                    Ingredient <span className="text-[9px] font-extrabold text-red-700">Required</span>
                     <select
                       value={purchaseDraft.ingredientId}
                       onChange={(event) => {
@@ -1819,6 +1849,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                       }}
                       className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm"
                     >
+                      <option value="">Select ingredient</option>
                       {activeProfiles.map((profile) => {
                         const ingredient = ingredientById.get(profile.ingredientId);
                         return <option key={profile.ingredientId} value={profile.ingredientId}>{ingredient?.name ?? profile.ingredientId}</option>;
@@ -1826,7 +1857,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                     </select>
                   </label>
                   <label className="text-xs font-bold text-gray-600">
-                    Purchase date
+                    Purchase date <span className="text-[9px] font-extrabold text-red-700">Required</span>
                     <input
                       type="date"
                       min={monthStart}
@@ -1837,7 +1868,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                     />
                   </label>
                   <label className="text-xs font-bold text-gray-600">
-                    Packages
+                    Packages <span className="text-[9px] font-extrabold text-red-700">Required</span>
                     <input
                       type="number"
                       min="0.001"
@@ -1856,7 +1887,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                     />
                   </label>
                   <label className="text-xs font-bold text-gray-600">
-                    Invoice total ({store.currency})
+                    Invoice total ({store.currency}) <span className="text-[9px] font-extrabold text-red-700">Required</span>
                     <input
                       type="number"
                       min="0"
@@ -1867,7 +1898,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                     />
                   </label>
                   <label className="text-xs font-bold text-gray-600">
-                    Supplier
+                    Supplier <span className="text-[9px] font-extrabold text-gray-400">Optional</span>
                     <input
                       value={purchaseDraft.supplier}
                       onChange={(event) => setPurchaseDraft((current) => ({ ...current, supplier: event.target.value }))}
@@ -1877,7 +1908,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                   </label>
                 </div>
                 <label className="mt-3 block text-xs font-bold text-gray-600">
-                  Notes
+                  Notes <span className="text-[9px] font-extrabold text-gray-400">Optional</span>
                   <input
                     value={purchaseDraft.notes}
                     onChange={(event) => setPurchaseDraft((current) => ({ ...current, notes: event.target.value }))}
@@ -1975,8 +2006,9 @@ const CostInventoryWorkspace: React.FC<Props> = ({
           </div>
 
           <div className="mt-4 rounded-xl bg-gray-50 p-4 text-xs leading-5 text-gray-600">
-            Check <strong>Count complete</strong> only after physically counting the ingredient, then save.
-            Only rows with invalid quantities are highlighted in red.
+            <strong>Required:</strong> confirm opening quantity, closing quantity, and Count complete after physically counting the ingredient.
+            Opening unit cost is also required when opening quantity is above 0.
+            <strong className="ml-1">Optional:</strong> waste, adjustment, and notes may remain 0 or blank.
           </div>
 
           <div className="mt-4 space-y-3 md:hidden">
@@ -2014,7 +2046,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
 
                   <div className="mt-4 grid grid-cols-2 gap-3">
                     <label className="text-[11px] font-bold text-gray-600">
-                      Opening
+                      Opening <span className="text-[9px] font-extrabold text-red-700">Required</span>
                       <input
                         aria-label={`${ingredient?.name ?? profile.ingredientId} opening inventory`}
                         type="number"
@@ -2033,7 +2065,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                       </div>
                     </div>
                     <label className="text-[11px] font-bold text-gray-600">
-                      Waste
+                      Waste <span className="text-[9px] font-extrabold text-gray-400">Optional</span>
                       <input
                         aria-label={`${ingredient?.name ?? profile.ingredientId} waste quantity`}
                         type="number"
@@ -2046,7 +2078,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                       />
                     </label>
                     <label className="text-[11px] font-bold text-gray-600">
-                      Adjustment (+/-)
+                      Adjustment (+/-) <span className="text-[9px] font-extrabold text-gray-400">Optional</span>
                       <input
                         aria-label={`${ingredient?.name ?? profile.ingredientId} inventory adjustment`}
                         type="number"
@@ -2058,7 +2090,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                       />
                     </label>
                     <label className="text-[11px] font-bold text-gray-600">
-                      Closing
+                      Closing <span className="text-[9px] font-extrabold text-red-700">Required</span>
                       <input
                         aria-label={`${ingredient?.name ?? profile.ingredientId} closing inventory`}
                         type="number"
@@ -2093,6 +2125,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                     <div className="mt-3 grid grid-cols-2 gap-3 rounded-xl bg-gray-50 p-3">
                       <label className="col-span-2 text-[11px] font-bold text-gray-600">
                         Opening unit cost ({store.currency}/{ingredient?.unit ?? 'unit'})
+                        <span className="ml-1 text-[9px] font-extrabold text-red-700">Required when opening is above 0</span>
                         <input
                           type="number"
                           min="0"
@@ -2112,7 +2145,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                         <div className="mt-1 rounded-lg bg-white px-3 py-2 text-right text-sm">{store.currency} {formatAmount(valuation?.closingValue ?? 0)}</div>
                       </div>
                       <label className="col-span-2 text-[11px] font-bold text-gray-600">
-                        Notes
+                        Notes <span className="text-[9px] font-extrabold text-gray-400">Optional</span>
                         <input
                           value={row.notes}
                           disabled={!editable}
@@ -2133,7 +2166,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                         onChange={(event) => updateInventoryDraft(profile.ingredientId, { countComplete: event.target.checked })}
                         className="h-5 w-5 rounded border-gray-300"
                       />
-                      Count complete
+                      Count complete <span className="text-[9px] font-extrabold text-red-700">Required</span>
                     </label>
                     {editable ? (
                       <button
@@ -2161,13 +2194,13 @@ const CostInventoryWorkspace: React.FC<Props> = ({
               <thead className="border-b border-gray-200 text-[11px] text-gray-400">
                 <tr>
                   <th className="px-3 py-2">Ingredient</th>
-                  <th className="px-2 py-2 text-right">Opening</th>
+                  <th className="px-2 py-2 text-right">Opening *</th>
                   <th className="px-2 py-2 text-right">Purchased</th>
-                  <th className="px-2 py-2 text-right">Waste</th>
-                  <th className="px-2 py-2 text-right">Adjust (+/-)</th>
-                  <th className="px-2 py-2 text-right">Closing</th>
+                  <th className="px-2 py-2 text-right">Waste (opt.)</th>
+                  <th className="px-2 py-2 text-right">Adjust (opt.)</th>
+                  <th className="px-2 py-2 text-right">Closing *</th>
                   <th className="px-3 py-2 text-right">Actual Usage</th>
-                  <th className="px-3 py-2 text-center">Close</th>
+                  <th className="px-3 py-2 text-center">Count complete *</th>
                 </tr>
               </thead>
               <tbody>
@@ -2280,6 +2313,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                             <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
                               <label className="text-xs font-bold text-gray-600">
                                 Opening unit cost ({store.currency}/{ingredient?.unit ?? 'unit'})
+                                <span className="ml-1 text-[9px] font-extrabold text-red-700">Required if opening &gt; 0</span>
                                 <input
                                   type="number"
                                   min="0"
@@ -2315,7 +2349,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                                 </div>
                               </div>
                               <label className="text-xs font-bold text-gray-600">
-                                Notes
+                                Notes <span className="text-[9px] font-extrabold text-gray-400">Optional</span>
                                 <input
                                   value={row.notes}
                                   disabled={!editable}
