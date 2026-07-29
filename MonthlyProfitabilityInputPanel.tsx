@@ -29,6 +29,7 @@ type Props = {
   lockedForOwner: boolean;
   preview: boolean;
   sectionNumber: number;
+  refreshKey: number;
   onSaved?: () => void;
 };
 
@@ -81,6 +82,7 @@ const MonthlyProfitabilityInputPanel: React.FC<Props> = ({
   lockedForOwner,
   preview,
   sectionNumber,
+  refreshKey,
   onSaved,
 }) => {
   const [draft, setDraft] = useState<MonthlyProfitabilityInput>(EMPTY_INPUT);
@@ -141,7 +143,7 @@ const MonthlyProfitabilityInputPanel: React.FC<Props> = ({
     } finally {
       setLoading(false);
     }
-  }, [monthStart, preview, store.id]);
+  }, [monthStart, preview, refreshKey, store.id]);
 
   useEffect(() => {
     void loadInput();

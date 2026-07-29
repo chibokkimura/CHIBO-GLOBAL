@@ -12,6 +12,7 @@ import { Sale, Store } from './types';
 import { supabase } from './supabaseClient';
 import MonthlyProfitabilityInputPanel from './MonthlyProfitabilityInputPanel';
 import MonthlyProfitabilitySummaryPanel from './MonthlyProfitabilitySummaryPanel';
+import ProfitabilityImportPanel from './ProfitabilityImportPanel';
 import StoreProfitabilitySettingsPanel from './StoreProfitabilitySettingsPanel';
 
 type CloseStatus = 'draft' | 'submitted' | 'approved' | 'reopened';
@@ -593,7 +594,18 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
         lockedForOwner={lockedForOwner}
         preview={preview}
         sectionNumber={mode === 'hq' ? 3 : 2}
+        refreshKey={profitabilityRefreshKey}
         onSaved={() => setProfitabilityRefreshKey((current) => current + 1)}
+      />
+
+      <ProfitabilityImportPanel
+        store={store}
+        monthStart={monthStart}
+        mode={mode}
+        lockedForOwner={lockedForOwner}
+        preview={preview}
+        sectionNumber={mode === 'hq' ? 4 : 3}
+        onApplied={() => setProfitabilityRefreshKey((current) => current + 1)}
       />
 
       <MonthlyProfitabilitySummaryPanel
@@ -601,13 +613,13 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
         monthStart={monthStart}
         preview={preview}
         refreshKey={profitabilityRefreshKey}
-        sectionNumber={mode === 'hq' ? 4 : 3}
+        sectionNumber={mode === 'hq' ? 5 : 4}
       />
 
       <section className="rounded-2xl border border-gray-200 bg-white p-5">
         <div className="mb-4 flex items-center justify-between gap-3">
           <div>
-            <h3 className="font-extrabold">{mode === 'hq' ? 5 : 4}. Store Confirmation</h3>
+            <h3 className="font-extrabold">{mode === 'hq' ? 6 : 5}. Store Confirmation</h3>
             <p className="mt-1 text-xs text-gray-500">
               {mode === 'hq'
                 ? 'This is confirmed by the store before submission. HQ reviews it without changing it.'
@@ -651,7 +663,7 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
       </section>
 
       <section className="rounded-2xl border border-gray-200 bg-white p-5">
-        <h3 className="font-extrabold">{mode === 'hq' ? 6 : 5}. Notes & {mode === 'hq' ? 'Approval' : 'Submission'}</h3>
+        <h3 className="font-extrabold">{mode === 'hq' ? 7 : 6}. Notes & {mode === 'hq' ? 'Approval' : 'Submission'}</h3>
         <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
           <label className="text-xs font-bold text-gray-600">
             Store note
