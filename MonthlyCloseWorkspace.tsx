@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { Sale, Store } from './types';
 import { supabase } from './supabaseClient';
+import MonthlyProfitabilityInputPanel from './MonthlyProfitabilityInputPanel';
 
 type CloseStatus = 'draft' | 'submitted' | 'approved' | 'reopened';
 type TaskStatus = 'pending' | 'completed' | 'not_applicable';
@@ -571,10 +572,18 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
         </div>
       </section>
 
+      <MonthlyProfitabilityInputPanel
+        store={store}
+        monthStart={monthStart}
+        mode={mode}
+        lockedForOwner={lockedForOwner}
+        preview={preview}
+      />
+
       <section className="rounded-2xl border border-gray-200 bg-white p-5">
         <div className="mb-4 flex items-center justify-between gap-3">
           <div>
-            <h3 className="font-extrabold">2. Store Confirmation</h3>
+            <h3 className="font-extrabold">3. Store Confirmation</h3>
             <p className="mt-1 text-xs text-gray-500">
               {mode === 'hq'
                 ? 'This is confirmed by the store before submission. HQ reviews it without changing it.'
@@ -618,7 +627,7 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
       </section>
 
       <section className="rounded-2xl border border-gray-200 bg-white p-5">
-        <h3 className="font-extrabold">3. Notes & {mode === 'hq' ? 'Approval' : 'Submission'}</h3>
+        <h3 className="font-extrabold">4. Notes & {mode === 'hq' ? 'Approval' : 'Submission'}</h3>
         <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
           <label className="text-xs font-bold text-gray-600">
             Store note
