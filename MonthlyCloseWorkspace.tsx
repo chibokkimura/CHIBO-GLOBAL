@@ -11,6 +11,8 @@ import {
 import { Sale, Store } from './types';
 import { supabase } from './supabaseClient';
 import MonthlyProfitabilityInputPanel from './MonthlyProfitabilityInputPanel';
+import MonthlyProfitabilitySummaryPanel from './MonthlyProfitabilitySummaryPanel';
+import StoreProfitabilitySettingsPanel from './StoreProfitabilitySettingsPanel';
 
 type CloseStatus = 'draft' | 'submitted' | 'approved' | 'reopened';
 type TaskStatus = 'pending' | 'completed' | 'not_applicable';
@@ -158,6 +160,7 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
   const [notice, setNotice] = useState<string | null>(null);
   const [ownerNote, setOwnerNote] = useState('');
   const [reviewNote, setReviewNote] = useState('');
+  const [profitabilityRefreshKey, setProfitabilityRefreshKey] = useState(0);
 
   useEffect(() => {
     setMonthKey(initialMonthKey);
@@ -430,7 +433,10 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
           <button
             type="button"
             aria-label="Reload monthly operations"
-            onClick={() => void loadData()}
+            onClick={() => {
+              void loadData();
+              setProfitabilityRefreshKey((current) => current + 1);
+            }}
             className="rounded-xl border border-gray-200 bg-white p-2.5 text-gray-600 hover:bg-gray-50"
             title="Reload"
           >
@@ -572,18 +578,36 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
         </div>
       </section>
 
+      {mode === 'hq' ? (
+        <StoreProfitabilitySettingsPanel
+          store={store}
+          preview={preview}
+          onSaved={() => setProfitabilityRefreshKey((current) => current + 1)}
+        />
+      ) : null}
+
       <MonthlyProfitabilityInputPanel
         store={store}
         monthStart={monthStart}
         mode={mode}
         lockedForOwner={lockedForOwner}
         preview={preview}
+        sectionNumber={mode === 'hq' ? 3 : 2}
+        onSaved={() => setProfitabilityRefreshKey((current) => current + 1)}
+      />
+
+      <MonthlyProfitabilitySummaryPanel
+        store={store}
+        monthStart={monthStart}
+        preview={preview}
+        refreshKey={profitabilityRefreshKey}
+        sectionNumber={mode === 'hq' ? 4 : 3}
       />
 
       <section className="rounded-2xl border border-gray-200 bg-white p-5">
         <div className="mb-4 flex items-center justify-between gap-3">
           <div>
-            <h3 className="font-extrabold">3. Store Confirmation</h3>
+            <h3 className="font-extrabold">{mode === 'hq' ? 5 : 4}. Store Confirmation</h3>
             <p className="mt-1 text-xs text-gray-500">
               {mode === 'hq'
                 ? 'This is confirmed by the store before submission. HQ reviews it without changing it.'
@@ -627,7 +651,7 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
       </section>
 
       <section className="rounded-2xl border border-gray-200 bg-white p-5">
-        <h3 className="font-extrabold">4. Notes & {mode === 'hq' ? 'Approval' : 'Submission'}</h3>
+        <h3 className="font-extrabold">{mode === 'hq' ? 6 : 5}. Notes & {mode === 'hq' ? 'Approval' : 'Submission'}</h3>
         <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
           <label className="text-xs font-bold text-gray-600">
             Store note

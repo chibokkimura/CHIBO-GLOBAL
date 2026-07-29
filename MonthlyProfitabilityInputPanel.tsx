@@ -28,6 +28,8 @@ type Props = {
   mode: 'owner' | 'hq';
   lockedForOwner: boolean;
   preview: boolean;
+  sectionNumber: number;
+  onSaved?: () => void;
 };
 
 const EMPTY_INPUT: MonthlyProfitabilityInput = {
@@ -40,10 +42,9 @@ const EMPTY_INPUT: MonthlyProfitabilityInput = {
   notes: '',
 };
 
-const REQUIRED_KEYS = [
+const BASE_REQUIRED_KEYS = [
   'laborCost',
   'laborHours',
-  'salesLinkedFees',
   'utilitiesCost',
   'otherOperatingCost',
 ] as const;
@@ -69,22 +70,32 @@ function nullableNumber(value: string): number | null {
   return Number(value);
 }
 
+function numberOrNull(value: unknown): number | null {
+  return value === null || value === undefined ? null : Number(value);
+}
+
 const MonthlyProfitabilityInputPanel: React.FC<Props> = ({
   store,
   monthStart,
   mode,
   lockedForOwner,
   preview,
+  sectionNumber,
+  onSaved,
 }) => {
   const [draft, setDraft] = useState<MonthlyProfitabilityInput>(EMPTY_INPUT);
+  const [defaultCommissionRate, setDefaultCommissionRate] = useState<number | null>(null);
+  const [settingsConfigured, setSettingsConfigured] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
   const editable = mode === 'owner' && !lockedForOwner;
-  const completedRequiredCount = REQUIRED_KEYS.filter((key) => draft[key].trim() !== '').length;
-  const requiredComplete = completedRequiredCount === REQUIRED_KEYS.length;
+  const commissionCovered = draft.salesLinkedFees.trim() !== '' || settingsConfigured;
+  const completedRequiredCount = BASE_REQUIRED_KEYS.filter((key) => draft[key].trim() !== '').length
+    + (commissionCovered ? 1 : 0);
+  const requiredComplete = completedRequiredCount === BASE_REQUIRED_KEYS.length + 1;
 
   const loadInput = useCallback(async () => {
     setLoading(true);
@@ -93,20 +104,32 @@ const MonthlyProfitabilityInputPanel: React.FC<Props> = ({
 
     if (preview) {
       setDraft(EMPTY_INPUT);
+      setDefaultCommissionRate(5);
+      setSettingsConfigured(true);
       setLoading(false);
       return;
     }
 
     try {
-      const { data, error: loadError } = await supabase
-        .from('monthly_profitability_inputs')
-        .select('guest_count,labor_cost,labor_hours,sales_linked_fees,utilities_cost,other_operating_cost,notes')
-        .eq('store_id', store.id)
-        .eq('month_start', monthStart)
-        .maybeSingle();
+      const [inputResult, settingsResult] = await Promise.all([
+        supabase
+          .from('monthly_profitability_inputs')
+          .select('guest_count,labor_cost,labor_hours,sales_linked_fees,utilities_cost,other_operating_cost,notes')
+          .eq('store_id', store.id)
+          .eq('month_start', monthStart)
+          .maybeSingle(),
+        supabase
+          .from('store_profitability_settings')
+          .select('default_sales_commission_rate')
+          .eq('store_id', store.id)
+          .maybeSingle(),
+      ]);
 
+      const loadError = inputResult.error || settingsResult.error;
       if (loadError) throw loadError;
-      setDraft(data ? mapInput(data) : EMPTY_INPUT);
+      setDraft(inputResult.data ? mapInput(inputResult.data) : EMPTY_INPUT);
+      setSettingsConfigured(Boolean(settingsResult.data));
+      setDefaultCommissionRate(numberOrNull(settingsResult.data?.default_sales_commission_rate));
     } catch (loadError: any) {
       console.error('Failed to load monthly profitability inputs', loadError);
       const message = String(loadError?.message ?? '');
@@ -159,11 +182,13 @@ const MonthlyProfitabilityInputPanel: React.FC<Props> = ({
     setSaving(true);
     setError(null);
     setNotice(null);
-    const nextComplete = REQUIRED_KEYS.every((key) => draft[key].trim() !== '');
+    const nextComplete = BASE_REQUIRED_KEYS.every((key) => draft[key].trim() !== '')
+      && (draft.salesLinkedFees.trim() !== '' || settingsConfigured);
 
     try {
       if (preview) {
         setNotice(nextComplete ? 'Preview monthly totals saved as complete.' : 'Preview draft saved.');
+        onSaved?.();
         return;
       }
 
@@ -187,6 +212,7 @@ const MonthlyProfitabilityInputPanel: React.FC<Props> = ({
       if (saveError) throw saveError;
       setDraft(mapInput(data));
       setNotice(nextComplete ? 'Monthly operating totals saved.' : 'Draft saved. Complete the remaining totals later.');
+      onSaved?.();
     } catch (saveError: any) {
       setError(saveError?.message ?? 'Failed to save monthly operating totals.');
     } finally {
@@ -203,7 +229,9 @@ const MonthlyProfitabilityInputPanel: React.FC<Props> = ({
     {
       key: 'salesLinkedFees' as const,
       label: 'Sales-linked fees',
-      hint: 'Mall, delivery, card and channel fees',
+      hint: settingsConfigured
+        ? `Optional: blank uses the HQ default rate (${defaultCommissionRate ?? 0}%)`
+        : 'Mall, delivery, card and channel fees',
     },
     {
       key: 'utilitiesCost' as const,
@@ -222,13 +250,13 @@ const MonthlyProfitabilityInputPanel: React.FC<Props> = ({
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <div className="flex items-center gap-2">
-            <h3 className="font-extrabold">2. Monthly Profit Inputs</h3>
+            <h3 className="font-extrabold">{sectionNumber}. Monthly Profit Inputs</h3>
             <span className={`rounded-full px-2.5 py-1 text-[11px] font-extrabold ${
               requiredComplete
                 ? 'bg-emerald-100 text-emerald-700'
                 : 'bg-gray-100 text-gray-600'
             }`}>
-              {completedRequiredCount}/{REQUIRED_KEYS.length} required
+              {completedRequiredCount}/{BASE_REQUIRED_KEYS.length + 1} required
             </span>
           </div>
           <p className="mt-1 text-xs text-gray-500">
@@ -343,7 +371,7 @@ const MonthlyProfitabilityInputPanel: React.FC<Props> = ({
                 ? 'HQ reviews the totals entered by the store.'
                 : requiredComplete
                   ? 'All required monthly totals are entered.'
-                  : `${REQUIRED_KEYS.length - completedRequiredCount} required total(s) still blank. A partial draft can still be saved.`}
+                  : `${BASE_REQUIRED_KEYS.length + 1 - completedRequiredCount} required total(s) still blank. A partial draft can still be saved.`}
             </div>
             {mode === 'owner' ? (
               <button
