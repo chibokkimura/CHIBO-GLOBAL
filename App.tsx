@@ -3840,8 +3840,10 @@ const FinancialsTable: React.FC<{
     <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
         <div className="p-6 border-b flex justify-between items-center bg-gray-50">
             <div>
-              <h3 className="font-bold text-lg text-gray-800">Financial Performance</h3>
-              <div className="text-xs text-gray-500 font-medium">Basis month: {currentMonthLabel} • local currency and JPY estimate shown together</div>
+              <h3 className="font-bold text-lg text-gray-800">Sales Reporting Progress</h3>
+              <div className="text-xs text-gray-500 font-medium">
+                Daily reported sales and estimated royalty only · {currentMonthLabel} · local currency and JPY
+              </div>
             </div>
             <button
               type="button"
