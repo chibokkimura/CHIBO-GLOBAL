@@ -253,7 +253,7 @@ const MonthlyProfitabilityInputPanel: React.FC<Props> = ({
         <div>
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="font-extrabold">
-              {mode === 'owner' ? 'Step 1. Enter Monthly Totals' : `${sectionNumber}. Monthly Profit Inputs`}
+              {mode === 'owner' ? 'Step 1B. Enter Monthly Totals' : `${sectionNumber}. Monthly Profit Inputs`}
             </h3>
             {mode === 'owner' ? (
               <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-extrabold text-slate-600">

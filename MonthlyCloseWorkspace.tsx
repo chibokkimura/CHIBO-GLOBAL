@@ -190,6 +190,8 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
   const [notice, setNotice] = useState<string | null>(null);
   const [ownerNote, setOwnerNote] = useState('');
   const [reviewNote, setReviewNote] = useState('');
+  const [showAllMissingDates, setShowAllMissingDates] = useState(false);
+  const [showAllMissingReceipts, setShowAllMissingReceipts] = useState(false);
   const [profitabilityRefreshKey, setProfitabilityRefreshKey] = useState(0);
   const [profitabilityProgress, setProfitabilityProgress] = useState<ProfitabilityProgress>(
     EMPTY_PROFITABILITY_PROGRESS,
@@ -198,6 +200,11 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
   useEffect(() => {
     setMonthKey(initialMonthKey);
   }, [initialMonthKey, store.id]);
+
+  useEffect(() => {
+    setShowAllMissingDates(false);
+    setShowAllMissingReceipts(false);
+  }, [monthKey, store.id]);
 
   const { start: monthStart, end: monthEnd } = useMemo(() => monthBounds(monthKey), [monthKey]);
   const monthSales = useMemo(
@@ -240,6 +247,15 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
   const warnings = [
     ...(missingDates.length > 0 ? [`${missingDates.length} daily sales report(s) are missing`] : []),
     ...(missingReceiptSales.length > 0 ? [`${missingReceiptSales.length} open-day report(s) have no receipt image`] : []),
+    ...(!profitabilityProgress.operatingInputsComplete ? ['Monthly labor and operating totals are incomplete'] : []),
+    ...(!profitabilityProgress.inventoryComplete ? ['Month-end inventory close is incomplete'] : []),
+    ...(!profitabilityProgress.settingsComplete ? ['HQ store profit settings are incomplete'] : []),
+    ...(profitabilityProgress.settingsComplete
+      && profitabilityProgress.operatingInputsComplete
+      && profitabilityProgress.inventoryComplete
+      && !profitabilityProgress.profitabilityReady
+      ? ['Monthly profitability result is not ready']
+      : []),
     ...(pendingTasks.length > 0 ? ['Monthly sales total has not been confirmed'] : []),
   ];
   const canSubmit = warnings.length === 0;
@@ -456,7 +472,10 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
     && receiptsComplete
     && profitabilityProgress.operatingInputsComplete;
   const stepTwoComplete = profitabilityProgress.inventoryComplete;
-  const stepThreeComplete = profitabilityProgress.profitabilityReady && confirmationComplete;
+  const submittedToHq = period?.status === 'submitted' || period?.status === 'approved';
+  const stepThreeComplete = profitabilityProgress.profitabilityReady
+    && confirmationComplete
+    && submittedToHq;
 
   const refreshProfitability = useCallback((monthlyInputsComplete?: boolean) => {
     if (preview) {
@@ -535,14 +554,14 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
             <div className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-400">Month-end task</div>
             <h3 className="mt-1 text-xl font-black">Finish the month in 3 steps</h3>
             <p className="mt-1 text-xs text-slate-300">
-              Enter totals, close inventory, then review the result and submit.
+              Complete reports and totals, close inventory, then review the result and submit.
             </p>
           </div>
           <div className="grid gap-0 lg:grid-cols-3">
             {[
               {
                 number: 1,
-                title: 'Enter monthly totals',
+                title: 'Complete reports & totals',
                 detail: !reportingComplete
                   ? `${missingDates.length} daily report(s) still missing`
                   : !receiptsComplete
@@ -574,9 +593,13 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
                 number: 3,
                 title: 'Review and submit',
                 detail: stepThreeComplete
-                  ? 'Result checked and store confirmation complete'
+                  ? period?.status === 'approved'
+                    ? 'Approved by HQ'
+                    : 'Submitted to HQ'
                   : profitabilityProgress.profitabilityReady
-                    ? 'Check the calculated result, confirm the total and submit'
+                    ? confirmationComplete
+                      ? 'All checks are ready — submit the month to HQ'
+                      : 'Check the calculated result and complete the final confirmation'
                     : !profitabilityProgress.settingsComplete
                       ? 'Waiting for HQ store settings before final profit'
                       : 'Available after totals and inventory are complete',
@@ -689,7 +712,7 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
       <section className="rounded-2xl border border-gray-200 bg-white p-5">
         <div className="mb-4">
           <h3 className="font-extrabold">
-            {mode === 'hq' ? '1. Sales Reporting Completeness' : 'Daily reports included in Step 1'}
+            {mode === 'hq' ? '1. Sales Reporting Completeness' : 'Step 1A. Complete Daily Reports'}
           </h3>
           <p className="mt-1 text-xs text-gray-500">
             These checks come directly from the daily reports already stored in the system.
@@ -710,17 +733,30 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
                     : `${missingDates.length} date(s) still need a sales or closed-day report.`}
                 </div>
                 {!reportingComplete && mode === 'owner' && onOpenSalesReport && (
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {missingDates.slice(0, 12).map((date) => (
+                  <div className="mt-3">
+                    <div className="flex flex-wrap gap-2">
+                      {(showAllMissingDates ? missingDates : missingDates.slice(0, 12)).map((date) => (
+                        <button
+                          key={date}
+                          type="button"
+                          onClick={() => onOpenSalesReport(date)}
+                          className="rounded-lg border border-red-200 bg-white px-2.5 py-1.5 text-xs font-bold text-red-700 hover:bg-red-100"
+                        >
+                          Enter {date}
+                        </button>
+                      ))}
+                    </div>
+                    {missingDates.length > 12 ? (
                       <button
-                        key={date}
                         type="button"
-                        onClick={() => onOpenSalesReport(date)}
-                        className="rounded-lg border border-red-200 bg-white px-2.5 py-1.5 text-xs font-bold text-red-700 hover:bg-red-100"
+                        onClick={() => setShowAllMissingDates((current) => !current)}
+                        className="mt-3 text-xs font-extrabold text-red-700 underline underline-offset-4"
                       >
-                        Enter {date}
+                        {showAllMissingDates
+                          ? 'Show fewer dates'
+                          : `Show remaining ${missingDates.length - 12} dates`}
                       </button>
-                    ))}
+                    ) : null}
                   </div>
                 )}
               </div>
@@ -740,17 +776,30 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
                     : `${missingReceiptSales.length} open-day report(s) need a receipt image.`}
                 </div>
                 {!receiptsComplete && mode === 'owner' && onOpenSalesReport && (
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {missingReceiptSales.slice(0, 12).map((sale) => (
+                  <div className="mt-3">
+                    <div className="flex flex-wrap gap-2">
+                      {(showAllMissingReceipts ? missingReceiptSales : missingReceiptSales.slice(0, 12)).map((sale) => (
+                        <button
+                          key={sale.id}
+                          type="button"
+                          onClick={() => onOpenSalesReport(sale.date)}
+                          className="rounded-lg border border-red-200 bg-white px-2.5 py-1.5 text-xs font-bold text-red-700 hover:bg-red-100"
+                        >
+                          Add receipt {sale.date}
+                        </button>
+                      ))}
+                    </div>
+                    {missingReceiptSales.length > 12 ? (
                       <button
-                        key={sale.id}
                         type="button"
-                        onClick={() => onOpenSalesReport(sale.date)}
-                        className="rounded-lg border border-red-200 bg-white px-2.5 py-1.5 text-xs font-bold text-red-700 hover:bg-red-100"
+                        onClick={() => setShowAllMissingReceipts((current) => !current)}
+                        className="mt-3 text-xs font-extrabold text-red-700 underline underline-offset-4"
                       >
-                        Add receipt {sale.date}
+                        {showAllMissingReceipts
+                          ? 'Show fewer receipts'
+                          : `Show remaining ${missingReceiptSales.length - 12} receipts`}
                       </button>
-                    ))}
+                    ) : null}
                   </div>
                 )}
               </div>

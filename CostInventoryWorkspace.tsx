@@ -373,12 +373,13 @@ const CostInventoryWorkspace: React.FC<Props> = ({
   const closingInventoryValue = costBreakdown.reduce((sum, row) => sum + row.closingValue, 0);
   const actualCost = openingInventoryValue + purchaseTotal - closingInventoryValue;
   const actualCostPercentage = netSales > 0 ? (actualCost / netSales) * 100 : null;
-  const targetVariance = actualCostPercentage !== null && costControl.targetCostPercentage !== null
-    ? actualCostPercentage - costControl.targetCostPercentage
-    : null;
   const inventoryComplete = activeProfiles.length > 0
     && completedCounts === activeProfiles.length
     && costBreakdown.every((row) => !row.invalid);
+  const finalActualCostPercentage = inventoryComplete ? actualCostPercentage : null;
+  const targetVariance = finalActualCostPercentage !== null && costControl.targetCostPercentage !== null
+    ? finalActualCostPercentage - costControl.targetCostPercentage
+    : null;
   const previousRateDelta = inventoryComplete
     && previousCostSummary?.inventoryComplete
     && actualCostPercentage !== null
@@ -402,7 +403,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
     setMenus,
     ingredientCosts: ingredientCostInputs,
   }), [ingredientCostInputs, menus, monthKey, sales, setMenus, store.id]);
-  const theoreticalCostPercentage = netSales > 0
+  const theoreticalCostPercentage = theoreticalAnalysis.analysisReady && netSales > 0
     ? (theoreticalAnalysis.theoreticalCost / netSales) * 100
     : null;
   const actualVsTheoreticalGap = actualCost - theoreticalAnalysis.theoreticalCost;
@@ -425,7 +426,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
     {
       id: 'actual',
       label: 'Actual',
-      value: actualCostPercentage,
+      value: finalActualCostPercentage,
     },
     {
       id: 'target',
@@ -1053,22 +1054,26 @@ const CostInventoryWorkspace: React.FC<Props> = ({
         </div>
       </div>
 
-      <nav className="flex overflow-x-auto rounded-2xl border border-gray-200 bg-white p-1.5" aria-label="Cost management sections">
+      <nav className="grid scroll-mt-24 grid-cols-3 gap-1 rounded-2xl border border-gray-200 bg-white p-1.5 md:flex" aria-label="Cost management sections">
         {([
-          ['summary', 'Overview'],
-          ['purchases', 'Ingredients & Purchases'],
-          ['inventory', `Inventory Close ${completedCounts}/${activeProfiles.length}`],
-        ] as Array<[WorkspaceSection, string]>).map(([key, label]) => (
+          ['summary', 'Overview', 'Overview'],
+          ['purchases', 'Ingredients & Purchases', 'Purchases'],
+          ['inventory', `Inventory Close ${completedCounts}/${activeProfiles.length}`, `Close ${completedCounts}/${activeProfiles.length}`],
+        ] as Array<[WorkspaceSection, string, string]>).map(([key, label, mobileLabel]) => (
           <button
             key={key}
             type="button"
             aria-pressed={activeSection === key}
-            onClick={() => setActiveSection(key)}
-            className={`whitespace-nowrap rounded-xl px-5 py-2.5 text-sm font-extrabold transition ${
+            onClick={(event) => {
+              setActiveSection(key);
+              event.currentTarget.closest('nav')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }}
+            className={`min-w-0 rounded-xl px-2 py-2.5 text-[11px] font-extrabold transition md:whitespace-nowrap md:px-5 md:text-sm ${
               activeSection === key ? 'bg-black text-white' : 'text-gray-500 hover:bg-gray-50 hover:text-black'
             }`}
           >
-            {label}
+            <span className="md:hidden">{mobileLabel}</span>
+            <span className="hidden md:inline">{label}</span>
           </button>
         ))}
       </nav>
@@ -1124,10 +1129,16 @@ const CostInventoryWorkspace: React.FC<Props> = ({
               <div className="rounded-2xl bg-gray-950 p-5 text-white">
                 <div className="text-xs font-bold text-gray-400">ACTUAL COST RATE</div>
                 <div className="mt-2 text-3xl font-black">
-                  {actualCostPercentage === null ? '—' : `${formatAmount(actualCostPercentage, 1)}%`}
+                  {inventoryComplete
+                    ? actualCostPercentage === null
+                      ? '—'
+                      : `${formatAmount(actualCostPercentage, 1)}%`
+                    : 'Pending'}
                 </div>
                 <div className="mt-2 text-sm font-bold text-gray-300">
-                  Actual cost {store.currency} {formatAmount(actualCost)}
+                  {inventoryComplete
+                    ? `Actual cost ${store.currency} ${formatAmount(actualCost)}`
+                    : `Provisional ${formatAmount(actualCostPercentage ?? 0, 1)}% · finish ${activeProfiles.length - completedCounts} count(s)`}
                 </div>
               </div>
               <div className="rounded-2xl border border-gray-200 p-5">
@@ -1140,10 +1151,12 @@ const CostInventoryWorkspace: React.FC<Props> = ({
               <div className="rounded-2xl border border-gray-200 p-5">
                 <div className="text-xs font-bold text-gray-500">RECIPE COST RATE</div>
                 <div className="mt-2 text-2xl font-extrabold">
-                  {theoreticalCostPercentage === null ? '—' : `${formatAmount(theoreticalCostPercentage, 1)}%`}
+                  {theoreticalCostPercentage === null ? 'Pending' : `${formatAmount(theoreticalCostPercentage, 1)}%`}
                 </div>
                 <div className="mt-2 text-xs text-gray-500">
-                  Recipe cost {store.currency} {formatAmount(theoreticalAnalysis.theoreticalCost)}
+                  {theoreticalCostPercentage === null
+                    ? 'Complete recipes and ingredient costs'
+                    : `Recipe cost ${store.currency} ${formatAmount(theoreticalAnalysis.theoreticalCost)}`}
                 </div>
               </div>
               <div className={`rounded-2xl border p-5 ${
@@ -1252,19 +1265,19 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                 <h3 className="text-lg font-extrabold">Cost Control Position</h3>
               </div>
               <p className="mt-1 text-sm text-gray-500">
-                One actual-cost bar with target and recipe reference markers.
+                Final actual cost appears only after every inventory count is complete.
               </p>
 
               <div
                 className="mt-7"
                 role="img"
-                aria-label={`Actual cost rate ${actualCostPercentage === null ? 'not available' : `${formatAmount(actualCostPercentage, 1)} percent`}; target ${costControl.targetCostPercentage === null ? 'not set' : `${formatAmount(costControl.targetCostPercentage, 1)} percent`}; recipe ${theoreticalCostPercentage === null ? 'not available' : `${formatAmount(theoreticalCostPercentage, 1)} percent`}`}
+                aria-label={`Actual cost rate ${finalActualCostPercentage === null ? 'not available' : `${formatAmount(finalActualCostPercentage, 1)} percent`}; target ${costControl.targetCostPercentage === null ? 'not set' : `${formatAmount(costControl.targetCostPercentage, 1)} percent`}; recipe ${theoreticalCostPercentage === null ? 'not available' : `${formatAmount(theoreticalCostPercentage, 1)} percent`}`}
               >
                 <div className="relative h-3 rounded-full bg-gray-100">
-                  {actualCostPercentage !== null && (
+                  {finalActualCostPercentage !== null && (
                     <div
                       className="h-full rounded-full bg-gray-950"
-                      style={{ width: `${Math.min(100, Math.max(1, (actualCostPercentage / rateChartMaximum) * 100))}%` }}
+                      style={{ width: `${Math.min(100, Math.max(1, (finalActualCostPercentage / rateChartMaximum) * 100))}%` }}
                     />
                   )}
                   {costControl.targetCostPercentage !== null && (
@@ -1310,7 +1323,9 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                 <div className="rounded-xl border border-gray-200 p-3">
                   <div className="text-[10px] font-extrabold text-gray-400">TO REACH TARGET</div>
                   <div className={`mt-1 text-sm font-black ${targetReductionAmount > 0 ? 'text-red-600' : 'text-gray-900'}`}>
-                    {targetVariance === null
+                    {!inventoryComplete
+                      ? 'Finish inventory first'
+                      : targetVariance === null
                       ? 'Set target'
                       : targetReductionAmount > 0
                         ? `Reduce ${store.currency} ${formatAmount(targetReductionAmount)}`
@@ -1964,7 +1979,184 @@ const CostInventoryWorkspace: React.FC<Props> = ({
             Only rows with invalid quantities are highlighted in red.
           </div>
 
-          <div className="mt-4 overflow-x-auto">
+          <div className="mt-4 space-y-3 md:hidden">
+            {activeProfiles.map((profile) => {
+              const ingredient = ingredientById.get(profile.ingredientId);
+              const row = inventoryRows[profile.ingredientId] ?? emptyInventoryRow(store.id, profile.ingredientId, monthStart);
+              const purchasedQuantity = purchasedQuantityByIngredient.get(profile.ingredientId) ?? 0;
+              const actualUsage = row.openingQuantity + purchasedQuantity + row.adjustmentQuantity - row.closingQuantity;
+              const valuation = costBreakdownByIngredient.get(profile.ingredientId);
+              const invalidUsage = valuation?.invalid ?? (actualUsage < 0 || row.wasteQuantity > Math.max(0, actualUsage));
+              const expanded = expandedInventoryId === profile.ingredientId;
+              const mobileInputClassName = 'mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-right text-sm font-bold disabled:bg-gray-50';
+              return (
+                <div
+                  key={profile.ingredientId}
+                  className={`rounded-2xl border p-4 ${invalidUsage ? 'border-red-200 bg-red-50' : 'border-gray-200 bg-white'}`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="font-extrabold">{ingredient?.name ?? profile.ingredientId}</div>
+                      <div className="mt-0.5 text-[11px] text-gray-400">{ingredient?.unit ?? 'unit'}</div>
+                    </div>
+                    <span className={`rounded-full px-2.5 py-1 text-[10px] font-extrabold ${
+                      row.countComplete ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-800'
+                    }`}>
+                      {row.countComplete ? 'Complete' : 'Open'}
+                    </span>
+                  </div>
+
+                  {invalidUsage ? (
+                    <div className="mt-3 rounded-lg bg-red-100 px-3 py-2 text-xs font-bold text-red-700">
+                      Check the quantities before saving.
+                    </div>
+                  ) : null}
+
+                  <div className="mt-4 grid grid-cols-2 gap-3">
+                    <label className="text-[11px] font-bold text-gray-600">
+                      Opening
+                      <input
+                        aria-label={`${ingredient?.name ?? profile.ingredientId} opening inventory`}
+                        type="number"
+                        min="0"
+                        step="0.001"
+                        value={row.openingQuantity}
+                        disabled={!editable}
+                        onChange={(event) => updateInventoryDraft(profile.ingredientId, { openingQuantity: Number(event.target.value), countComplete: false })}
+                        className={mobileInputClassName}
+                      />
+                    </label>
+                    <div className="text-[11px] font-bold text-gray-600">
+                      Purchased
+                      <div className="mt-1 rounded-lg bg-gray-50 px-3 py-2 text-right text-sm font-bold text-gray-900">
+                        {formatAmount(purchasedQuantity, 3)}
+                      </div>
+                    </div>
+                    <label className="text-[11px] font-bold text-gray-600">
+                      Waste
+                      <input
+                        aria-label={`${ingredient?.name ?? profile.ingredientId} waste quantity`}
+                        type="number"
+                        min="0"
+                        step="0.001"
+                        value={row.wasteQuantity}
+                        disabled={!editable}
+                        onChange={(event) => updateInventoryDraft(profile.ingredientId, { wasteQuantity: Number(event.target.value), countComplete: false })}
+                        className={mobileInputClassName}
+                      />
+                    </label>
+                    <label className="text-[11px] font-bold text-gray-600">
+                      Adjustment (+/-)
+                      <input
+                        aria-label={`${ingredient?.name ?? profile.ingredientId} inventory adjustment`}
+                        type="number"
+                        step="0.001"
+                        value={row.adjustmentQuantity}
+                        disabled={!editable}
+                        onChange={(event) => updateInventoryDraft(profile.ingredientId, { adjustmentQuantity: Number(event.target.value), countComplete: false })}
+                        className={mobileInputClassName}
+                      />
+                    </label>
+                    <label className="text-[11px] font-bold text-gray-600">
+                      Closing
+                      <input
+                        aria-label={`${ingredient?.name ?? profile.ingredientId} closing inventory`}
+                        type="number"
+                        min="0"
+                        step="0.001"
+                        value={row.closingQuantity}
+                        disabled={!editable}
+                        onChange={(event) => updateInventoryDraft(profile.ingredientId, { closingQuantity: Number(event.target.value), countComplete: false })}
+                        className={mobileInputClassName}
+                      />
+                    </label>
+                    <div className="text-[11px] font-bold text-gray-600">
+                      Actual usage
+                      <div className={`mt-1 rounded-lg px-3 py-2 text-right text-sm font-extrabold ${
+                        invalidUsage ? 'bg-red-100 text-red-700' : 'bg-gray-950 text-white'
+                      }`}>
+                        {formatAmount(actualUsage, 3)} {ingredient?.unit ?? ''}
+                      </div>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    aria-expanded={expanded}
+                    onClick={() => setExpandedInventoryId(expanded ? null : profile.ingredientId)}
+                    className="mt-4 text-xs font-bold text-gray-500 underline underline-offset-4"
+                  >
+                    {expanded ? 'Hide valuation details' : 'Show valuation details'}
+                  </button>
+
+                  {expanded ? (
+                    <div className="mt-3 grid grid-cols-2 gap-3 rounded-xl bg-gray-50 p-3">
+                      <label className="col-span-2 text-[11px] font-bold text-gray-600">
+                        Opening unit cost ({store.currency}/{ingredient?.unit ?? 'unit'})
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.000001"
+                          value={row.openingUnitCost}
+                          disabled={!editable}
+                          onChange={(event) => updateInventoryDraft(profile.ingredientId, { openingUnitCost: Number(event.target.value), countComplete: false })}
+                          className={mobileInputClassName}
+                        />
+                      </label>
+                      <div className="text-[11px] font-bold text-gray-600">
+                        Closing unit cost
+                        <div className="mt-1 rounded-lg bg-white px-3 py-2 text-right text-sm">{formatAmount(valuation?.closingUnitCost ?? 0, 6)}</div>
+                      </div>
+                      <div className="text-[11px] font-bold text-gray-600">
+                        Closing value
+                        <div className="mt-1 rounded-lg bg-white px-3 py-2 text-right text-sm">{store.currency} {formatAmount(valuation?.closingValue ?? 0)}</div>
+                      </div>
+                      <label className="col-span-2 text-[11px] font-bold text-gray-600">
+                        Notes
+                        <input
+                          value={row.notes}
+                          disabled={!editable}
+                          onChange={(event) => updateInventoryDraft(profile.ingredientId, { notes: event.target.value })}
+                          className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm disabled:bg-gray-100"
+                          placeholder="Reason for count difference, etc."
+                        />
+                      </label>
+                    </div>
+                  ) : null}
+
+                  <div className="mt-4 flex items-center justify-between gap-3 border-t border-gray-100 pt-4">
+                    <label className={`inline-flex items-center gap-2 text-xs font-bold ${editable ? 'cursor-pointer' : ''}`}>
+                      <input
+                        type="checkbox"
+                        checked={row.countComplete}
+                        disabled={!editable || invalidUsage}
+                        onChange={(event) => updateInventoryDraft(profile.ingredientId, { countComplete: event.target.checked })}
+                        className="h-5 w-5 rounded border-gray-300"
+                      />
+                      Count complete
+                    </label>
+                    {editable ? (
+                      <button
+                        type="button"
+                        disabled={savingKey !== null || invalidUsage}
+                        onClick={() => void saveInventoryRow(profile.ingredientId)}
+                        className="inline-flex items-center gap-1 rounded-lg bg-black px-4 py-2.5 text-xs font-bold text-white disabled:opacity-40"
+                      >
+                        <Save className="h-4 w-4" /> Save
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+              );
+            })}
+            {activeProfiles.length === 0 ? (
+              <div className="rounded-xl bg-gray-50 px-4 py-8 text-center text-sm text-gray-400">
+                Register ingredient purchase setup first.
+              </div>
+            ) : null}
+          </div>
+
+          <div className="mt-4 hidden overflow-x-auto md:block">
             <table className="w-full min-w-[880px] text-left text-sm">
               <thead className="border-b border-gray-200 text-[11px] text-gray-400">
                 <tr>

@@ -5,7 +5,7 @@ import {
 } from 'recharts';
 import {
   LayoutDashboard, ClipboardList, Users, UtensilsCrossed, LogOut,
-  AlertTriangle, Plus, Trash2, ChevronRight, FileText, Camera, Save, ArrowLeft, BarChart3, Package, MapPin, CheckCircle2, XCircle, TrendingUp, TrendingDown, Minus, DollarSign, Clock, Image as ImageIcon, Layers, UploadCloud, Settings, X, Search, Info, Grid, Briefcase, User as UserIcon, AlertCircle, Mail, ArrowRight, UserPlus, AlertOctagon, ArrowUpRight, ArrowDownRight, CalendarX
+  AlertTriangle, Plus, Trash2, ChevronRight, FileText, Camera, Save, ArrowLeft, BarChart3, Package, MapPin, CheckCircle2, XCircle, TrendingUp, TrendingDown, Minus, DollarSign, Clock, Image as ImageIcon, Layers, UploadCloud, Settings, X, Search, Info, Briefcase, User as UserIcon, AlertCircle, Mail, ArrowRight, UserPlus, AlertOctagon, ArrowUpRight, ArrowDownRight, CalendarX
 } from 'lucide-react';
 import * as XLSX from 'xlsx-js-style';
 import { isSupabaseConfigured, supabase } from './supabaseClient';
@@ -4098,7 +4098,7 @@ const SalesReporter: React.FC<{
   onCancel: () => void;
 }> = ({ store, sales, menus, setMenus, categories, initialDate, onSave, onCancel }) => {
   const [date, setDate] = useState(initialDate || formatDate(new Date()));
-  const [items, setItems] = useState<SaleItem[]>([]); // Store category name in menuId
+  const [items, setItems] = useState<SaleItem[]>([]); // Legacy/unassigned direct category quantity; new reports derive category totals from menu quantities.
   const [directMenuItems, setDirectMenuItems] = useState<SaleItem[]>([]);
   const [setMenuItems, setSetMenuItems] = useState<SaleSetItem[]>([]);
   const [menuFilter, setMenuFilter] = useState('');
@@ -4137,6 +4137,7 @@ const SalesReporter: React.FC<{
   useEffect(() => {
     if (existingSaleForDate) {
       const existingSetItems = (existingSaleForDate.setItems ?? []).map((item) => ({ ...item }));
+      const existingDirectMenuItems = (existingSaleForDate.menuItems ?? []).map((item) => ({ ...item }));
       const directCategoryTotals = new Map(
         (existingSaleForDate.items ?? []).map((item) => [item.menuId, Number(item.quantity || 0)]),
       );
@@ -4150,13 +4151,19 @@ const SalesReporter: React.FC<{
           directCategoryTotals.set(componentMenu.category, Math.max(0, storedTotal - includedUnits));
         });
       });
+      existingDirectMenuItems.forEach((item) => {
+        const menu = menuByIdForReport.get(item.menuId);
+        if (!menu) return;
+        const remaining = directCategoryTotals.get(menu.category) ?? 0;
+        directCategoryTotals.set(menu.category, Math.max(0, remaining - Number(item.quantity || 0)));
+      });
       setIsClosed(Boolean(existingSaleForDate.isClosed));
       setReceiptImage(null);
       setManualRevenue(existingSaleForDate.isClosed ? '' : formatDecimalForInput(existingSaleForDate.totalAmount || 0));
       setItems(Array.from(directCategoryTotals.entries())
         .filter(([, quantity]) => quantity > 0)
         .map(([menuId, quantity]) => ({ menuId, quantity })));
-      setDirectMenuItems((existingSaleForDate.menuItems ?? []).map((item) => ({ ...item })));
+      setDirectMenuItems(existingDirectMenuItems);
       setSetMenuItems(existingSetItems);
       setClosedReason(existingSaleForDate.closedReason ?? '');
       setComment(existingSaleForDate.comment ?? '');
@@ -4206,20 +4213,6 @@ const SalesReporter: React.FC<{
     });
   };
 
-  const handleQuantityChange = (categoryName: string, delta: number) => {
-    setItems(prev => {
-      const existing = prev.find(i => i.menuId === categoryName);
-      if (existing) {
-        const newQty = Math.max(0, existing.quantity + delta);
-        if (newQty === 0) return prev.filter(i => i.menuId !== categoryName);
-        return prev.map(i => i.menuId === categoryName ? { ...i, quantity: newQty } : i);
-      } else {
-        if (delta > 0) return [...prev, { menuId: categoryName, quantity: delta }];
-        return prev;
-      }
-    });
-  };
-
   const handleSetQuantityInput = (setMenuId: string, val: string) => {
     const clean = normalizeNumberInput(val);
     const newQty = clean === '' ? 0 : parseInt(clean, 10);
@@ -4240,6 +4233,19 @@ const SalesReporter: React.FC<{
     const clean = normalizeNumberInput(val);
     const newQty = clean === '' ? 0 : parseInt(clean, 10);
     if (newQty < 0) return;
+    const currentQty = directMenuItems.find((item) => item.menuId === menuId)?.quantity ?? 0;
+    const menu = menuByIdForReport.get(menuId);
+    const addedQty = Math.max(0, newQty - currentQty);
+    if (menu && addedQty > 0) {
+      setItems((current) => {
+        const unassigned = current.find((item) => item.menuId === menu.category);
+        if (!unassigned) return current;
+        const nextQuantity = Math.max(0, Number(unassigned.quantity || 0) - addedQty);
+        return nextQuantity > 0
+          ? current.map((item) => item.menuId === menu.category ? { ...item, quantity: nextQuantity } : item)
+          : current.filter((item) => item.menuId !== menu.category);
+      });
+    }
     setDirectMenuItems((current) => {
       const existing = current.find((item) => item.menuId === menuId);
       if (existing) {
@@ -4303,6 +4309,14 @@ const SalesReporter: React.FC<{
 
     const categoryTotals = new Map<string, number>();
     if (!isClosed) {
+      directMenuItems
+        .filter((item) => item.menuId && Number(item.quantity) > 0)
+        .forEach((item) => {
+          const menu = menuByIdForReport.get(item.menuId);
+          if (!menu) return;
+          categoryTotals.set(menu.category, (categoryTotals.get(menu.category) ?? 0) + Number(item.quantity));
+        });
+
       items
         .filter((item) => item.menuId && Number(item.quantity) > 0)
         .forEach((item) => {
@@ -4379,13 +4393,14 @@ const SalesReporter: React.FC<{
     [directMenuItems],
   );
   const categoryBreakdownRows = useMemo(() => categories.map((category) => {
-    const categoryTotal = items.find((item) => item.menuId === category)?.quantity ?? 0;
     const menuTotal = directMenuTotalsByCategory.get(category) ?? 0;
+    const unassignedTotal = items.find((item) => item.menuId === category)?.quantity ?? 0;
     return {
       category,
-      categoryTotal,
+      categoryTotal: menuTotal + unassignedTotal,
       menuTotal,
-      matches: categoryTotal === menuTotal,
+      unassignedTotal,
+      matches: unassignedTotal === 0,
     };
   }), [categories, directMenuTotalsByCategory, items]);
   const categoryBreakdownReady = categoryBreakdownRows.every((row) => row.matches);
@@ -4476,47 +4491,12 @@ const SalesReporter: React.FC<{
                 />
               </div>
 
-            <h3 className="font-bold text-lg mb-2">Single Item Quantity by Category</h3>
-            <div className="text-xs text-gray-500 mb-4">
-              Enter only direct item sales here. Set menu sales should be entered in the Set Menu section below.
-            </div>
-            <div className="space-y-3">
-                {categories.map(category => {
-                const qty = items.find(i => i.menuId === category)?.quantity || 0;
-                return (
-                    <div key={category} className="flex items-center justify-between p-3 border rounded-xl hover:border-black transition group">
-                        <div className="flex items-center gap-3">
-                            <div className="w-10 h-10 bg-gray-100 rounded-lg flex items-center justify-center text-gray-500">
-                                <Grid className="w-5 h-5" />
-                            </div>
-                            <div>
-                                <div className="font-bold">{category}</div>
-                            </div>
-                        </div>
-                        <div className="flex items-center gap-2">
-                            <button onClick={() => handleQuantityChange(category, -1)} className="w-8 h-8 flex items-center justify-center bg-gray-100 rounded-full hover:bg-gray-200 font-bold">-</button>
-                            <input
-                              type="text"
-                              inputMode="numeric"
-                              pattern="[0-9]*"
-                              className="w-16 p-2 text-center border border-gray-200 rounded-lg font-bold text-lg focus:ring-2 focus:ring-black outline-none"
-                              value={String(qty)}
-                              onChange={(e) => handleQuantityInput(category, e.target.value)}
-                            />
-
-                            <button onClick={() => handleQuantityChange(category, 1)} className="w-8 h-8 flex items-center justify-center bg-black text-white rounded-full hover:bg-gray-800 font-bold">+</button>
-                        </div>
-                    </div>
-                );
-                })}
-            </div>
-
-            <div className="mt-8 rounded-2xl border border-gray-200 bg-gray-50 p-4">
+            <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                 <div>
-                  <h3 className="font-bold text-lg">Direct Menu Breakdown</h3>
+                  <h3 className="font-bold text-lg">1. Single Item Quantities</h3>
                   <div className="mt-1 text-xs text-gray-500">
-                    Enter direct single-item sales by menu. Course and set components are calculated separately below.
+                    Enter each directly sold menu once. Category totals are calculated automatically.
                   </div>
                 </div>
                 <div className={`self-start rounded-full px-3 py-1 text-xs font-bold ${
@@ -4524,7 +4504,7 @@ const SalesReporter: React.FC<{
                     ? 'bg-emerald-100 text-emerald-700'
                     : 'bg-amber-100 text-amber-800'
                 }`}>
-                  {categoryBreakdownReady ? 'Matches category totals' : 'Breakdown incomplete'}
+                  {categoryBreakdownReady ? 'Category totals automatic' : 'Legacy quantities remain'}
                 </div>
               </div>
 
@@ -4540,14 +4520,36 @@ const SalesReporter: React.FC<{
                           : 'border-amber-200 bg-amber-50 text-amber-800'
                       }`}
                     >
-                      {row.category}: {row.menuTotal}/{row.categoryTotal}
+                      {row.category}: {row.categoryTotal}
                     </div>
                   ))}
               </div>
 
               {!categoryBreakdownReady && (
-                <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
-                  The sales report can still be saved, but recipe cost stays partial until each category total matches its menu breakdown.
+                <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3">
+                  <div className="text-xs font-bold text-amber-900">
+                    This older report contains category quantities that are not assigned to a menu.
+                  </div>
+                  <div className="mt-1 text-[11px] text-amber-800">
+                    Adding the matching menu quantity below automatically reduces the unassigned amount.
+                  </div>
+                  <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    {categoryBreakdownRows
+                      .filter((row) => row.unassignedTotal > 0)
+                      .map((row) => (
+                        <label key={row.category} className="flex items-center justify-between gap-3 rounded-lg bg-white px-3 py-2 text-xs font-bold text-gray-700">
+                          <span>{row.category} unassigned</span>
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            pattern="[0-9]*"
+                            value={String(row.unassignedTotal)}
+                            onChange={(event) => handleQuantityInput(row.category, event.target.value)}
+                            className="w-16 rounded-lg border border-amber-200 p-1.5 text-right font-bold outline-none focus:border-black"
+                          />
+                        </label>
+                      ))}
+                  </div>
                 </div>
               )}
 
@@ -4569,7 +4571,7 @@ const SalesReporter: React.FC<{
                   return (
                     <div key={menu.id} className="flex items-center justify-between gap-2 rounded-xl border border-gray-200 bg-white p-3">
                       <div className="min-w-0">
-                        <div className="truncate text-sm font-bold">{menu.name}</div>
+                        <div className="text-xs font-bold leading-4 sm:text-sm">{menu.name}</div>
                         <div className="truncate text-[10px] text-gray-400">{menu.category}</div>
                       </div>
                       <div className="flex shrink-0 items-center gap-1">
@@ -4610,7 +4612,7 @@ const SalesReporter: React.FC<{
 
             {setMenus.length > 0 && (
               <>
-                <h3 className="font-bold text-lg mt-8 mb-2">Set Menu Quantity</h3>
+                <h3 className="font-bold text-lg mt-8 mb-2">2. Course & Set Quantities</h3>
                 <div className="text-xs text-gray-500 mb-4">
                   Inventory usage is auto-calculated from each set menu's components.
                 </div>
@@ -6507,6 +6509,16 @@ const HQStoreDetail: React.FC<{
     useEffect(() => {
         let cancelled = false;
         const loadOwners = async () => {
+            if (isLocalPreview()) {
+                setOwnersError(null);
+                setOwners(store.ownerEmail ? [{
+                    email: store.ownerEmail,
+                    name: 'Preview Owner',
+                    userId: `PREVIEW_${store.id}`,
+                    storeId: store.id,
+                }] : []);
+                return;
+            }
             try {
                 setOwnersError(null);
                 const rows = await loadStoreAccounts(store.id);
@@ -6520,7 +6532,7 @@ const HQStoreDetail: React.FC<{
         };
         loadOwners();
         return () => { cancelled = true; };
-    }, [store.id]);
+    }, [store.id, store.ownerEmail]);
 
     const refreshOwners = async () => {
         try {
@@ -8674,6 +8686,9 @@ const HQDashboard: React.FC<{
                   </div>
               </div>
               <div className="p-4 sm:p-6">
+                  <div className="mb-2 text-right text-[11px] font-bold text-gray-400">
+                      Scroll sideways to view every country →
+                  </div>
                   <div className="flex gap-3 overflow-x-auto pb-2">
                       <button
                           type="button"
@@ -8946,6 +8961,7 @@ const StoreDashboard: React.FC<{
     const navReadyRef = useRef(false);
     const navRestoreRef = useRef(false);
     const popLockRef = useRef(false);
+    const mainContentRef = useRef<HTMLDivElement>(null);
     const ownerViewStorageKey = `${OWNER_VIEW_STORAGE_PREFIX}${store.id}`;
     const storeMenus = menus.filter(m => m.storeId === store.id);
     const storeSetMenus = setMenus.filter(sm => sm.storeId === store.id);
@@ -8986,6 +9002,13 @@ const StoreDashboard: React.FC<{
     useEffect(() => {
         setMenuSection('items');
     }, [store.id]);
+
+    useEffect(() => {
+        mainContentRef.current?.scrollTo({ top: 0, behavior: 'auto' });
+        if (typeof window !== 'undefined') {
+            window.scrollTo({ top: 0, behavior: 'auto' });
+        }
+    }, [store.id, view]);
     const missingDates = useMemo(() => getMissingDates(sales, store.id, 7), [sales, store.id]);
     const missingDatesAll = useMemo(() => getMissingDates(sales, store.id, 120), [sales, store.id]);
     const missingDateSet = useMemo(() => new Set(missingDatesAll), [missingDatesAll]);
@@ -9534,16 +9557,35 @@ const StoreDashboard: React.FC<{
                 </div>
 
                 {/* Mobile Nav */}
-                <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t p-2 flex justify-around z-50">
-                    <button aria-label="Store overview" onClick={() => setView('dashboard')} className={`p-3 rounded-xl ${view === 'dashboard' ? 'text-black bg-gray-100' : 'text-gray-400'}`}><LayoutDashboard className="w-5 h-5"/></button>
-                    <button aria-label="Today's sales report" onClick={() => { setReportDate(todayDate); setView('report'); }} className={`p-3 rounded-xl ${view === 'report' ? 'text-black bg-gray-100' : 'text-gray-400'}`}><FileText className="w-5 h-5"/></button>
-                    <button aria-label="Month close" onClick={() => setView('month')} className={`p-3 rounded-xl ${view === 'month' ? 'text-black bg-gray-100' : 'text-gray-400'}`}><ClipboardList className="w-5 h-5"/></button>
-                    <button aria-label="Cost and inventory" onClick={() => setView('menu')} className={`p-3 rounded-xl ${view === 'menu' ? 'text-black bg-gray-100' : 'text-gray-400'}`}><Package className="w-5 h-5"/></button>
-                    <button aria-label="Staff and labor" onClick={() => setView('staff')} className={`p-3 rounded-xl ${view === 'staff' ? 'text-black bg-gray-100' : 'text-gray-400'}`}><Users className="w-5 h-5"/></button>
+                <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t px-1.5 py-1.5 flex justify-around z-50">
+                    {[
+                        { key: 'dashboard', label: 'Home', aria: 'Store overview', icon: LayoutDashboard, action: () => setView('dashboard') },
+                        { key: 'report', label: 'Sales', aria: "Today's sales report", icon: FileText, action: () => { setReportDate(todayDate); setView('report'); } },
+                        { key: 'month', label: 'Month', aria: 'Month close', icon: ClipboardList, action: () => setView('month') },
+                        { key: 'menu', label: 'Cost', aria: 'Cost and inventory', icon: Package, action: () => setView('menu') },
+                        { key: 'staff', label: 'Staff', aria: 'Staff and labor', icon: Users, action: () => setView('staff') },
+                    ].map((item) => {
+                        const Icon = item.icon;
+                        const active = view === item.key;
+                        return (
+                            <button
+                                key={item.key}
+                                type="button"
+                                aria-label={item.aria}
+                                onClick={item.action}
+                                className={`flex min-w-0 flex-1 flex-col items-center gap-0.5 rounded-xl px-1 py-1.5 ${
+                                    active ? 'bg-gray-100 text-black' : 'text-gray-400'
+                                }`}
+                            >
+                                <Icon className="h-4 w-4" />
+                                <span className="text-[9px] font-bold leading-none">{item.label}</span>
+                            </button>
+                        );
+                    })}
                 </div>
 
                 {/* Main Content */}
-                <div className="flex-1 overflow-y-auto p-6 md:p-8 pb-24 md:pb-8">
+                <div ref={mainContentRef} className="flex-1 overflow-y-auto p-6 md:p-8 pb-24 md:pb-8">
                     {view === 'dashboard' && (
                         <div className="space-y-6">
                             <div>
@@ -9663,8 +9705,8 @@ const StoreDashboard: React.FC<{
                                         <CalendarX className="w-6 h-6"/>
                                     </div>
                                     <div>
-                                        <h3 className="font-bold text-red-800 text-lg">Action Required: Missing Sales Reports</h3>
-                                        <p className="text-sm text-red-600 mb-2">You have not submitted daily reports for the following dates. Please submit them immediately to maintain compliance.</p>
+                                        <h3 className="font-bold text-red-800 text-lg">Missing Daily Sales Reports</h3>
+                                        <p className="text-sm text-red-600 mb-2">Enter these dates to complete this month’s sales record.</p>
                                         <div className="flex flex-wrap gap-2">
                                           {missingDates.map(d => (
   <button

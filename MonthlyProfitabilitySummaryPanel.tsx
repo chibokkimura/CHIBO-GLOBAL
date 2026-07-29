@@ -167,6 +167,7 @@ const MonthlyProfitabilitySummaryPanel: React.FC<Props> = ({
     setError(null);
 
     if (preview) {
+      const previewReady = mode === 'hq';
       setSummary({
         currency: store.currency,
         reportedSales: 1200000,
@@ -184,24 +185,24 @@ const MonthlyProfitabilitySummaryPanel: React.FC<Props> = ({
         occupancyCost: 120000,
         royaltyCost: 57142.86,
         actualCost: 350000,
-        inventoryComplete: true,
+        inventoryComplete: previewReady,
         settingsComplete: true,
-        monthlyInputExists: true,
-        operatingInputsComplete: true,
-        profitabilityReady: true,
-        foodCostPercentage: 30.625,
-        laborCostPercentage: 26.25,
-        primeCostPercentage: 56.875,
-        salesPerGuest: 1142.86,
-        salesPerLaborHour: 2857.14,
-        storeManagementProfit: 138571.42,
-        storeManagementMarginPercentage: 12.125,
+        monthlyInputExists: previewReady,
+        operatingInputsComplete: previewReady,
+        profitabilityReady: previewReady,
+        foodCostPercentage: previewReady ? 30.625 : null,
+        laborCostPercentage: previewReady ? 26.25 : null,
+        primeCostPercentage: previewReady ? 56.875 : null,
+        salesPerGuest: previewReady ? 1142.86 : null,
+        salesPerLaborHour: previewReady ? 2857.14 : null,
+        storeManagementProfit: previewReady ? 138571.42 : null,
+        storeManagementMarginPercentage: previewReady ? 12.125 : null,
         targetLaborCostPercentage: 25,
         targetPrimeCostPercentage: 55,
         targetStoreMarginPercentage: 10,
-        laborTargetVariancePercentage: 1.25,
-        primeTargetVariancePercentage: 1.875,
-        marginTargetVariancePercentage: 2.125,
+        laborTargetVariancePercentage: previewReady ? 1.25 : null,
+        primeTargetVariancePercentage: previewReady ? 1.875 : null,
+        marginTargetVariancePercentage: previewReady ? 2.125 : null,
       });
       setLoading(false);
       return;
@@ -222,7 +223,7 @@ const MonthlyProfitabilitySummaryPanel: React.FC<Props> = ({
     } finally {
       setLoading(false);
     }
-  }, [monthStart, preview, refreshKey, store.currency, store.id]);
+  }, [mode, monthStart, preview, refreshKey, store.currency, store.id]);
 
   useEffect(() => {
     void loadSummary();
