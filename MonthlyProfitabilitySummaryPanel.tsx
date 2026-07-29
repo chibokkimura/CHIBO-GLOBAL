@@ -52,6 +52,7 @@ type ProfitabilitySummary = {
 type Props = {
   store: Store;
   monthStart: string;
+  mode: 'owner' | 'hq';
   preview: boolean;
   refreshKey: number;
   sectionNumber: number;
@@ -152,6 +153,7 @@ const MetricCard: React.FC<MetricCardProps> = ({ label, value, detail, tone = 'n
 const MonthlyProfitabilitySummaryPanel: React.FC<Props> = ({
   store,
   monthStart,
+  mode,
   preview,
   refreshKey,
   sectionNumber,
@@ -256,7 +258,9 @@ const MonthlyProfitabilitySummaryPanel: React.FC<Props> = ({
           <div>
             <div className="flex items-center gap-2">
               <CircleGauge className="h-5 w-5" />
-              <h3 className="font-extrabold">{sectionNumber}. Monthly Profitability</h3>
+              <h3 className="font-extrabold">
+                {mode === 'owner' ? 'Step 3. Review Monthly Result' : `${sectionNumber}. Monthly Profitability`}
+              </h3>
             </div>
             <p className="mt-1 text-xs text-gray-300">
               Management view for improving store operations. This is not a statutory accounting statement.

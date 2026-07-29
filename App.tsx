@@ -9549,20 +9549,23 @@ const StoreDashboard: React.FC<{
                             <div>
                                 <div className="text-xs font-black uppercase tracking-[0.18em] text-gray-400">What to do next</div>
                                 <h2 className="text-2xl font-extrabold mt-1">Store Overview</h2>
-                                <p className="text-sm text-gray-500 mt-1">Start with any item marked as requiring attention.</p>
+                                <p className="text-sm text-gray-500 mt-1">Daily work and month-end work are separated below.</p>
                             </div>
 
-                            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                                 <button
                                     type="button"
                                     onClick={() => { setReportDate(todayDate); setView('report'); }}
-                                    className={`rounded-2xl border p-5 text-left transition hover:-translate-y-0.5 hover:shadow-md ${
+                                    className={`rounded-2xl border p-6 text-left transition hover:-translate-y-0.5 hover:shadow-md ${
                                         todayReport ? 'bg-white border-emerald-200' : 'bg-red-50 border-red-200'
                                     }`}
                                 >
                                     <div className="flex items-start justify-between gap-3">
-                                        <div className={`p-2 rounded-xl ${todayReport ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
-                                            <FileText className="w-5 h-5" />
+                                        <div>
+                                            <div className="text-[10px] font-black uppercase tracking-[0.18em] text-gray-400">Daily task</div>
+                                            <div className={`mt-3 inline-flex p-2 rounded-xl ${todayReport ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
+                                                <FileText className="w-5 h-5" />
+                                            </div>
                                         </div>
                                         <span className={`text-[10px] font-black uppercase px-2 py-1 rounded-full ${
                                             todayReport ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'
@@ -9581,12 +9584,15 @@ const StoreDashboard: React.FC<{
                                 <button
                                     type="button"
                                     onClick={() => setView('month')}
-                                    className={`rounded-2xl border p-5 text-left transition hover:-translate-y-0.5 hover:shadow-md ${
+                                    className={`rounded-2xl border p-6 text-left transition hover:-translate-y-0.5 hover:shadow-md ${
                                         currentMonthReportStatus.missingDates.length > 0 ? 'bg-amber-50 border-amber-200' : 'bg-white border-emerald-200'
                                     }`}
                                 >
                                     <div className="flex items-start justify-between gap-3">
-                                        <div className="p-2 rounded-xl bg-amber-100 text-amber-700"><ClipboardList className="w-5 h-5" /></div>
+                                        <div>
+                                            <div className="text-[10px] font-black uppercase tracking-[0.18em] text-gray-400">Month-end task</div>
+                                            <div className="mt-3 inline-flex p-2 rounded-xl bg-amber-100 text-amber-700"><ClipboardList className="w-5 h-5" /></div>
+                                        </div>
                                         <span className={`text-[10px] font-black uppercase px-2 py-1 rounded-full ${
                                             currentMonthReportStatus.missingDates.length > 0
                                                 ? 'bg-amber-100 text-amber-700'
@@ -9603,10 +9609,17 @@ const StoreDashboard: React.FC<{
                                     </div>
                                     <div className="text-xs font-bold mt-4 flex items-center gap-1">Check monthly readiness <ChevronRight className="w-3 h-3" /></div>
                                 </button>
+                            </div>
 
+                            <div>
+                                <div className="text-xs font-black uppercase tracking-[0.18em] text-gray-400">Setup & maintenance</div>
+                                <p className="mt-1 text-sm text-gray-500">Open these only when ingredients, recipes or staff records need updating.</p>
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                 <button
                                     type="button"
-                                    onClick={() => setView('menu')}
+                                    onClick={() => { setOwnerCostSection('cost'); setView('menu'); }}
                                     className={`rounded-2xl border p-5 text-left transition hover:-translate-y-0.5 hover:shadow-md ${
                                         menusMissingRecipes.length > 0 || setsNeedingAttention.length > 0
                                             ? 'bg-amber-50 border-amber-200'
@@ -9621,7 +9634,7 @@ const StoreDashboard: React.FC<{
                                     </div>
                                     <div className="font-extrabold mt-4">Cost & Inventory</div>
                                     <div className="text-xs text-gray-500 mt-1">{storeMenus.length} single items · {storeSetMenus.length} courses/sets</div>
-                                    <div className="text-xs font-bold mt-4 flex items-center gap-1">Configure menus and recipes <ChevronRight className="w-3 h-3" /></div>
+                                    <div className="text-xs font-bold mt-4 flex items-center gap-1">Manage costs, inventory and recipes <ChevronRight className="w-3 h-3" /></div>
                                 </button>
 
                                 <button
@@ -9808,6 +9821,10 @@ const StoreDashboard: React.FC<{
                             onOpenSalesReport={(date) => {
                                 setReportDate(date);
                                 setView('report');
+                            }}
+                            onOpenInventory={() => {
+                                setOwnerCostSection('cost');
+                                setView('menu');
                             }}
                         />
                     )}

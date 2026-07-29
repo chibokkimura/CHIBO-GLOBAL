@@ -30,7 +30,7 @@ type Props = {
   preview: boolean;
   sectionNumber: number;
   refreshKey: number;
-  onSaved?: () => void;
+  onSaved?: (complete: boolean) => void;
 };
 
 const EMPTY_INPUT: MonthlyProfitabilityInput = {
@@ -190,7 +190,7 @@ const MonthlyProfitabilityInputPanel: React.FC<Props> = ({
     try {
       if (preview) {
         setNotice(nextComplete ? 'Preview monthly totals saved as complete.' : 'Preview draft saved.');
-        onSaved?.();
+        onSaved?.(nextComplete);
         return;
       }
 
@@ -214,7 +214,7 @@ const MonthlyProfitabilityInputPanel: React.FC<Props> = ({
       if (saveError) throw saveError;
       setDraft(mapInput(data));
       setNotice(nextComplete ? 'Monthly operating totals saved.' : 'Draft saved. Complete the remaining totals later.');
-      onSaved?.();
+      onSaved?.(nextComplete);
     } catch (saveError: any) {
       setError(saveError?.message ?? 'Failed to save monthly operating totals.');
     } finally {
@@ -251,8 +251,15 @@ const MonthlyProfitabilityInputPanel: React.FC<Props> = ({
     <section className="rounded-2xl border border-gray-200 bg-white p-5">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <div className="flex items-center gap-2">
-            <h3 className="font-extrabold">{sectionNumber}. Monthly Profit Inputs</h3>
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="font-extrabold">
+              {mode === 'owner' ? 'Step 1. Enter Monthly Totals' : `${sectionNumber}. Monthly Profit Inputs`}
+            </h3>
+            {mode === 'owner' ? (
+              <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-extrabold text-slate-600">
+                Manual entry
+              </span>
+            ) : null}
             <span className={`rounded-full px-2.5 py-1 text-[11px] font-extrabold ${
               requiredComplete
                 ? 'bg-emerald-100 text-emerald-700'
@@ -262,7 +269,9 @@ const MonthlyProfitabilityInputPanel: React.FC<Props> = ({
             </span>
           </div>
           <p className="mt-1 text-xs text-gray-500">
-            Enter monthly totals only. Do not calculate employee-by-employee payroll or receipt-by-receipt expenses here.
+            {mode === 'owner'
+              ? 'Enter one total for each item. If you do not have a file, complete the month here.'
+              : 'Monthly totals entered by the store. HQ reviews without changing them here.'}
           </p>
         </div>
         <button

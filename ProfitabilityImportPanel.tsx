@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
   CheckCircle2,
+  ChevronDown,
   Download,
   FileSpreadsheet,
   History,
@@ -140,6 +141,7 @@ const ProfitabilityImportPanel: React.FC<Props> = ({
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(mode === 'hq');
 
   const editable = mode === 'owner' && !lockedForOwner;
   const targets = SOURCE_TARGETS[sourceType];
@@ -439,27 +441,61 @@ const ProfitabilityImportPanel: React.FC<Props> = ({
         <div>
           <div className="flex items-center gap-2">
             <FileSpreadsheet className="h-4 w-4 text-gray-500" />
-            <h3 className="font-extrabold">{sectionNumber}. File Import</h3>
+            <h3 className="font-extrabold">
+              {mode === 'owner' ? 'Optional: Import Monthly Totals from a File' : `${sectionNumber}. File Import`}
+            </h3>
             <span className="rounded-full bg-gray-100 px-2.5 py-1 text-[11px] font-extrabold text-gray-600">
-              CSV / XLSX
+              {mode === 'owner' ? 'Advanced' : 'CSV / XLSX'}
             </span>
           </div>
           <p className="mt-1 text-xs text-gray-500">
-            Map columns, verify monthly totals, then apply. The original file and mapping stay separate from calculations.
+            {mode === 'owner'
+              ? 'Skip this section when entering the monthly totals manually above.'
+              : 'Review mapped columns, applied totals and retained original files.'}
           </p>
         </div>
-        <button
-          type="button"
-          aria-label="Reload import history"
-          onClick={() => void loadRecords()}
-          disabled={loading || applying}
-          className="self-start rounded-xl border border-gray-200 bg-white p-2.5 text-gray-600 hover:bg-gray-50 disabled:opacity-40"
-          title="Reload"
-        >
-          <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-        </button>
+        <div className="flex items-center gap-2">
+          {mode === 'owner' ? (
+            <button
+              type="button"
+              aria-expanded={expanded}
+              onClick={() => setExpanded((current) => !current)}
+              className="inline-flex items-center gap-2 rounded-xl border border-gray-300 bg-white px-3 py-2 text-xs font-extrabold text-gray-700 hover:bg-gray-50"
+            >
+              {expanded ? 'Close File Import' : 'Open File Import'}
+              <ChevronDown className={`h-4 w-4 transition-transform ${expanded ? 'rotate-180' : ''}`} />
+            </button>
+          ) : null}
+          {(mode === 'hq' || expanded) ? (
+            <button
+              type="button"
+              aria-label="Reload import history"
+              onClick={() => void loadRecords()}
+              disabled={loading || applying}
+              className="rounded-xl border border-gray-200 bg-white p-2.5 text-gray-600 hover:bg-gray-50 disabled:opacity-40"
+              title="Reload"
+            >
+              <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+            </button>
+          ) : null}
+        </div>
       </div>
 
+      {mode === 'owner' && !expanded ? (
+        <button
+          type="button"
+          onClick={() => setExpanded(true)}
+          className="mt-4 flex w-full items-center justify-between gap-3 rounded-xl border border-dashed border-gray-300 bg-gray-50 p-4 text-left hover:border-gray-400 hover:bg-gray-100"
+        >
+          <span>
+            <span className="block text-sm font-extrabold text-gray-900">Have a POS, attendance or payroll file?</span>
+            <span className="mt-1 block text-xs text-gray-500">Open this only to replace manual typing with CSV/XLS/XLSX totals.</span>
+          </span>
+          <ChevronDown className="h-5 w-5 shrink-0 text-gray-400" />
+        </button>
+      ) : null}
+
+      <div className={mode === 'owner' && !expanded ? 'hidden' : ''}>
       {mode === 'owner' ? (
         <div className="mt-5">
           <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
@@ -732,6 +768,7 @@ const ProfitabilityImportPanel: React.FC<Props> = ({
       ) : null}
       {notice ? <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm font-bold text-emerald-700">{notice}</div> : null}
       {error ? <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-bold text-red-700">{error}</div> : null}
+      </div>
     </section>
   );
 };

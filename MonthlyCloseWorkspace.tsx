@@ -41,12 +41,21 @@ type MonthlyCloseTask = {
   sortOrder: number;
 };
 
+type ProfitabilityProgress = {
+  settingsComplete: boolean;
+  monthlyInputExists: boolean;
+  operatingInputsComplete: boolean;
+  inventoryComplete: boolean;
+  profitabilityReady: boolean;
+};
+
 type Props = {
   store: Store;
   sales: Sale[];
   initialMonthKey: string;
   mode: 'owner' | 'hq';
   onOpenSalesReport?: (date: string) => void;
+  onOpenInventory?: () => void;
 };
 
 const DEFAULT_TASKS = [
@@ -56,6 +65,14 @@ const DEFAULT_TASKS = [
     order: 10,
   },
 ] as const;
+
+const EMPTY_PROFITABILITY_PROGRESS: ProfitabilityProgress = {
+  settingsComplete: false,
+  monthlyInputExists: false,
+  operatingInputsComplete: false,
+  inventoryComplete: false,
+  profitabilityReady: false,
+};
 
 function formatAmount(value: number): string {
   return new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(Number(value || 0));
@@ -137,6 +154,17 @@ function mapTask(row: any): MonthlyCloseTask {
   };
 }
 
+function mapProfitabilityProgress(row: any): ProfitabilityProgress {
+  if (!row) return EMPTY_PROFITABILITY_PROGRESS;
+  return {
+    settingsComplete: Boolean(row.settings_complete),
+    monthlyInputExists: Boolean(row.monthly_input_exists),
+    operatingInputsComplete: Boolean(row.operating_inputs_complete),
+    inventoryComplete: Boolean(row.inventory_complete),
+    profitabilityReady: Boolean(row.profitability_ready),
+  };
+}
+
 function statusLabel(status?: CloseStatus): string {
   if (status === 'submitted') return 'Submitted';
   if (status === 'approved') return 'Approved';
@@ -150,6 +178,7 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
   initialMonthKey,
   mode,
   onOpenSalesReport,
+  onOpenInventory,
 }) => {
   const preview = isLocalPreview();
   const [monthKey, setMonthKey] = useState(initialMonthKey);
@@ -162,6 +191,9 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
   const [ownerNote, setOwnerNote] = useState('');
   const [reviewNote, setReviewNote] = useState('');
   const [profitabilityRefreshKey, setProfitabilityRefreshKey] = useState(0);
+  const [profitabilityProgress, setProfitabilityProgress] = useState<ProfitabilityProgress>(
+    EMPTY_PROFITABILITY_PROGRESS,
+  );
 
   useEffect(() => {
     setMonthKey(initialMonthKey);
@@ -240,7 +272,26 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
     })));
     setOwnerNote('');
     setReviewNote('');
+    setProfitabilityProgress({
+      settingsComplete: true,
+      monthlyInputExists: false,
+      operatingInputsComplete: false,
+      inventoryComplete: false,
+      profitabilityReady: false,
+    });
   }, [monthStart, store.id]);
+
+  const loadProfitabilityProgress = useCallback(async () => {
+    if (preview) return;
+    const { data, error: progressError } = await supabase
+      .from('monthly_store_profitability_summary')
+      .select('settings_complete,monthly_input_exists,operating_inputs_complete,inventory_complete,profitability_ready')
+      .eq('store_id', store.id)
+      .eq('month_start', monthStart)
+      .maybeSingle();
+    if (progressError) throw progressError;
+    setProfitabilityProgress(mapProfitabilityProgress(data));
+  }, [monthStart, preview, store.id]);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -253,7 +304,7 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
     }
 
     try {
-      const [periodResult, tasksResult] = await Promise.all([
+      const [periodResult, tasksResult, progressResult] = await Promise.all([
         supabase
           .from('monthly_close_periods')
           .select('id,store_id,month_start,status,owner_note,review_note,submitted_at,approved_at')
@@ -267,9 +318,15 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
           .eq('month_start', monthStart)
           .in('task_key', DEFAULT_TASKS.map((task) => task.key))
           .order('sort_order'),
+        supabase
+          .from('monthly_store_profitability_summary')
+          .select('settings_complete,monthly_input_exists,operating_inputs_complete,inventory_complete,profitability_ready')
+          .eq('store_id', store.id)
+          .eq('month_start', monthStart)
+          .maybeSingle(),
       ]);
 
-      const firstError = periodResult.error || tasksResult.error;
+      const firstError = periodResult.error || tasksResult.error || progressResult.error;
       if (firstError) throw firstError;
 
       const nextPeriod = periodResult.data ? mapPeriod(periodResult.data) : null;
@@ -277,6 +334,7 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
       setTasks((tasksResult.data ?? []).map(mapTask));
       setOwnerNote(nextPeriod?.ownerNote ?? '');
       setReviewNote(nextPeriod?.reviewNote ?? '');
+      setProfitabilityProgress(mapProfitabilityProgress(progressResult.data));
     } catch (loadError: any) {
       console.error('Failed to load monthly operations data', loadError);
       const message = String(loadError?.message ?? '');
@@ -390,6 +448,36 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
     await savePeriod(period?.status ?? 'draft');
   };
 
+  const reportingComplete = missingDates.length === 0;
+  const receiptsComplete = missingReceiptSales.length === 0;
+  const confirmationComplete = pendingTasks.length === 0;
+  const submittedCount = expectedDates.length - missingDates.length;
+  const stepOneComplete = reportingComplete
+    && receiptsComplete
+    && profitabilityProgress.operatingInputsComplete;
+  const stepTwoComplete = profitabilityProgress.inventoryComplete;
+  const stepThreeComplete = profitabilityProgress.profitabilityReady && confirmationComplete;
+
+  const refreshProfitability = useCallback((monthlyInputsComplete?: boolean) => {
+    if (preview) {
+      if (monthlyInputsComplete !== undefined) {
+        setProfitabilityProgress((current) => ({
+          ...current,
+          monthlyInputExists: true,
+          operatingInputsComplete: monthlyInputsComplete,
+          profitabilityReady: monthlyInputsComplete
+            && current.inventoryComplete
+            && current.settingsComplete,
+        }));
+      }
+      return;
+    }
+    setProfitabilityRefreshKey((current) => current + 1);
+    void loadProfitabilityProgress().catch((progressError) => {
+      console.error('Failed to refresh monthly profitability progress', progressError);
+    });
+  }, [loadProfitabilityProgress, preview]);
+
   if (loading) {
     return (
       <div className="rounded-2xl border border-gray-200 bg-white p-8 text-center text-sm text-gray-500">
@@ -397,11 +485,6 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
       </div>
     );
   }
-
-  const reportingComplete = missingDates.length === 0;
-  const receiptsComplete = missingReceiptSales.length === 0;
-  const confirmationComplete = pendingTasks.length === 0;
-  const submittedCount = expectedDates.length - missingDates.length;
 
   return (
     <div className="space-y-6">
@@ -446,42 +529,137 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <div className="rounded-2xl border border-gray-200 bg-white p-5">
-          <div className="flex items-center justify-between text-xs font-bold uppercase text-gray-500">
+      {mode === 'owner' ? (
+        <section className="overflow-hidden rounded-2xl border border-slate-300 bg-white shadow-sm">
+          <div className="border-b border-slate-200 bg-slate-950 p-5 text-white">
+            <div className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-400">Month-end task</div>
+            <h3 className="mt-1 text-xl font-black">Finish the month in 3 steps</h3>
+            <p className="mt-1 text-xs text-slate-300">
+              Enter totals, close inventory, then review the result and submit.
+            </p>
+          </div>
+          <div className="grid gap-0 lg:grid-cols-3">
+            {[
+              {
+                number: 1,
+                title: 'Enter monthly totals',
+                detail: !reportingComplete
+                  ? `${missingDates.length} daily report(s) still missing`
+                  : !receiptsComplete
+                    ? `${missingReceiptSales.length} receipt image(s) still missing`
+                    : profitabilityProgress.operatingInputsComplete
+                      ? 'Sales, labor and operating totals are ready'
+                      : 'Enter labor, fees, utilities and other monthly totals',
+                complete: stepOneComplete,
+                active: !stepOneComplete,
+                action: () => {
+                  if (!reportingComplete && missingDates[0] && onOpenSalesReport) {
+                    onOpenSalesReport(missingDates[0]);
+                    return;
+                  }
+                  document.getElementById('monthly-totals')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                },
+              },
+              {
+                number: 2,
+                title: 'Close inventory',
+                detail: stepTwoComplete
+                  ? 'Opening and closing inventory counts are complete'
+                  : 'Enter purchases and finish the closing stock count',
+                complete: stepTwoComplete,
+                active: stepOneComplete && !stepTwoComplete,
+                action: () => onOpenInventory?.(),
+              },
+              {
+                number: 3,
+                title: 'Review and submit',
+                detail: stepThreeComplete
+                  ? 'Result checked and store confirmation complete'
+                  : profitabilityProgress.profitabilityReady
+                    ? 'Check the calculated result, confirm the total and submit'
+                    : !profitabilityProgress.settingsComplete
+                      ? 'Waiting for HQ store settings before final profit'
+                      : 'Available after totals and inventory are complete',
+                complete: stepThreeComplete,
+                active: stepOneComplete && stepTwoComplete && !stepThreeComplete,
+                action: () => document.getElementById('monthly-result')?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
+              },
+            ].map((step) => (
+              <button
+                key={step.number}
+                type="button"
+                onClick={step.action}
+                disabled={step.number === 2 && !onOpenInventory}
+                className={`flex items-start gap-3 border-b border-slate-200 p-5 text-left transition last:border-b-0 hover:bg-slate-50 disabled:cursor-default lg:border-b-0 lg:border-r lg:last:border-r-0 ${
+                  step.active ? 'bg-amber-50' : 'bg-white'
+                }`}
+              >
+                <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-black ${
+                  step.complete
+                    ? 'bg-emerald-700 text-white'
+                    : step.active
+                      ? 'bg-slate-950 text-white'
+                      : 'bg-slate-100 text-slate-500'
+                }`}>
+                  {step.complete ? '✓' : step.number}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="flex items-center justify-between gap-2">
+                    <span className="text-sm font-black text-slate-950">{step.title}</span>
+                    <span className={`rounded-full px-2 py-0.5 text-[9px] font-black uppercase tracking-wide ${
+                      step.complete
+                        ? 'bg-emerald-100 text-emerald-800'
+                        : step.active
+                          ? 'bg-amber-200 text-amber-950'
+                          : 'bg-slate-100 text-slate-500'
+                    }`}>
+                      {step.complete ? 'Done' : step.active ? 'Next' : 'Waiting'}
+                    </span>
+                  </span>
+                  <span className="mt-1 block text-[11px] leading-4 text-slate-500">{step.detail}</span>
+                </span>
+              </button>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        <div className="rounded-2xl border border-gray-200 bg-white p-4 sm:p-5">
+          <div className="flex items-center justify-between text-[10px] font-bold uppercase text-gray-500 sm:text-xs">
             Reported sales <CircleDollarSign className="h-4 w-4" />
           </div>
-          <div className="mt-2 text-2xl font-extrabold">{store.currency} {formatAmount(reportedSales)}</div>
+          <div className="mt-2 text-xl font-extrabold sm:text-2xl">{store.currency} {formatAmount(reportedSales)}</div>
           <div className="mt-1 text-xs text-gray-500">
             {openDaySales.length} business day(s) · {closedDaySales.length} closed day(s)
           </div>
         </div>
 
-        <div className="rounded-2xl border border-gray-200 bg-white p-5">
-          <div className="flex items-center justify-between text-xs font-bold uppercase text-gray-500">
+        <div className="rounded-2xl border border-gray-200 bg-white p-4 sm:p-5">
+          <div className="flex items-center justify-between text-[10px] font-bold uppercase text-gray-500 sm:text-xs">
             Daily reports <ClipboardCheck className="h-4 w-4" />
           </div>
-          <div className={`mt-2 text-2xl font-extrabold ${reportingComplete ? 'text-emerald-700' : 'text-red-600'}`}>
+          <div className={`mt-2 text-xl font-extrabold sm:text-2xl ${reportingComplete ? 'text-emerald-700' : 'text-red-600'}`}>
             {submittedCount}/{expectedDates.length}
           </div>
           <div className="mt-1 text-xs text-gray-500">Through the latest completed day</div>
         </div>
 
-        <div className="rounded-2xl border border-gray-200 bg-white p-5">
-          <div className="flex items-center justify-between text-xs font-bold uppercase text-gray-500">
+        <div className="rounded-2xl border border-gray-200 bg-white p-4 sm:p-5">
+          <div className="flex items-center justify-between text-[10px] font-bold uppercase text-gray-500 sm:text-xs">
             Receipt images <FileImage className="h-4 w-4" />
           </div>
-          <div className={`mt-2 text-2xl font-extrabold ${receiptsComplete ? 'text-emerald-700' : 'text-red-600'}`}>
+          <div className={`mt-2 text-xl font-extrabold sm:text-2xl ${receiptsComplete ? 'text-emerald-700' : 'text-red-600'}`}>
             {openDaySales.length - missingReceiptSales.length}/{openDaySales.length}
           </div>
           <div className="mt-1 text-xs text-gray-500">Attached to open-day reports</div>
         </div>
 
-        <div className="rounded-2xl border border-gray-200 bg-white p-5">
-          <div className="flex items-center justify-between text-xs font-bold uppercase text-gray-500">
+        <div className="rounded-2xl border border-gray-200 bg-white p-4 sm:p-5">
+          <div className="flex items-center justify-between text-[10px] font-bold uppercase text-gray-500 sm:text-xs">
             Review status <CheckCircle2 className="h-4 w-4" />
           </div>
-          <div className="mt-2 text-xl font-extrabold">{statusLabel(period?.status)}</div>
+          <div className="mt-2 text-lg font-extrabold sm:text-xl">{statusLabel(period?.status)}</div>
           <div className="mt-1 text-xs text-gray-500">
             {period?.approvedAt ? `Approved ${period.approvedAt.slice(0, 10)}` : 'Waiting for completion'}
           </div>
@@ -510,7 +688,9 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
 
       <section className="rounded-2xl border border-gray-200 bg-white p-5">
         <div className="mb-4">
-          <h3 className="font-extrabold">1. Sales Reporting Completeness</h3>
+          <h3 className="font-extrabold">
+            {mode === 'hq' ? '1. Sales Reporting Completeness' : 'Daily reports included in Step 1'}
+          </h3>
           <p className="mt-1 text-xs text-gray-500">
             These checks come directly from the daily reports already stored in the system.
           </p>
@@ -587,16 +767,18 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
         />
       ) : null}
 
-      <MonthlyProfitabilityInputPanel
-        store={store}
-        monthStart={monthStart}
-        mode={mode}
-        lockedForOwner={lockedForOwner}
-        preview={preview}
-        sectionNumber={mode === 'hq' ? 3 : 2}
-        refreshKey={profitabilityRefreshKey}
-        onSaved={() => setProfitabilityRefreshKey((current) => current + 1)}
-      />
+      <div id="monthly-totals" className="scroll-mt-24">
+        <MonthlyProfitabilityInputPanel
+          store={store}
+          monthStart={monthStart}
+          mode={mode}
+          lockedForOwner={lockedForOwner}
+          preview={preview}
+          sectionNumber={mode === 'hq' ? 3 : 2}
+          refreshKey={profitabilityRefreshKey}
+          onSaved={(complete) => refreshProfitability(complete)}
+        />
+      </div>
 
       <ProfitabilityImportPanel
         store={store}
@@ -605,21 +787,48 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
         lockedForOwner={lockedForOwner}
         preview={preview}
         sectionNumber={mode === 'hq' ? 4 : 3}
-        onApplied={() => setProfitabilityRefreshKey((current) => current + 1)}
+        onApplied={() => refreshProfitability()}
       />
 
-      <MonthlyProfitabilitySummaryPanel
-        store={store}
-        monthStart={monthStart}
-        preview={preview}
-        refreshKey={profitabilityRefreshKey}
-        sectionNumber={mode === 'hq' ? 5 : 4}
-      />
+      {mode === 'owner' ? (
+        <section className="rounded-2xl border border-slate-300 bg-white p-5">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <div className="text-[11px] font-black uppercase tracking-[0.16em] text-slate-400">Step 2 · Inventory close</div>
+              <h3 className="mt-1 text-lg font-black text-slate-950">
+                {stepTwoComplete ? 'Inventory close is complete' : 'Finish purchases and closing stock count'}
+              </h3>
+              <p className="mt-1 text-xs text-slate-500">
+                Actual food cost cannot be finalized until opening stock, purchases and closing stock are complete.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={onOpenInventory}
+              disabled={!onOpenInventory}
+              className="shrink-0 rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-black text-white hover:bg-slate-800 disabled:opacity-40"
+            >
+              {stepTwoComplete ? 'Review Inventory' : 'Open Cost & Inventory'}
+            </button>
+          </div>
+        </section>
+      ) : null}
+
+      <div id="monthly-result" className="scroll-mt-24">
+        <MonthlyProfitabilitySummaryPanel
+          store={store}
+          monthStart={monthStart}
+          mode={mode}
+          preview={preview}
+          refreshKey={profitabilityRefreshKey}
+          sectionNumber={mode === 'hq' ? 5 : 3}
+        />
+      </div>
 
       <section className="rounded-2xl border border-gray-200 bg-white p-5">
         <div className="mb-4 flex items-center justify-between gap-3">
           <div>
-            <h3 className="font-extrabold">{mode === 'hq' ? 6 : 5}. Store Confirmation</h3>
+            <h3 className="font-extrabold">{mode === 'hq' ? '6. Store Confirmation' : 'Final check before submission'}</h3>
             <p className="mt-1 text-xs text-gray-500">
               {mode === 'hq'
                 ? 'This is confirmed by the store before submission. HQ reviews it without changing it.'
@@ -663,7 +872,9 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
       </section>
 
       <section className="rounded-2xl border border-gray-200 bg-white p-5">
-        <h3 className="font-extrabold">{mode === 'hq' ? 7 : 6}. Notes & {mode === 'hq' ? 'Approval' : 'Submission'}</h3>
+        <h3 className="font-extrabold">
+          {mode === 'hq' ? '7. Notes & Approval' : 'Submit the completed month to HQ'}
+        </h3>
         <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
           <label className="text-xs font-bold text-gray-600">
             Store note
