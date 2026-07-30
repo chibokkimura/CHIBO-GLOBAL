@@ -451,11 +451,13 @@ const CostInventoryWorkspace: React.FC<Props> = ({
     const fallbackUnitCost = profile.contentQuantity > 0
       ? profile.currentPackPrice / profile.contentQuantity
       : 0;
-    const closingUnitCost = availableQuantity > 0
+    const adjustmentUnitCost = availableQuantity > 0
       ? availableValue / availableQuantity
       : (row.openingUnitCost || fallbackUnitCost);
+    const adjustmentValue = row.adjustmentQuantity * adjustmentUnitCost;
+    const closingUnitCost = adjustmentUnitCost;
     const closingValue = row.closingQuantity * closingUnitCost;
-    const actualCost = openingValue + ingredientPurchaseCost - closingValue;
+    const actualCost = openingValue + ingredientPurchaseCost + adjustmentValue - closingValue;
     const actualUsage = row.openingQuantity + purchasedQuantity + row.adjustmentQuantity - row.closingQuantity;
     return {
       ingredientId: profile.ingredientId,
@@ -463,6 +465,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
       unit: ingredient?.unit ?? '',
       openingValue,
       purchaseCost: ingredientPurchaseCost,
+      adjustmentValue,
       closingValue,
       actualCost,
       closingUnitCost,
@@ -485,7 +488,8 @@ const CostInventoryWorkspace: React.FC<Props> = ({
   );
   const openingInventoryValue = costBreakdown.reduce((sum, row) => sum + row.openingValue, 0);
   const closingInventoryValue = costBreakdown.reduce((sum, row) => sum + row.closingValue, 0);
-  const actualCost = openingInventoryValue + purchaseTotal - closingInventoryValue;
+  const totalAdjustmentValue = costBreakdown.reduce((sum, row) => sum + row.adjustmentValue, 0);
+  const actualCost = openingInventoryValue + purchaseTotal + totalAdjustmentValue - closingInventoryValue;
   const actualCostPercentage = netSales > 0 ? (actualCost / netSales) * 100 : null;
   const inventoryComplete = activeProfiles.length > 0
     && completedCounts === activeProfiles.length
@@ -1300,7 +1304,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                     : `${activeProfiles.length - completedCounts} inventory count(s) still open`}
                 </h3>
                 <p className="mt-1 text-sm text-gray-500">
-                  Formula: opening stock value + monthly purchases − closing stock value
+                  Formula: opening stock value + monthly purchases + inventory adjustments − closing stock value
                 </p>
               </div>
               <div className="flex flex-wrap gap-2">
@@ -1383,11 +1387,12 @@ const CostInventoryWorkspace: React.FC<Props> = ({
               </div>
             </div>
 
-            <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-5">
+            <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-6">
               {[
                 ['Target rate', costControl.targetCostPercentage === null ? 'Not set' : `${formatAmount(costControl.targetCostPercentage, 1)}%`],
                 ['Opening stock', `${store.currency} ${formatAmount(openingInventoryValue)}`],
                 ['Purchases', `${store.currency} ${formatAmount(purchaseTotal)}`],
+                ['Adjustments', `${store.currency} ${totalAdjustmentValue >= 0 ? '+' : ''}${formatAmount(totalAdjustmentValue)}`],
                 ['Closing stock', `${store.currency} ${formatAmount(closingInventoryValue)}`],
                 ['Waste value', `${store.currency} ${formatAmount(totalWasteValue)}`],
               ].map(([label, value]) => (
@@ -2168,7 +2173,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
             <div>
               <h3 className="text-lg font-extrabold">Month-End Inventory Close</h3>
               <p className="mt-1 text-sm text-gray-500">
-                Opening + purchases + adjustment − closing = actual usage. Enter quantities first and expand valuation details only when needed.
+                Opening + purchases + adjustment − closing = actual usage and actual cost. Enter quantities first and expand valuation details only when needed.
               </p>
             </div>
             <div className={`rounded-xl px-4 py-2 text-sm font-extrabold ${
@@ -2312,6 +2317,12 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                       <div className="text-[11px] font-bold text-gray-600">
                         Closing unit cost
                         <div className="mt-1 rounded-lg bg-white px-3 py-2 text-right text-sm">{formatAmount(valuation?.closingUnitCost ?? 0, 6)}</div>
+                      </div>
+                      <div className="text-[11px] font-bold text-gray-600">
+                        Adjustment value
+                        <div className="mt-1 rounded-lg bg-white px-3 py-2 text-right text-sm">
+                          {store.currency} {(valuation?.adjustmentValue ?? 0) >= 0 ? '+' : ''}{formatAmount(valuation?.adjustmentValue ?? 0)}
+                        </div>
                       </div>
                       <div className="text-[11px] font-bold text-gray-600">
                         Closing value
@@ -2483,7 +2494,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                       {expanded && (
                         <tr className="border-b border-gray-200 bg-gray-50">
                           <td colSpan={8} className="p-4">
-                            <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+                            <div className="grid grid-cols-2 gap-3 lg:grid-cols-6">
                               <label className="text-xs font-bold text-gray-600">
                                 Opening unit cost ({store.currency}/{ingredient?.unit ?? 'unit'})
                                 <span className="ml-1 text-[9px] font-extrabold text-red-700">Required if opening &gt; 0</span>
@@ -2514,6 +2525,13 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                                 <div className="mt-1 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900">
                                   {store.currency} {formatAmount(valuation?.openingValue ?? 0)}
                                 </div>
+                              </div>
+                              <div className="text-xs font-bold text-gray-600">
+                                Adjustment value
+                                <div className="mt-1 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900">
+                                  {store.currency} {(valuation?.adjustmentValue ?? 0) >= 0 ? '+' : ''}{formatAmount(valuation?.adjustmentValue ?? 0)}
+                                </div>
+                                <div className="mt-1 text-[10px] font-normal text-gray-400">Quantity × moving-average cost</div>
                               </div>
                               <div className="text-xs font-bold text-gray-600">
                                 Closing stock value
