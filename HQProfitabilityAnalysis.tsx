@@ -380,7 +380,7 @@ const HQProfitabilityAnalysis: React.FC<Props> = ({
     try {
       const storeIds = stores.map((store) => store.id);
       const monthStart = `${monthKey}-01`;
-      const [summaryResult, controlResult] = await Promise.all([
+      const [summaryResult, controlResult, periodResult, snapshotResult] = await Promise.all([
         supabase
           .from('monthly_store_profitability_summary')
           .select(SUMMARY_COLUMNS)
@@ -391,19 +391,61 @@ const HQProfitabilityAnalysis: React.FC<Props> = ({
           .select('store_id,target_cost_percentage')
           .eq('month_start', monthStart)
           .in('store_id', storeIds),
+        supabase
+          .from('monthly_close_periods')
+          .select('store_id,status')
+          .eq('month_start', monthStart)
+          .in('store_id', storeIds),
+        supabase
+          .from('monthly_close_snapshots')
+          .select('store_id,close_status,revision,payload')
+          .eq('month_start', monthStart)
+          .in('store_id', storeIds)
+          .order('revision', { ascending: false }),
       ]);
 
       if (summaryResult.error) throw summaryResult.error;
       if (controlResult.error) throw controlResult.error;
+      if (periodResult.error) throw periodResult.error;
+      if (snapshotResult.error) throw snapshotResult.error;
 
-      setSummaries(new Map(
+      const closeStatuses = new Map<string, string>(
+        (periodResult.data ?? []).map((row: any) => [row.store_id, row.status]),
+      );
+      const latestSnapshots = new Map<string, any>();
+      (snapshotResult.data ?? []).forEach((row: any) => {
+        const status = closeStatuses.get(row.store_id);
+        if (
+          !latestSnapshots.has(row.store_id)
+          && (status === 'submitted' || status === 'approved')
+          && row.close_status === status
+        ) {
+          latestSnapshots.set(row.store_id, row);
+        }
+      });
+
+      const nextSummaries = new Map<string, NormalizedSummary>(
         ((summaryResult.data ?? []) as unknown as ProfitabilitySummaryRow[])
           .map((row) => [row.store_id, normalizeSummary(row)]),
-      ));
-      setFoodTargets(new Map(
+      );
+      const nextFoodTargets = new Map<string, number | null>(
         ((controlResult.data ?? []) as CostControlRow[])
           .map((row) => [row.store_id, numberOrNull(row.target_cost_percentage)]),
-      ));
+      );
+
+      latestSnapshots.forEach((snapshot, storeId) => {
+        const snapshotSummary = snapshot.payload?.profitabilitySummary;
+        if (snapshotSummary) {
+          nextSummaries.set(storeId, normalizeSummary(snapshotSummary as ProfitabilitySummaryRow));
+        }
+        const snapshotTarget = snapshot.payload?.costControl?.target_cost_percentage;
+        if (snapshotTarget !== undefined) {
+          nextFoodTargets.set(storeId, numberOrNull(snapshotTarget));
+        }
+      });
+
+      setSummaries(nextSummaries);
+      setFoodTargets(nextFoodTargets);
     } catch (loadError: any) {
       setError(loadError?.message ?? 'Failed to load the HQ profitability review.');
       setSummaries(new Map());

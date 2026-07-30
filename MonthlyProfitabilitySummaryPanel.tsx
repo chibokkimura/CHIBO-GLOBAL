@@ -65,6 +65,12 @@ type MetricCardProps = {
   tone?: 'neutral' | 'good' | 'bad';
 };
 
+type SnapshotMeta = {
+  status: 'submitted' | 'approved';
+  revision: number;
+  capturedAt: string;
+};
+
 function numberOrNull(value: unknown): number | null {
   return value === null || value === undefined ? null : Number(value);
 }
@@ -159,12 +165,14 @@ const MonthlyProfitabilitySummaryPanel: React.FC<Props> = ({
   sectionNumber,
 }) => {
   const [summary, setSummary] = useState<ProfitabilitySummary | null>(null);
+  const [snapshotMeta, setSnapshotMeta] = useState<SnapshotMeta | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const loadSummary = useCallback(async () => {
     setLoading(true);
     setError(null);
+    setSnapshotMeta(null);
 
     if (preview) {
       const previewReady = mode === 'hq';
@@ -209,17 +217,50 @@ const MonthlyProfitabilitySummaryPanel: React.FC<Props> = ({
     }
 
     try {
-      const { data, error: loadError } = await supabase
-        .from('monthly_store_profitability_summary')
-        .select('currency,reported_sales,net_sales,sales_tax_mode,guest_count,labor_cost,labor_hours,sales_linked_fees,sales_linked_fee_source,utilities_cost,other_operating_cost,default_monthly_rent,default_monthly_common_area_fee,occupancy_cost,royalty_cost,actual_cost,inventory_complete,settings_complete,monthly_input_exists,operating_inputs_complete,profitability_ready,food_cost_percentage,labor_cost_percentage,prime_cost_percentage,sales_per_guest,sales_per_labor_hour,store_management_profit,store_management_margin_percentage,target_labor_cost_percentage,target_prime_cost_percentage,target_store_margin_percentage,labor_target_variance_percentage,prime_target_variance_percentage,margin_target_variance_percentage')
-        .eq('store_id', store.id)
-        .eq('month_start', monthStart)
-        .maybeSingle();
+      const [summaryResult, periodResult, snapshotResult] = await Promise.all([
+        supabase
+          .from('monthly_store_profitability_summary')
+          .select('currency,reported_sales,net_sales,sales_tax_mode,guest_count,labor_cost,labor_hours,sales_linked_fees,sales_linked_fee_source,utilities_cost,other_operating_cost,default_monthly_rent,default_monthly_common_area_fee,occupancy_cost,royalty_cost,actual_cost,inventory_complete,settings_complete,monthly_input_exists,operating_inputs_complete,profitability_ready,food_cost_percentage,labor_cost_percentage,prime_cost_percentage,sales_per_guest,sales_per_labor_hour,store_management_profit,store_management_margin_percentage,target_labor_cost_percentage,target_prime_cost_percentage,target_store_margin_percentage,labor_target_variance_percentage,prime_target_variance_percentage,margin_target_variance_percentage')
+          .eq('store_id', store.id)
+          .eq('month_start', monthStart)
+          .maybeSingle(),
+        supabase
+          .from('monthly_close_periods')
+          .select('status')
+          .eq('store_id', store.id)
+          .eq('month_start', monthStart)
+          .maybeSingle(),
+        supabase
+          .from('monthly_close_snapshots')
+          .select('close_status,revision,payload,captured_at')
+          .eq('store_id', store.id)
+          .eq('month_start', monthStart)
+          .order('revision', { ascending: false }),
+      ]);
 
+      const loadError = summaryResult.error || periodResult.error || snapshotResult.error;
       if (loadError) throw loadError;
-      setSummary(data ? mapSummary(data) : null);
+
+      const closeStatus = periodResult.data?.status;
+      const locked = closeStatus === 'submitted' || closeStatus === 'approved';
+      const matchingSnapshot = locked
+        ? (snapshotResult.data ?? []).find((row: any) => row.close_status === closeStatus)
+        : null;
+      const snapshotSummary = matchingSnapshot?.payload?.profitabilitySummary;
+
+      setSummary(snapshotSummary
+        ? mapSummary(snapshotSummary)
+        : summaryResult.data
+          ? mapSummary(summaryResult.data)
+          : null);
+      setSnapshotMeta(matchingSnapshot ? {
+        status: matchingSnapshot.close_status,
+        revision: Number(matchingSnapshot.revision),
+        capturedAt: matchingSnapshot.captured_at,
+      } : null);
     } catch (loadError: any) {
       setError(loadError?.message ?? 'Failed to load the monthly profit summary.');
+      setSnapshotMeta(null);
     } finally {
       setLoading(false);
     }
@@ -284,6 +325,16 @@ const MonthlyProfitabilitySummaryPanel: React.FC<Props> = ({
         <div className="p-8 text-center text-sm text-gray-500">Calculating monthly profitability…</div>
       ) : (
         <div className="p-5">
+          {snapshotMeta && (
+            <div className="mb-4 rounded-xl border border-slate-300 bg-slate-50 px-4 py-3 text-xs text-slate-700">
+              <span className="font-extrabold text-slate-950">
+                Locked audit snapshot · {snapshotMeta.status} revision {snapshotMeta.revision}
+              </span>
+              <span className="ml-2">
+                Captured {new Date(snapshotMeta.capturedAt).toLocaleString()}
+              </span>
+            </div>
+          )}
           <div className={`rounded-xl border p-4 ${
             summary?.profitabilityReady
               ? 'border-emerald-200 bg-emerald-50'

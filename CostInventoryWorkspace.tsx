@@ -71,6 +71,12 @@ type PreviousCostSummary = {
 };
 
 type WorkspaceSection = 'summary' | 'purchases' | 'inventory';
+type CloseStatus = 'draft' | 'submitted' | 'approved' | 'reopened';
+type CloseSnapshotMeta = {
+  status: 'submitted' | 'approved';
+  revision: number;
+  capturedAt: string;
+};
 
 type Props = {
   store: Store;
@@ -208,8 +214,10 @@ const CostInventoryWorkspace: React.FC<Props> = ({
   onAddIngredient,
 }) => {
   const preview = isLocalPreview();
-  const editable = mode === 'owner';
   const [monthKey, setMonthKey] = useState(initialMonthKey);
+  const [closeStatus, setCloseStatus] = useState<CloseStatus>('draft');
+  const [lockedSnapshotPayload, setLockedSnapshotPayload] = useState<any | null>(null);
+  const [lockedSnapshotMeta, setLockedSnapshotMeta] = useState<CloseSnapshotMeta | null>(null);
   const [localIngredients, setLocalIngredients] = useState<Ingredient[]>(ingredients);
   const [profiles, setProfiles] = useState<IngredientProfile[]>([]);
   const [purchases, setPurchases] = useState<PurchaseEntry[]>([]);
@@ -241,6 +249,92 @@ const CostInventoryWorkspace: React.FC<Props> = ({
     supplier: '',
     notes: '',
   });
+  const monthLocked = closeStatus === 'submitted' || closeStatus === 'approved';
+  const editable = mode === 'owner' && !monthLocked;
+
+  const snapshotAnalysisData = useMemo(() => {
+    if (!lockedSnapshotPayload) return null;
+
+    const recipeRows = lockedSnapshotPayload.menuRecipes ?? [];
+    const recipesByMenu = new Map<string, Array<{ ingredientId: string; quantity: number }>>();
+    recipeRows.forEach((row: any) => {
+      const current = recipesByMenu.get(row.menu_id) ?? [];
+      current.push({
+        ingredientId: row.ingredient_id,
+        quantity: Number(row.quantity ?? 0),
+      });
+      recipesByMenu.set(row.menu_id, current);
+    });
+
+    const snapshotMenus: Menu[] = (lockedSnapshotPayload.menus ?? []).map((row: any) => ({
+      id: row.id,
+      storeId: row.store_id,
+      category: row.category,
+      name: row.name,
+      price: Number(row.price ?? 0),
+      imageUrl: row.image_url ?? undefined,
+      recipe: recipesByMenu.get(row.id) ?? [],
+    }));
+
+    const componentsBySet = new Map<string, Array<{ menuId: string; quantity: number }>>();
+    (lockedSnapshotPayload.setMenuItems ?? []).forEach((row: any) => {
+      const current = componentsBySet.get(row.set_menu_id) ?? [];
+      current.push({
+        menuId: row.menu_id,
+        quantity: Number(row.quantity ?? 0),
+      });
+      componentsBySet.set(row.set_menu_id, current);
+    });
+    const snapshotSetMenus: SetMenu[] = (lockedSnapshotPayload.setMenus ?? []).map((row: any) => ({
+      id: row.id,
+      storeId: row.store_id,
+      name: row.name,
+      price: Number(row.price ?? 0),
+      items: componentsBySet.get(row.id) ?? [],
+    }));
+
+    const categoryItemsBySale = new Map<string, Array<{ menuId: string; quantity: number }>>();
+    (lockedSnapshotPayload.saleItems ?? []).forEach((row: any) => {
+      const current = categoryItemsBySale.get(row.sale_id) ?? [];
+      current.push({ menuId: row.menu_id, quantity: Number(row.quantity ?? 0) });
+      categoryItemsBySale.set(row.sale_id, current);
+    });
+    const menuItemsBySale = new Map<string, Array<{ menuId: string; quantity: number }>>();
+    (lockedSnapshotPayload.saleMenuItems ?? []).forEach((row: any) => {
+      const current = menuItemsBySale.get(row.sale_id) ?? [];
+      current.push({ menuId: row.menu_id, quantity: Number(row.quantity ?? 0) });
+      menuItemsBySale.set(row.sale_id, current);
+    });
+    const setItemsBySale = new Map<string, Array<{ setMenuId: string; quantity: number }>>();
+    (lockedSnapshotPayload.saleSetItems ?? []).forEach((row: any) => {
+      const current = setItemsBySale.get(row.sale_id) ?? [];
+      current.push({ setMenuId: row.set_menu_id, quantity: Number(row.quantity ?? 0) });
+      setItemsBySale.set(row.sale_id, current);
+    });
+
+    const snapshotSales: Sale[] = (lockedSnapshotPayload.sales ?? []).map((row: any) => ({
+      id: row.id,
+      storeId: row.store_id,
+      date: row.date,
+      totalAmount: Number(row.total_amount ?? 0),
+      items: categoryItemsBySale.get(row.id) ?? [],
+      menuItems: menuItemsBySale.get(row.id) ?? [],
+      setItems: setItemsBySale.get(row.id) ?? [],
+      isClosed: Boolean(row.is_closed),
+      hasReceipt: Boolean(row.has_receipt),
+      closedReason: row.closed_reason ?? undefined,
+      comment: row.comment ?? undefined,
+    }));
+
+    return {
+      menus: snapshotMenus,
+      setMenus: snapshotSetMenus,
+      sales: snapshotSales,
+    };
+  }, [lockedSnapshotPayload]);
+  const analysisMenus = snapshotAnalysisData?.menus ?? menus;
+  const analysisSetMenus = snapshotAnalysisData?.setMenus ?? setMenus;
+  const analysisSales = snapshotAnalysisData?.sales ?? sales;
 
   const showInputError = (message: string) => {
     setError(message);
@@ -330,10 +424,10 @@ const CostInventoryWorkspace: React.FC<Props> = ({
   );
   const completedCounts = activeProfiles.filter((profile) => inventoryRows[profile.ingredientId]?.countComplete).length;
   const reportedSales = useMemo(
-    () => sales
+    () => analysisSales
       .filter((sale) => sale.storeId === store.id && sale.date.startsWith(`${monthKey}-`))
       .reduce((sum, sale) => sum + Number(sale.totalAmount || 0), 0),
-    [monthKey, sales, store.id],
+    [analysisSales, monthKey, store.id],
   );
   const netSales = costControl.netSalesOverride ?? reportedSales;
   const costBreakdown = useMemo(() => activeProfiles.map((profile) => {
@@ -409,11 +503,11 @@ const CostInventoryWorkspace: React.FC<Props> = ({
   const theoreticalAnalysis = useMemo(() => buildTheoreticalCostAnalysis({
     storeId: store.id,
     monthKey,
-    sales,
-    menus,
-    setMenus,
+    sales: analysisSales,
+    menus: analysisMenus,
+    setMenus: analysisSetMenus,
     ingredientCosts: ingredientCostInputs,
-  }), [ingredientCostInputs, menus, monthKey, sales, setMenus, store.id]);
+  }), [analysisMenus, analysisSales, analysisSetMenus, ingredientCostInputs, monthKey, store.id]);
   const theoreticalCostPercentage = theoreticalAnalysis.analysisReady && netSales > 0
     ? (theoreticalAnalysis.theoreticalCost / netSales) * 100
     : null;
@@ -553,6 +647,9 @@ const CostInventoryWorkspace: React.FC<Props> = ({
 
     if (preview) {
       seedPreview();
+      setCloseStatus('draft');
+      setLockedSnapshotPayload(null);
+      setLockedSnapshotMeta(null);
       setLoading(false);
       return;
     }
@@ -565,6 +662,8 @@ const CostInventoryWorkspace: React.FC<Props> = ({
         controlResult,
         previousInventoryResult,
         previousSummaryResult,
+        closePeriodResult,
+        snapshotResult,
       ] = await Promise.all([
         supabase
           .from('store_ingredient_profiles')
@@ -600,6 +699,18 @@ const CostInventoryWorkspace: React.FC<Props> = ({
           .eq('store_id', store.id)
           .eq('month_start', previousMonthStart)
           .maybeSingle(),
+        supabase
+          .from('monthly_close_periods')
+          .select('status')
+          .eq('store_id', store.id)
+          .eq('month_start', monthStart)
+          .maybeSingle(),
+        supabase
+          .from('monthly_close_snapshots')
+          .select('close_status,revision,payload,captured_at')
+          .eq('store_id', store.id)
+          .eq('month_start', monthStart)
+          .order('revision', { ascending: false }),
       ]);
 
       const firstError = profileResult.error
@@ -607,10 +718,22 @@ const CostInventoryWorkspace: React.FC<Props> = ({
         || inventoryResult.error
         || controlResult.error
         || previousInventoryResult.error
-        || previousSummaryResult.error;
+        || previousSummaryResult.error
+        || closePeriodResult.error
+        || snapshotResult.error;
       if (firstError) throw firstError;
 
-      const nextProfiles = (profileResult.data ?? []).map(mapProfile);
+      const nextCloseStatus = (closePeriodResult.data?.status as CloseStatus | undefined) ?? 'draft';
+      const matchingSnapshot = nextCloseStatus === 'submitted' || nextCloseStatus === 'approved'
+        ? (snapshotResult.data ?? []).find((row: any) => row.close_status === nextCloseStatus)
+        : null;
+      const snapshotPayload = matchingSnapshot?.payload ?? null;
+      const profileRows = snapshotPayload?.ingredientProfiles ?? profileResult.data ?? [];
+      const purchaseRows = snapshotPayload?.purchases ?? purchaseResult.data ?? [];
+      const inventorySourceRows = snapshotPayload?.inventory ?? inventoryResult.data ?? [];
+      const controlRow = snapshotPayload?.costControl ?? controlResult.data;
+
+      const nextProfiles = profileRows.map(mapProfile);
       const nextPreviousClosingCosts = Object.fromEntries(
         (previousInventoryResult.data ?? []).map((row: any) => [
           row.ingredient_id,
@@ -618,7 +741,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
         ]),
       );
       const nextInventoryRows = Object.fromEntries(
-        (inventoryResult.data ?? []).map((row: any) => {
+        inventorySourceRows.map((row: any) => {
           const mapped = mapInventory(row);
           return [mapped.ingredientId, mapped];
         }),
@@ -638,17 +761,17 @@ const CostInventoryWorkspace: React.FC<Props> = ({
       });
 
       setProfiles(nextProfiles);
-      setPurchases((purchaseResult.data ?? []).map(mapPurchase));
+      setPurchases(purchaseRows.map(mapPurchase));
       setInventoryRows(nextInventoryRows);
       setPreviousClosingCosts(nextPreviousClosingCosts);
       setCostControl({
-        targetCostPercentage: controlResult.data?.target_cost_percentage == null
+        targetCostPercentage: controlRow?.target_cost_percentage == null
           ? null
-          : Number(controlResult.data.target_cost_percentage),
-        netSalesOverride: controlResult.data?.net_sales_override == null
+          : Number(controlRow.target_cost_percentage),
+        netSalesOverride: controlRow?.net_sales_override == null
           ? null
-          : Number(controlResult.data.net_sales_override),
-        notes: controlResult.data?.notes ?? '',
+          : Number(controlRow.net_sales_override),
+        notes: controlRow?.notes ?? '',
       });
       setPreviousCostSummary(previousSummaryResult.data ? {
         actualCostPercentage: previousSummaryResult.data.actual_cost_percentage == null
@@ -658,6 +781,13 @@ const CostInventoryWorkspace: React.FC<Props> = ({
         netSales: Number(previousSummaryResult.data.net_sales ?? 0),
         inventoryComplete: Boolean(previousSummaryResult.data.inventory_complete),
       } : null);
+      setCloseStatus(nextCloseStatus);
+      setLockedSnapshotPayload(snapshotPayload);
+      setLockedSnapshotMeta(matchingSnapshot ? {
+        status: matchingSnapshot.close_status,
+        revision: Number(matchingSnapshot.revision),
+        capturedAt: matchingSnapshot.captured_at,
+      } : null);
     } catch (loadError: any) {
       console.error('Failed to load cost and inventory data', loadError);
       const message = String(loadError?.message ?? '');
@@ -666,6 +796,8 @@ const CostInventoryWorkspace: React.FC<Props> = ({
           ? 'The cost-management database is not active yet. Please contact the administrator.'
           : (message || 'Failed to load cost and inventory data.'),
       );
+      setLockedSnapshotPayload(null);
+      setLockedSnapshotMeta(null);
     } finally {
       setLoading(false);
     }
@@ -690,6 +822,10 @@ const CostInventoryWorkspace: React.FC<Props> = ({
   }, [activeProfiles, monthStart]);
 
   const saveCostControl = async () => {
+    if (!editable) {
+      setError('This month is locked. HQ must reopen it before monthly cost settings can be changed.');
+      return;
+    }
     if (
       costControl.targetCostPercentage !== null
       && (costControl.targetCostPercentage < 0 || costControl.targetCostPercentage > 100)
@@ -1036,6 +1172,23 @@ const CostInventoryWorkspace: React.FC<Props> = ({
 
   return (
     <div className="space-y-5">
+      {monthLocked && (
+        <div className="rounded-2xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950">
+          <div className="font-extrabold">
+            {closeStatus === 'approved' ? 'Approved month — editing is locked' : 'Submitted month — editing is locked'}
+          </div>
+          <p className="mt-1 text-xs leading-5 text-amber-800">
+            Sales, purchases, inventory and monthly totals are protected. Ask HQ to reopen this month before making a correction.
+          </p>
+          {lockedSnapshotMeta && (
+            <p className="mt-2 text-[11px] font-bold text-amber-900">
+              Showing locked {lockedSnapshotMeta.status} snapshot revision {lockedSnapshotMeta.revision}
+              {' · '}
+              {new Date(lockedSnapshotMeta.capturedAt).toLocaleString()}
+            </p>
+          )}
+        </div>
+      )}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <div className="text-xs font-black tracking-[0.12em] text-gray-400">
@@ -1238,6 +1391,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                     max="100"
                     step="0.1"
                     value={costControl.targetCostPercentage ?? ''}
+                    disabled={!editable}
                     onChange={(event) => setCostControl((current) => ({
                       ...current,
                       targetCostPercentage: event.target.value === '' ? null : Number(event.target.value),
@@ -1253,6 +1407,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                     min="0"
                     step="0.01"
                     value={costControl.netSalesOverride ?? ''}
+                    disabled={!editable}
                     onChange={(event) => setCostControl((current) => ({
                       ...current,
                       netSalesOverride: event.target.value === '' ? null : Number(event.target.value),
@@ -1265,6 +1420,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                   Monthly note
                   <input
                     value={costControl.notes}
+                    disabled={!editable}
                     onChange={(event) => setCostControl((current) => ({ ...current, notes: event.target.value }))}
                     className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900"
                     placeholder="Unusual purchase, stock issue, sales correction, etc."
@@ -1272,7 +1428,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                 </label>
                 <button
                   type="button"
-                  disabled={savingKey !== null}
+                  disabled={!editable || savingKey !== null}
                   onClick={() => void saveCostControl()}
                   className="self-end rounded-lg bg-black px-4 py-2 text-sm font-bold text-white disabled:opacity-40"
                 >

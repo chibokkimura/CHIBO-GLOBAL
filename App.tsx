@@ -4113,6 +4113,9 @@ const SalesReporter: React.FC<{
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<SalesReportFieldErrors>({});
   const [submitting, setSubmitting] = useState(false);
+  const [closeStatus, setCloseStatus] = useState<'draft' | 'submitted' | 'approved' | 'reopened'>('draft');
+  const [checkingMonthLock, setCheckingMonthLock] = useState(false);
+  const monthLocked = closeStatus === 'submitted' || closeStatus === 'approved';
 
   useEffect(() => {
     if (initialDate) {
@@ -4130,6 +4133,43 @@ const SalesReporter: React.FC<{
       .sort((a, b) => String(b.id).localeCompare(String(a.id)));
     return rows[0] ?? null;
   }, [sales, store.id, date]);
+
+  useEffect(() => {
+    let active = true;
+    if (!date || isLocalOwnerPreviewMode()) {
+      setCloseStatus('draft');
+      setCheckingMonthLock(false);
+      return () => {
+        active = false;
+      };
+    }
+
+    setCheckingMonthLock(true);
+    const monthStart = `${date.slice(0, 7)}-01`;
+    void supabase
+      .from('monthly_close_periods')
+      .select('status')
+      .eq('store_id', store.id)
+      .eq('month_start', monthStart)
+      .maybeSingle()
+      .then(({ data, error }) => {
+        if (!active) return;
+        if (error) {
+          console.error('Failed to check monthly close lock', error);
+          setSubmitError('Could not verify whether this month is open. Please try again.');
+          setCloseStatus('submitted');
+          return;
+        }
+        setCloseStatus((data?.status as 'draft' | 'submitted' | 'approved' | 'reopened' | undefined) ?? 'draft');
+      })
+      .finally(() => {
+        if (active) setCheckingMonthLock(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [date, store.id]);
   const menuByIdForReport = useMemo(
     () => new Map<string, Menu>(menus.map((menu) => [menu.id, menu])),
     [menus],
@@ -4309,6 +4349,15 @@ const SalesReporter: React.FC<{
   };
 
   const handleSave = async () => {
+    if (monthLocked || checkingMonthLock) {
+      setSubmitError(
+        monthLocked
+          ? 'This month is locked. Ask HQ to reopen it before changing a sales report.'
+          : 'Please wait while the month status is checked.',
+      );
+      return;
+    }
+
     const hasAnyReceipt = Boolean(receiptImage || existingSaleForDate?.hasReceipt);
     const totalAmount = Number(manualRevenue);
     const soldItemQuantity = directMenuItems.reduce((sum, item) => sum + Number(item.quantity || 0), 0)
@@ -4492,6 +4541,19 @@ const SalesReporter: React.FC<{
           {fieldErrors.date && <div className="mt-2 text-xs font-bold text-red-600">{fieldErrors.date}</div>}
         </div>
 
+        {monthLocked && (
+          <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950">
+            <div className="font-extrabold">
+              {closeStatus === 'approved' ? 'Approved month — report editing is locked' : 'Submitted month — report editing is locked'}
+            </div>
+            <p className="mt-1 text-xs text-amber-800">Ask HQ to reopen this month before correcting the report.</p>
+          </div>
+        )}
+
+        <fieldset
+          disabled={monthLocked || checkingMonthLock}
+          className="min-w-0 space-y-6 border-0 p-0 disabled:cursor-not-allowed disabled:opacity-60"
+        >
         <div className="flex items-center gap-3 p-4 bg-gray-50 rounded-xl">
             <input
                 type="checkbox"
@@ -4777,6 +4839,7 @@ const SalesReporter: React.FC<{
               {fieldErrors.receipt && <div className="mt-3 text-xs font-bold text-red-600">{fieldErrors.receipt}</div>}
           </div>
         )}
+        </fieldset>
 
         {submitError && (
           <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-semibold text-red-700">
@@ -4787,7 +4850,7 @@ const SalesReporter: React.FC<{
             <button onClick={onCancel} className="flex-1 py-3 font-bold text-gray-500 hover:bg-gray-50 rounded-xl">Cancel</button>
             <button
               onClick={handleSave}
-              disabled={submitting}
+              disabled={submitting || checkingMonthLock || monthLocked}
               className="flex-1 rounded-xl bg-black py-3 font-bold text-white shadow-lg hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {submitting ? 'Submitting...' : 'Submit Report'}

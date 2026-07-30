@@ -1002,14 +1002,9 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
             {mode === 'owner' && period?.status !== 'approved' && (
               <>
                 {period?.status === 'submitted' && (
-                  <button
-                    type="button"
-                    disabled={saving}
-                    onClick={() => void savePeriod('reopened')}
-                    className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-bold"
-                  >
-                    Reopen Draft
-                  </button>
+                  <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-xs font-bold text-amber-900">
+                    Submitted and locked. Ask HQ to reopen the month if a correction is required.
+                  </div>
                 )}
                 {period?.status !== 'submitted' && (
                   <button
@@ -1025,7 +1020,7 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
             )}
             {mode === 'hq' && (
               <>
-                {period?.status === 'approved' && (
+                {(period?.status === 'submitted' || period?.status === 'approved') && (
                   <button
                     type="button"
                     disabled={saving}
