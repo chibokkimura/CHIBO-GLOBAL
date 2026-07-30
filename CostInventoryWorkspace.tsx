@@ -70,6 +70,13 @@ type PreviousCostSummary = {
   inventoryComplete: boolean;
 };
 
+type MonthlySalesBasis = {
+  reportedSales: number;
+  netSales: number;
+  salesTaxMode: 'excluded' | 'included' | 'not_applicable';
+  salesTaxRate: number;
+};
+
 type WorkspaceSection = 'summary' | 'purchases' | 'inventory';
 type CloseStatus = 'draft' | 'submitted' | 'approved' | 'reopened';
 type CloseSnapshotMeta = {
@@ -229,6 +236,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
   });
   const [previousClosingCosts, setPreviousClosingCosts] = useState<Record<string, number>>({});
   const [previousCostSummary, setPreviousCostSummary] = useState<PreviousCostSummary | null>(null);
+  const [monthlySalesBasis, setMonthlySalesBasis] = useState<MonthlySalesBasis | null>(null);
   const [loading, setLoading] = useState(true);
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -429,7 +437,8 @@ const CostInventoryWorkspace: React.FC<Props> = ({
       .reduce((sum, sale) => sum + Number(sale.totalAmount || 0), 0),
     [analysisSales, monthKey, store.id],
   );
-  const netSales = costControl.netSalesOverride ?? reportedSales;
+  const reportedSalesForDisplay = monthlySalesBasis?.reportedSales ?? reportedSales;
+  const netSales = monthlySalesBasis?.netSales ?? costControl.netSalesOverride ?? reportedSales;
   const costBreakdown = useMemo(() => activeProfiles.map((profile) => {
     const ingredient = ingredientById.get(profile.ingredientId);
     const row = inventoryRows[profile.ingredientId]
@@ -638,6 +647,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
       netSales: 90000,
       inventoryComplete: true,
     });
+    setMonthlySalesBasis(null);
   }, [localIngredients, monthKey, monthStart, store.currency, store.id]);
 
   const loadData = useCallback(async () => {
@@ -662,6 +672,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
         controlResult,
         previousInventoryResult,
         previousSummaryResult,
+        currentProfitabilityResult,
         closePeriodResult,
         snapshotResult,
       ] = await Promise.all([
@@ -694,10 +705,16 @@ const CostInventoryWorkspace: React.FC<Props> = ({
           .eq('store_id', store.id)
           .eq('month_start', previousMonthStart),
         supabase
-          .from('monthly_actual_cost_summary')
-          .select('actual_cost_percentage,actual_cost,net_sales,inventory_complete')
+          .from('monthly_store_profitability_summary')
+          .select('food_cost_percentage,actual_cost,net_sales,inventory_complete')
           .eq('store_id', store.id)
           .eq('month_start', previousMonthStart)
+          .maybeSingle(),
+        supabase
+          .from('monthly_store_profitability_summary')
+          .select('reported_sales,net_sales,sales_tax_mode,sales_tax_rate')
+          .eq('store_id', store.id)
+          .eq('month_start', monthStart)
           .maybeSingle(),
         supabase
           .from('monthly_close_periods')
@@ -719,6 +736,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
         || controlResult.error
         || previousInventoryResult.error
         || previousSummaryResult.error
+        || currentProfitabilityResult.error
         || closePeriodResult.error
         || snapshotResult.error;
       if (firstError) throw firstError;
@@ -732,6 +750,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
       const purchaseRows = snapshotPayload?.purchases ?? purchaseResult.data ?? [];
       const inventorySourceRows = snapshotPayload?.inventory ?? inventoryResult.data ?? [];
       const controlRow = snapshotPayload?.costControl ?? controlResult.data;
+      const profitabilityRow = snapshotPayload?.profitabilitySummary ?? currentProfitabilityResult.data;
 
       const nextProfiles = profileRows.map(mapProfile);
       const nextPreviousClosingCosts = Object.fromEntries(
@@ -774,12 +793,18 @@ const CostInventoryWorkspace: React.FC<Props> = ({
         notes: controlRow?.notes ?? '',
       });
       setPreviousCostSummary(previousSummaryResult.data ? {
-        actualCostPercentage: previousSummaryResult.data.actual_cost_percentage == null
+        actualCostPercentage: previousSummaryResult.data.food_cost_percentage == null
           ? null
-          : Number(previousSummaryResult.data.actual_cost_percentage),
+          : Number(previousSummaryResult.data.food_cost_percentage),
         actualCost: Number(previousSummaryResult.data.actual_cost ?? 0),
         netSales: Number(previousSummaryResult.data.net_sales ?? 0),
         inventoryComplete: Boolean(previousSummaryResult.data.inventory_complete),
+      } : null);
+      setMonthlySalesBasis(profitabilityRow ? {
+        reportedSales: Number(profitabilityRow.reported_sales ?? 0),
+        netSales: Number(profitabilityRow.net_sales ?? 0),
+        salesTaxMode: (profitabilityRow.sales_tax_mode as MonthlySalesBasis['salesTaxMode'] | null) ?? 'excluded',
+        salesTaxRate: Number(profitabilityRow.sales_tax_rate ?? 0),
       } : null);
       setCloseStatus(nextCloseStatus);
       setLockedSnapshotPayload(snapshotPayload);
@@ -798,6 +823,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
       );
       setLockedSnapshotPayload(null);
       setLockedSnapshotMeta(null);
+      setMonthlySalesBasis(null);
     } finally {
       setLoading(false);
     }
@@ -1322,7 +1348,9 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                 <div className="text-xs font-bold text-gray-500">NET SALES</div>
                 <div className="mt-2 text-2xl font-extrabold">{store.currency} {formatAmount(netSales)}</div>
                 <div className="mt-2 text-xs text-gray-500">
-                  {costControl.netSalesOverride !== null ? 'Manual override applied' : 'From daily sales reports'}
+                  {monthlySalesBasis?.salesTaxMode === 'included' && monthlySalesBasis.salesTaxRate > 0
+                    ? `${formatAmount(monthlySalesBasis.salesTaxRate, 2)}% sales tax removed from reported ${formatAmount(reportedSalesForDisplay)}`
+                    : 'Same daily-sales basis used by HQ'}
                 </div>
               </div>
               <div className="rounded-2xl border border-gray-200 p-5">
@@ -1382,7 +1410,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
             )}
 
             {showMonthlySettings && (
-              <div className="mt-4 grid grid-cols-1 gap-3 rounded-xl border border-gray-200 bg-gray-50 p-4 md:grid-cols-2 xl:grid-cols-[160px_220px_1fr_auto]">
+              <div className="mt-4 grid grid-cols-1 gap-3 rounded-xl border border-gray-200 bg-gray-50 p-4 md:grid-cols-2 xl:grid-cols-[180px_1fr_auto]">
                 <label className="text-xs font-bold text-gray-600">
                   Target cost rate (%)
                   <input
@@ -1398,22 +1426,6 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                     }))}
                     className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900"
                     placeholder="e.g. 30"
-                  />
-                </label>
-                <label className="text-xs font-bold text-gray-600">
-                  Net sales override ({store.currency})
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={costControl.netSalesOverride ?? ''}
-                    disabled={!editable}
-                    onChange={(event) => setCostControl((current) => ({
-                      ...current,
-                      netSalesOverride: event.target.value === '' ? null : Number(event.target.value),
-                    }))}
-                    className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900"
-                    placeholder={`Reported: ${formatAmount(reportedSales)}`}
                   />
                 </label>
                 <label className="text-xs font-bold text-gray-600">
@@ -1434,6 +1446,11 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                 >
                   Save Settings
                 </button>
+                <div className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs text-gray-600 xl:col-span-3">
+                  <span className="font-extrabold text-gray-900">Sales basis is automatic.</span>{' '}
+                  Reported sales {store.currency} {formatAmount(reportedSalesForDisplay)} → net sales {store.currency} {formatAmount(netSales)}.
+                  HQ tax settings and this screen now use the same calculation.
+                </div>
               </div>
             )}
           </section>
