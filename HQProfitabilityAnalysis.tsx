@@ -284,10 +284,28 @@ function formatLocal(currency: string, value: number | null): string {
   return value === null ? '—' : `${currency} ${formatAmount(value)}`;
 }
 
-function previewSummary(index: number): NormalizedSummary | null {
+function previewSummary(currency: string, index: number): NormalizedSummary | null {
   if (index === 3) return null;
   const margin = [12.4, 4.2, -2.8, 0, 9.6][index % 5];
-  const netSales = [8200000, 4600000, 6900000, 0, 5300000][index % 5];
+  const monthlySalesByCurrency: Record<string, number> = {
+    TWD: 4_800_000,
+    VND: 1_850_000_000,
+    PHP: 7_200_000,
+    CNY: 920_000,
+    KRW: 185_000_000,
+    JPY: 21_000_000,
+    USD: 620_000,
+  };
+  const averageGuestSpendByCurrency: Record<string, number> = {
+    TWD: 900,
+    VND: 320_000,
+    PHP: 1_150,
+    CNY: 180,
+    KRW: 42_000,
+    JPY: 3_800,
+    USD: 42,
+  };
+  const netSales = (monthlySalesByCurrency[currency] ?? 1_000_000) * (0.92 + ((index % 4) * 0.04));
   const food = [29.2, 34.8, 36.1, 0, 30.5][index % 5];
   const labor = [24.1, 29.4, 31.2, 0, 25.2][index % 5];
   const ready = index !== 4;
@@ -300,13 +318,13 @@ function previewSummary(index: number): NormalizedSummary | null {
     otherOperatingCost: netSales * 0.018,
     occupancyCost: netSales * 0.08,
     royaltyCost: netSales * 0.05,
-    guestCount: Math.max(1, Math.round(netSales / 1600)),
-    laborHours: Math.max(1, Math.round(netSales / 5500)),
+    guestCount: Math.max(1, Math.round(netSales / (averageGuestSpendByCurrency[currency] ?? 1000))),
+    laborHours: Math.max(1, Math.round(netSales / ((averageGuestSpendByCurrency[currency] ?? 1000) * 3.4))),
     foodCostPercentage: food,
     laborCostPercentage: labor,
     primeCostPercentage: food + labor,
-    salesPerGuest: 1600,
-    salesPerLaborHour: 5500,
+    salesPerGuest: averageGuestSpendByCurrency[currency] ?? 1000,
+    salesPerLaborHour: (averageGuestSpendByCurrency[currency] ?? 1000) * 3.4,
     managementProfit: ready ? netSales * margin / 100 : null,
     managementMarginPercentage: ready ? margin : null,
     targetLaborCostPercentage: 25,
@@ -360,7 +378,7 @@ const HQProfitabilityAnalysis: React.FC<Props> = ({
       const previewSummaries = new Map<string, NormalizedSummary>();
       const previewTargets = new Map<string, number | null>();
       stores.forEach((store, index) => {
-        const summary = previewSummary(index);
+        const summary = previewSummary(store.currency, index);
         if (summary) previewSummaries.set(store.id, summary);
         previewTargets.set(store.id, index % 3 === 2 ? 31 : 30);
       });

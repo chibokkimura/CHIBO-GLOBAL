@@ -8767,6 +8767,12 @@ const HQDashboard: React.FC<{
           </div>
        </div>
 
+       {isLocalHqPreviewMode() && (
+         <div className="border-b border-amber-300 bg-amber-100 px-4 py-2 text-center text-xs font-black text-amber-950">
+           DEMO PREVIEW · Sample numbers only · Never use this screen to verify operating data
+         </div>
+       )}
+
        {isSettingsOpen && (
            <div className="fixed inset-0 bg-black/60 z-[100] flex items-center justify-center p-4 backdrop-blur-sm">
                <div className="bg-white rounded-2xl shadow-xl max-w-2xl w-full flex flex-col max-h-[90vh]" onClick={e => e.stopPropagation()}>
