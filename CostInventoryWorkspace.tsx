@@ -1801,7 +1801,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                     aria-label="Ingredient to configure"
                     value={selectedIngredientId}
                     onChange={(event) => setSelectedIngredientId(event.target.value)}
-                    className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-bold"
+                    className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-bold sm:w-auto"
                   >
                     <option value="">Select a registered ingredient</option>
                     {unconfiguredIngredients.map((ingredient) => (
@@ -1812,14 +1812,14 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                     type="button"
                     disabled={!selectedIngredientId || savingKey !== null}
                     onClick={() => void addProfile(selectedIngredientId)}
-                    className="inline-flex items-center gap-1 rounded-xl bg-black px-3 py-2 text-xs font-bold text-white disabled:opacity-40"
+                    className="inline-flex w-full items-center justify-center gap-1 rounded-xl bg-black px-3 py-2 text-xs font-bold text-white disabled:opacity-40 sm:w-auto"
                   >
                     <Plus className="h-4 w-4" /> Add Purchase Setup
                   </button>
                   <button
                     type="button"
                     onClick={() => setShowNewIngredient((current) => !current)}
-                    className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-bold"
+                    className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-bold sm:w-auto"
                   >
                     Add New Ingredient
                   </button>
@@ -1869,7 +1869,51 @@ const CostInventoryWorkspace: React.FC<Props> = ({
               </div>
             )}
 
-            <div className="mt-4 overflow-x-auto">
+            <div className="mt-4 space-y-3 md:hidden">
+              {activeProfiles.map((profile) => {
+                const ingredient = ingredientById.get(profile.ingredientId);
+                const unitPrice = profile.contentQuantity > 0 ? profile.currentPackPrice / profile.contentQuantity : 0;
+                const expanded = expandedProfileId === profile.ingredientId;
+                return (
+                  <div key={profile.ingredientId} className="rounded-xl border border-gray-200 p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="truncate font-extrabold">{ingredient?.name ?? profile.ingredientId}</div>
+                        <div className="mt-1 text-[11px] text-gray-500">{CATEGORY_LABELS[profile.category]} · {profile.purchaseUnit} · {formatAmount(profile.contentQuantity, 3)} {ingredient?.unit ?? ''}</div>
+                      </div>
+                      {editable && (
+                        <button type="button" aria-expanded={expanded} onClick={() => setExpandedProfileId(expanded ? null : profile.ingredientId)} className="shrink-0 rounded-lg border border-gray-200 px-3 py-2 text-xs font-bold">
+                          {expanded ? 'Close' : 'Edit'}
+                        </button>
+                      )}
+                    </div>
+                    <div className="mt-3 grid grid-cols-2 gap-2 rounded-lg bg-gray-50 p-3 text-xs">
+                      <div><div className="text-gray-400">Pack price</div><div className="mt-1 font-bold">{store.currency} {formatAmount(profile.currentPackPrice)}</div></div>
+                      <div><div className="text-gray-400">Base unit cost</div><div className="mt-1 font-bold">{store.currency} {formatAmount(unitPrice, 4)} / {ingredient?.unit ?? 'unit'}</div></div>
+                    </div>
+                    {expanded && editable && (
+                      <div className="mt-4 space-y-3 border-t border-gray-100 pt-4">
+                        <label className="block text-xs font-bold text-gray-600">Category <span className="text-[9px] text-red-700">Required</span>
+                          <select value={profile.category} onChange={(event) => setProfiles((current) => current.map((row) => row.ingredientId === profile.ingredientId ? { ...row, category: event.target.value as IngredientCategory } : row))} className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm">
+                            {(Object.keys(CATEGORY_LABELS) as IngredientCategory[]).map((key) => <option key={key} value={key}>{CATEGORY_LABELS[key]}</option>)}
+                          </select>
+                        </label>
+                        <div className="grid grid-cols-2 gap-3">
+                          <label className="text-xs font-bold text-gray-600">Purchase unit <span className="text-[9px] text-red-700">Required</span><input value={profile.purchaseUnit} onChange={(event) => setProfiles((current) => current.map((row) => row.ingredientId === profile.ingredientId ? { ...row, purchaseUnit: event.target.value } : row))} className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm" /></label>
+                          <label className="text-xs font-bold text-gray-600">Content ({ingredient?.unit ?? 'unit'}) <span className="text-[9px] text-red-700">Required</span><input type="number" min="0.001" step="0.001" value={profile.contentQuantity} onChange={(event) => setProfiles((current) => current.map((row) => row.ingredientId === profile.ingredientId ? { ...row, contentQuantity: Number(event.target.value) } : row))} className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm" /></label>
+                          <label className="text-xs font-bold text-gray-600">Pack price ({store.currency}) <span className="text-[9px] text-red-700">Required</span><input type="number" min="0" step="0.01" value={profile.currentPackPrice} onChange={(event) => setProfiles((current) => current.map((row) => row.ingredientId === profile.ingredientId ? { ...row, currentPackPrice: Number(event.target.value) } : row))} className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm" /></label>
+                          <label className="text-xs font-bold text-gray-600">Supplier <span className="text-[9px] text-gray-400">Optional</span><input value={profile.supplier} onChange={(event) => setProfiles((current) => current.map((row) => row.ingredientId === profile.ingredientId ? { ...row, supplier: event.target.value } : row))} className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm" /></label>
+                        </div>
+                        <button type="button" disabled={savingKey !== null} onClick={() => void saveProfile(profile)} className="inline-flex w-full items-center justify-center gap-1 rounded-lg bg-black px-4 py-3 text-xs font-bold text-white disabled:opacity-40"><Save className="h-4 w-4" /> Save Ingredient Setup</button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              {activeProfiles.length === 0 && <div className="rounded-xl border border-dashed border-gray-200 p-6 text-center text-sm text-gray-400">No ingredient purchase setup has been registered.</div>}
+            </div>
+
+            <div className="mt-4 hidden overflow-x-auto md:block">
               <table className="w-full min-w-[900px] text-left text-sm">
                 <thead className="border-b border-gray-200 text-[11px] text-gray-400">
                   <tr>
@@ -2002,7 +2046,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                   type="button"
                   disabled={activeProfiles.length === 0}
                   onClick={() => setShowPurchaseForm((current) => !current)}
-                  className="inline-flex items-center justify-center gap-1 rounded-xl bg-black px-4 py-2.5 text-xs font-bold text-white disabled:opacity-40"
+                  className="inline-flex w-full items-center justify-center gap-1 rounded-xl bg-black px-4 py-2.5 text-xs font-bold text-white disabled:opacity-40 sm:w-auto"
                 >
                   <Plus className="h-4 w-4" /> Add Purchase
                 </button>
@@ -2094,7 +2138,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                     placeholder="Invoice number, price change, delivery issue, etc."
                   />
                 </label>
-                <div className="mt-3 flex justify-end gap-2">
+                <div className="mt-3 grid grid-cols-2 gap-2 sm:flex sm:justify-end">
                   <button type="button" onClick={() => setShowPurchaseForm(false)} className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-bold">Cancel</button>
                   <button type="button" disabled={savingKey !== null} onClick={() => void addPurchase()} className="rounded-lg bg-black px-4 py-2 text-xs font-bold text-white disabled:opacity-40">Save Purchase</button>
                 </div>
@@ -2116,7 +2160,27 @@ const CostInventoryWorkspace: React.FC<Props> = ({
               </div>
             </div>
 
-            <div className="mt-4 overflow-x-auto">
+            <div className="mt-4 space-y-3 md:hidden">
+              {purchases.map((purchase) => {
+                const ingredient = ingredientById.get(purchase.ingredientId);
+                const profile = activeProfiles.find((row) => row.ingredientId === purchase.ingredientId);
+                return (
+                  <div key={purchase.id} className="rounded-xl border border-gray-200 p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div><div className="font-extrabold">{ingredient?.name ?? purchase.ingredientId}</div><div className="mt-1 text-xs text-gray-500">{purchase.purchaseDate}</div></div>
+                      <div className="text-right"><div className="font-extrabold">{purchase.currency} {formatAmount(purchase.totalCost)}</div><div className="mt-1 text-xs text-gray-500">{formatAmount(purchase.packages, 3)} {profile?.purchaseUnit ?? 'pack'}</div></div>
+                    </div>
+                    <div className="mt-3 flex items-end justify-between gap-3 border-t border-gray-100 pt-3">
+                      <div className="min-w-0 text-xs text-gray-500"><div>{formatAmount(purchase.baseQuantity, 3)} {ingredient?.unit ?? ''} total</div><div className="mt-1 truncate">{[purchase.supplier, purchase.notes].filter(Boolean).join(' · ') || 'No optional note'}</div></div>
+                      {editable && <button type="button" aria-label={`Delete ${purchase.purchaseDate} ${ingredient?.name ?? purchase.ingredientId} purchase`} disabled={savingKey !== null} onClick={() => void deletePurchase(purchase)} className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-red-100 px-3 py-2 text-xs font-bold text-red-600 disabled:opacity-30"><Trash2 className="h-4 w-4" /> Delete</button>}
+                    </div>
+                  </div>
+                );
+              })}
+              {purchases.length === 0 && <div className="rounded-xl border border-dashed border-gray-200 p-6 text-center text-sm text-gray-400">No purchase entries for this month.</div>}
+            </div>
+
+            <div className="mt-4 hidden overflow-x-auto md:block">
               <table className="w-full min-w-[760px] text-left text-sm">
                 <thead className="border-b border-gray-200 text-[11px] text-gray-400">
                   <tr>

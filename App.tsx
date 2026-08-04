@@ -4872,12 +4872,13 @@ const MenuManager: React.FC<{
 
   return (
     <div>
-      <div className="flex justify-between items-center mb-6">
+      <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-2xl font-bold">Single Items & Recipes</h2>
           <p className="text-sm text-gray-500 mt-1">Register each individually sold menu item and the ingredients used in one serving.</p>
         </div>
         <button
+          type="button"
           onClick={() => onCreate({
             id: createLocalEntityId('M'),
             storeId: store.id,
@@ -4886,12 +4887,12 @@ const MenuManager: React.FC<{
             price: 0,
             recipe: []
           })}
-          className="flex items-center gap-2 bg-black text-white px-4 py-2 rounded-xl font-bold text-sm hover:bg-gray-800"
+          className="flex w-full items-center justify-center gap-2 rounded-xl bg-black px-4 py-2 text-sm font-bold text-white hover:bg-gray-800 sm:w-auto"
         >
           <Plus className="w-4 h-4" /> Add Item
         </button>
       </div>
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 2xl:grid-cols-3">
         {menus.map(menu => (
           <div key={menu.id} className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 hover:shadow-md transition group">
              <div className="aspect-video bg-gray-100 rounded-lg mb-4 overflow-hidden relative">
@@ -4907,9 +4908,9 @@ const MenuManager: React.FC<{
                 ) : (
                     <div className="flex items-center justify-center h-full text-gray-300"><ImageIcon className="w-8 h-8"/></div>
                 )}
-                <div className="absolute top-2 right-2 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <button onClick={() => onEdit(menu)} className="p-2 bg-white rounded-full shadow-sm hover:bg-gray-100"><Settings className="w-4 h-4"/></button>
-                    <button onClick={() => onDelete(menu.id)} className="p-2 bg-white text-red-500 rounded-full shadow-sm hover:bg-red-50"><Trash2 className="w-4 h-4"/></button>
+                <div className="absolute right-2 top-2 flex gap-2">
+                    <button type="button" aria-label={`Edit ${menu.name}`} onClick={() => onEdit(menu)} className="rounded-full bg-white p-2 shadow-sm hover:bg-gray-100"><Settings className="w-4 h-4"/></button>
+                    <button type="button" aria-label={`Delete ${menu.name}`} onClick={() => onDelete(menu.id)} className="rounded-full bg-white p-2 text-red-500 shadow-sm hover:bg-red-50"><Trash2 className="w-4 h-4"/></button>
                 </div>
              </div>
              <div className="flex justify-between items-start">
@@ -5013,10 +5014,10 @@ const SetMenuEditor: React.FC<{
 
     return (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200">
-            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden" onClick={(e) => e.stopPropagation()}>
-                <div className="p-6 border-b flex justify-between items-center bg-gray-50">
-                    <h2 className="text-2xl font-bold">Edit Set Menu: {setMenu.name || 'New Set Menu'}</h2>
-                    <button onClick={onBack} className="p-2 hover:bg-gray-200 rounded-full transition"><X className="w-6 h-6" /></button>
+            <div className="flex max-h-[calc(100dvh-2rem)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl" onClick={(e) => e.stopPropagation()}>
+                <div className="flex items-center justify-between gap-3 border-b bg-gray-50 p-4 sm:p-6">
+                    <h2 className="min-w-0 text-lg font-bold sm:text-2xl">Edit Set Menu: {setMenu.name || 'New Set Menu'}</h2>
+                    <button type="button" aria-label="Close set menu editor" onClick={onBack} className="shrink-0 rounded-full p-2 transition hover:bg-gray-200"><X className="w-6 h-6" /></button>
                 </div>
                 <div className="p-6 overflow-y-auto space-y-6">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -5063,8 +5064,8 @@ const SetMenuEditor: React.FC<{
                         </div>
                         <div className="space-y-3">
                             {editedSet.items.map((item, idx) => (
-                                <div key={`${item.menuId}-${idx}`} className="grid grid-cols-12 gap-2 items-center">
-                                    <div className="col-span-8">
+                                <div key={`${item.menuId}-${idx}`} className="grid grid-cols-[minmax(0,1fr)_72px_40px] items-center gap-2">
+                                    <div>
                                         <select
                                             value={item.menuId}
                                             onChange={(e) => updateSetItem(idx, { menuId: e.target.value })}
@@ -5078,7 +5079,7 @@ const SetMenuEditor: React.FC<{
                                             ))}
                                         </select>
                                     </div>
-                                    <div className="col-span-3">
+                                    <div>
                                         <input
                                             type="number"
                                             min={1}
@@ -5087,7 +5088,7 @@ const SetMenuEditor: React.FC<{
                                             className="w-full p-2 rounded-lg border border-gray-300 text-sm bg-white focus:border-black outline-none text-center font-semibold"
                                         />
                                     </div>
-                                    <div className="col-span-1">
+                                    <div>
                                         <button
                                             type="button"
                                             onClick={() => removeSetItemRow(idx)}
@@ -5108,12 +5109,13 @@ const SetMenuEditor: React.FC<{
                     </div>
                     {error && <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-semibold text-red-700">{error}</div>}
                 </div>
-                <div className="p-4 border-t bg-gray-50 flex justify-end gap-3">
-                    <button onClick={onBack} className="px-6 py-3 font-bold text-gray-500 hover:bg-gray-100 rounded-xl transition">Cancel</button>
+                <div className="flex gap-3 border-t bg-gray-50 p-4 sm:justify-end">
+                    <button type="button" onClick={onBack} className="flex-1 rounded-xl px-4 py-3 font-bold text-gray-500 transition hover:bg-gray-100 sm:flex-none sm:px-6">Cancel</button>
                     <button
+                        type="button"
                         onClick={handleSave}
                         disabled={saving}
-                        className={`px-6 py-3 bg-black text-white font-bold rounded-xl transition ${saving ? 'opacity-60 cursor-not-allowed' : 'hover:bg-gray-800'}`}
+                        className={`flex-1 rounded-xl bg-black px-4 py-3 font-bold text-white transition sm:flex-none sm:px-6 ${saving ? 'opacity-60 cursor-not-allowed' : 'hover:bg-gray-800'}`}
                     >
                         {saving ? 'Saving...' : 'Save Set Menu'}
                     </button>
@@ -5135,12 +5137,13 @@ const SetMenuManager: React.FC<{
 
     return (
         <div>
-            <div className="flex justify-between items-center mb-6">
+            <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                     <h2 className="text-2xl font-bold">Courses & Set Menus</h2>
                     <p className="text-sm text-gray-500 mt-1">Build a course or set from registered single items and specify the quantity of each component.</p>
                 </div>
                 <button
+                    type="button"
                     onClick={() => onCreate({
                         id: createLocalEntityId('SM'),
                         storeId: store.id,
@@ -5148,12 +5151,12 @@ const SetMenuManager: React.FC<{
                         price: 0,
                         items: [],
                     })}
-                    className="flex items-center gap-2 bg-black text-white px-4 py-2 rounded-xl font-bold text-sm hover:bg-gray-800"
+                    className="flex w-full items-center justify-center gap-2 rounded-xl bg-black px-4 py-2 text-sm font-bold text-white hover:bg-gray-800 sm:w-auto"
                 >
                     <Plus className="w-4 h-4" /> Add Set Menu
                 </button>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
                 {setMenus.map((setMenu) => (
                     <div key={setMenu.id} className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 hover:shadow-md transition group">
                         <div className="flex justify-between items-start gap-3">
@@ -5176,9 +5179,9 @@ const SetMenuManager: React.FC<{
                                 <span className="text-xs text-gray-400">No components configured.</span>
                             )}
                         </div>
-                        <div className="mt-4 pt-4 border-t flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <button onClick={() => onEdit(setMenu)} className="p-2 bg-white rounded-full shadow-sm hover:bg-gray-100"><Settings className="w-4 h-4" /></button>
-                            <button onClick={() => onDelete(setMenu.id)} className="p-2 bg-white text-red-500 rounded-full shadow-sm hover:bg-red-50"><Trash2 className="w-4 h-4" /></button>
+                        <div className="mt-4 flex justify-end gap-2 border-t pt-4">
+                            <button type="button" onClick={() => onEdit(setMenu)} className="inline-flex items-center gap-1 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-bold hover:bg-gray-100"><Settings className="w-4 h-4" /> Edit</button>
+                            <button type="button" onClick={() => onDelete(setMenu.id)} className="inline-flex items-center gap-1 rounded-lg border border-red-100 bg-white px-3 py-2 text-xs font-bold text-red-600 hover:bg-red-50"><Trash2 className="w-4 h-4" /> Delete</button>
                         </div>
                     </div>
                 ))}
@@ -5740,9 +5743,10 @@ const EmployeeManager: React.FC<{
                     onBack={() => setEditingEmp(null)}
                 />
             )}
-            <div className="flex justify-between items-center mb-6">
+            <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <h2 className="text-2xl font-bold">Staff Management</h2>
                 <button
+                    type="button"
                     onClick={() => setEditingEmp({
                         id: createLocalEntityId('E'),
                         storeId: store.id,
@@ -5750,12 +5754,12 @@ const EmployeeManager: React.FC<{
                         position: positions[0] || '',
                         imageUrl: ''
                     })}
-                    className="flex items-center gap-2 bg-black text-white px-4 py-2 rounded-xl font-bold text-sm hover:bg-gray-800"
+                    className="flex w-full items-center justify-center gap-2 rounded-xl bg-black px-4 py-2 text-sm font-bold text-white hover:bg-gray-800 sm:w-auto"
                 >
                     <Plus className="w-4 h-4" /> Add Staff
                 </button>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 2xl:grid-cols-3">
                 {employees.map(emp => (
                     <div key={emp.id} className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 flex items-center justify-between group">
                         <div className="flex items-center gap-4">
@@ -5782,9 +5786,9 @@ const EmployeeManager: React.FC<{
                                 </div>
                             </div>
                         </div>
-                        <div className="opacity-0 group-hover:opacity-100 transition-opacity flex gap-2">
-                             <button onClick={() => setEditingEmp(emp)} className="p-2 hover:bg-gray-100 rounded-full text-gray-500"><Settings className="w-4 h-4"/></button>
-                             <button onClick={() => handleDelete(emp.id)} className="p-2 hover:bg-red-50 rounded-full text-red-500"><Trash2 className="w-4 h-4"/></button>
+                        <div className="flex shrink-0 gap-2">
+                             <button type="button" aria-label={`Edit ${emp.name}`} onClick={() => setEditingEmp(emp)} className="rounded-full p-2 text-gray-500 hover:bg-gray-100"><Settings className="w-4 h-4"/></button>
+                             <button type="button" aria-label={`Delete ${emp.name}`} onClick={() => handleDelete(emp.id)} className="rounded-full p-2 text-red-500 hover:bg-red-50"><Trash2 className="w-4 h-4"/></button>
                         </div>
                     </div>
                 ))}
@@ -9766,7 +9770,7 @@ const StoreDashboard: React.FC<{
 
             <div className="flex flex-1 overflow-hidden">
                 {/* Sidebar */}
-                <div className="w-64 bg-white border-r hidden md:flex flex-col p-4">
+                <div className="hidden w-64 flex-col border-r bg-white p-4 xl:flex">
                     <button
                         type="button"
                         onClick={() => setView('dashboard')}
@@ -9801,7 +9805,7 @@ const StoreDashboard: React.FC<{
                 </div>
 
                 {/* Mobile Nav */}
-                <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t px-1.5 py-1.5 flex justify-around z-50">
+                <div className="fixed bottom-0 left-0 right-0 z-50 flex justify-around border-t bg-white px-1.5 py-1.5 xl:hidden">
                     {[
                         { key: 'dashboard', label: 'Home', aria: 'Store overview', icon: LayoutDashboard, action: () => setView('dashboard') },
                         { key: 'report', label: 'Sales', aria: "Today's sales report", icon: FileText, action: () => { setReportDate(todayDate); setView('report'); } },
@@ -9829,7 +9833,7 @@ const StoreDashboard: React.FC<{
                 </div>
 
                 {/* Main Content */}
-                <div ref={mainContentRef} className="flex-1 overflow-y-auto p-6 md:p-8 pb-24 md:pb-8">
+                <div ref={mainContentRef} className="min-w-0 flex-1 overflow-y-auto p-4 pb-24 sm:p-6 sm:pb-24 xl:p-8 xl:pb-8">
                     {view === 'dashboard' && (
                         <div className="space-y-6">
                             <div>
