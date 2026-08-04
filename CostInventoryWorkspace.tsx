@@ -451,6 +451,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
     const fallbackUnitCost = profile.contentQuantity > 0
       ? profile.currentPackPrice / profile.contentQuantity
       : 0;
+    const referenceUnitCost = row.openingUnitCost > 0 ? row.openingUnitCost : fallbackUnitCost;
     const adjustmentUnitCost = availableQuantity > 0
       ? availableValue / availableQuantity
       : (row.openingUnitCost || fallbackUnitCost);
@@ -469,6 +470,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
       closingValue,
       actualCost,
       closingUnitCost,
+      referenceUnitCost,
       wasteValue: row.wasteQuantity * closingUnitCost,
       actualUsage,
       invalid: actualUsage < 0 || row.wasteQuantity > Math.max(0, actualUsage) || actualCost < 0,
@@ -508,7 +510,8 @@ const CostInventoryWorkspace: React.FC<Props> = ({
   const ingredientCostInputs = useMemo(() => new Map(costBreakdown.map((row) => [
     row.ingredientId,
     {
-      unitCost: Number.isFinite(row.closingUnitCost) ? row.closingUnitCost : null,
+      unitCost: Number.isFinite(row.referenceUnitCost) ? row.referenceUnitCost : null,
+      actualUnitCost: Number.isFinite(row.closingUnitCost) ? row.closingUnitCost : null,
       actualUsage: Number.isFinite(row.actualUsage) ? row.actualUsage : null,
       wasteQuantity: inventoryRows[row.ingredientId]?.wasteQuantity ?? 0,
     },
@@ -574,6 +577,11 @@ const CostInventoryWorkspace: React.FC<Props> = ({
     1,
     ...excessCostDrivers.map((row) => row.varianceValue ?? 0),
   );
+  const varianceBreakdown = useMemo(() => theoreticalAnalysis.ingredientRows.reduce((totals, row) => ({
+    price: totals.price + (row.priceVarianceValue ?? 0),
+    waste: totals.waste + (row.wasteVarianceValue ?? 0),
+    usage: totals.usage + (row.operationalUsageVarianceValue ?? 0),
+  }), { price: 0, waste: 0, usage: 0 }), [theoreticalAnalysis.ingredientRows]);
 
   const seedPreview = useCallback(() => {
     const sampleIngredients = localIngredients.slice(0, 3);
@@ -1546,6 +1554,33 @@ const CostInventoryWorkspace: React.FC<Props> = ({
             </div>
 
             <div className="rounded-2xl border border-gray-200 bg-white p-5">
+              <div className="flex items-center gap-2">
+                <Gauge className="h-5 w-5" />
+                <h3 className="text-lg font-extrabold">Why Cost Changed</h3>
+              </div>
+              <p className="mt-1 text-sm text-gray-500">Separates supplier price changes, recorded waste, and the remaining usage difference from the recipe.</p>
+              {varianceAnalysisReady ? (
+                <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  {[
+                    { label: 'PRICE EFFECT', value: varianceBreakdown.price, help: 'Actual unit cost vs opening/reference cost' },
+                    { label: 'RECORDED WASTE', value: varianceBreakdown.waste, help: 'Waste quantity entered at month close' },
+                    { label: 'OTHER USAGE EFFECT', value: varianceBreakdown.usage, help: 'Portioning, count, transfer, or recipe gap' },
+                  ].map((item) => (
+                    <div key={item.label} className="rounded-xl border border-gray-200 p-4">
+                      <div className="text-[10px] font-black text-gray-400">{item.label}</div>
+                      <div className={`mt-2 text-xl font-black ${item.value > 0 ? 'text-red-600' : item.value < 0 ? 'text-emerald-700' : 'text-gray-900'}`}>
+                        {item.value > 0 ? '+' : ''}{store.currency} {formatAmount(item.value)}
+                      </div>
+                      <div className="mt-1 text-[11px] leading-relaxed text-gray-500">{item.help}</div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="mt-4 rounded-xl bg-amber-50 p-4 text-sm font-bold text-amber-900">Complete inventory and recipe coverage to separate the causes.</div>
+              )}
+            </div>
+
+            <div className="rounded-2xl border border-gray-200 bg-white p-5">
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <div className="flex items-center gap-2">
@@ -1575,6 +1610,11 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                 <div className="mt-5 space-y-4">
                   {excessCostDrivers.map((row, index) => {
                     const ingredient = ingredientById.get(row.ingredientId);
+                    const effects = [
+                      { label: 'Price', value: row.priceVarianceValue ?? 0 },
+                      { label: 'Waste', value: row.wasteVarianceValue ?? 0 },
+                      { label: 'Usage', value: row.operationalUsageVarianceValue ?? 0 },
+                    ].sort((left, right) => right.value - left.value);
                     return (
                       <div key={row.ingredientId}>
                         <div className="mb-1.5 flex items-end justify-between gap-3">
@@ -1593,7 +1633,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                           />
                         </div>
                         <div className="mt-1 text-right text-[10px] text-gray-400">
-                          Usage gap {row.usageVariance !== null && row.usageVariance > 0 ? '+' : ''}{formatAmount(row.usageVariance ?? 0, 3)} {ingredient?.unit ?? ''}
+                          Main cause: {effects[0].label} · Usage gap {row.usageVariance !== null && row.usageVariance > 0 ? '+' : ''}{formatAmount(row.usageVariance ?? 0, 3)} {ingredient?.unit ?? ''}
                         </div>
                       </div>
                     );
@@ -1626,7 +1666,10 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                       <th className="px-3 py-2 text-right">Recipe Usage</th>
                       <th className="px-3 py-2 text-right">Actual Usage</th>
                       <th className="px-3 py-2 text-right">Usage Gap</th>
-                      <th className="px-3 py-2 text-right">Cost Gap</th>
+                      <th className="px-3 py-2 text-right">Price Effect</th>
+                      <th className="px-3 py-2 text-right">Waste Effect</th>
+                      <th className="px-3 py-2 text-right">Other Usage</th>
+                      <th className="px-3 py-2 text-right">Total Gap</th>
                       <th className="px-3 py-2 text-right">Share of Actual Cost</th>
                       <th className="px-3 py-2">Check</th>
                     </tr>
@@ -1667,6 +1710,15 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                             )}
                           </td>
                           <td className="px-3 py-3 text-right font-bold">
+                            {row.priceVarianceValue === null ? '—' : `${row.priceVarianceValue > 0 ? '+' : ''}${store.currency} ${formatAmount(row.priceVarianceValue)}`}
+                          </td>
+                          <td className="px-3 py-3 text-right font-bold">
+                            {row.wasteVarianceValue === null ? '—' : `${row.wasteVarianceValue > 0 ? '+' : ''}${store.currency} ${formatAmount(row.wasteVarianceValue)}`}
+                          </td>
+                          <td className="px-3 py-3 text-right font-bold">
+                            {row.operationalUsageVarianceValue === null ? '—' : `${row.operationalUsageVarianceValue > 0 ? '+' : ''}${store.currency} ${formatAmount(row.operationalUsageVarianceValue)}`}
+                          </td>
+                          <td className="px-3 py-3 text-right font-bold">
                             {row.varianceValue === null ? '—' : `${row.varianceValue > 0 ? '+' : ''}${store.currency} ${formatAmount(row.varianceValue)}`}
                           </td>
                           <td className="px-3 py-3 text-right">
@@ -1677,7 +1729,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                       );
                     })}
                     {theoreticalAnalysis.ingredientRows.length === 0 && (
-                      <tr><td colSpan={7} className="px-3 py-8 text-center text-sm text-gray-400">Enter sales quantities and menu recipes to view this analysis.</td></tr>
+                      <tr><td colSpan={10} className="px-3 py-8 text-center text-sm text-gray-400">Enter sales quantities and menu recipes to view this analysis.</td></tr>
                     )}
                   </tbody>
                 </table>

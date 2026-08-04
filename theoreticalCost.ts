@@ -2,6 +2,7 @@ import type { Menu, Sale, SetMenu } from './types';
 
 export type IngredientCostInput = {
   unitCost: number | null;
+  actualUnitCost?: number | null;
   actualUsage: number | null;
   wasteQuantity: number;
 };
@@ -41,8 +42,12 @@ export type IngredientUsageRow = {
   usageVariance: number | null;
   variancePercentage: number | null;
   unitCost: number | null;
+  actualUnitCost: number | null;
   theoreticalCost: number | null;
   varianceValue: number | null;
+  priceVarianceValue: number | null;
+  wasteVarianceValue: number | null;
+  operationalUsageVarianceValue: number | null;
   wasteQuantity: number;
 };
 
@@ -269,7 +274,22 @@ export function buildTheoreticalCostAnalysis({
       const input = ingredientCosts.get(ingredientId);
       const actualUsage = input?.actualUsage ?? null;
       const unitCost = input?.unitCost ?? null;
+      const actualUnitCost = input?.actualUnitCost ?? unitCost;
       const usageVariance = actualUsage === null ? null : actualUsage - theoreticalUsage;
+      const priceVarianceValue = unitCost === null || actualUnitCost === null || actualUsage === null
+        ? null
+        : actualUsage * (actualUnitCost - unitCost);
+      const wasteVarianceValue = unitCost === null || actualUsage === null
+        ? null
+        : Math.min(Math.max(0, input?.wasteQuantity ?? 0), Math.max(0, actualUsage)) * unitCost;
+      const operationalUsageVarianceValue = unitCost === null || usageVariance === null || wasteVarianceValue === null
+        ? null
+        : (usageVariance * unitCost) - wasteVarianceValue;
+      const varianceValue = priceVarianceValue === null
+        || wasteVarianceValue === null
+        || operationalUsageVarianceValue === null
+        ? null
+        : priceVarianceValue + wasteVarianceValue + operationalUsageVarianceValue;
       return {
         ingredientId,
         theoreticalUsage,
@@ -279,8 +299,12 @@ export function buildTheoreticalCostAnalysis({
           ? (usageVariance / theoreticalUsage) * 100
           : null,
         unitCost,
+        actualUnitCost,
         theoreticalCost: unitCost === null ? null : theoreticalUsage * unitCost,
-        varianceValue: unitCost === null || usageVariance === null ? null : usageVariance * unitCost,
+        varianceValue,
+        priceVarianceValue,
+        wasteVarianceValue,
+        operationalUsageVarianceValue,
         wasteQuantity: input?.wasteQuantity ?? 0,
       };
     })
