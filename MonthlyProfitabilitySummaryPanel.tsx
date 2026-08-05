@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { Store } from './types';
 import { supabase } from './supabaseClient';
+import AIProfitabilityAdvisor from './AIProfitabilityAdvisor';
 
 type ProfitabilitySummary = {
   currency: string;
@@ -492,6 +493,15 @@ const MonthlyProfitabilitySummaryPanel: React.FC<Props> = ({
               </div>
             </div>
           </div>
+
+          {mode === 'hq' && summary ? (
+            <AIProfitabilityAdvisor
+              store={store}
+              monthStart={monthStart}
+              summary={summary}
+              preview={preview}
+            />
+          ) : null}
         </div>
       )}
 
