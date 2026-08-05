@@ -157,7 +157,8 @@ const ProfitabilityImportPanel: React.FC<Props> = ({
   const mappedTargets = targets.filter((target) => mapping[target]?.columnIndex !== null);
   const calculationValid = mappedTargets.length > 0
     && mappedTargets.every((target) => calculation.results[target]?.numericCount)
-    && Object.values(calculation.totals).every((value) => value !== undefined && value >= 0)
+    && (Object.values(calculation.totals) as Array<number | undefined>)
+      .every((value) => value !== undefined && value >= 0)
     && (
       calculation.totals.guest_count === undefined
       || Number.isInteger(calculation.totals.guest_count)

@@ -223,7 +223,9 @@ as $$
   limit 1;
 $$;
 
-grant execute on function public.find_store_for_onboarding(text, text, text, text) to authenticated;
+revoke all on function public.find_store_for_onboarding(text, text, text, text)
+from public, anon, authenticated;
+grant execute on function public.find_store_for_onboarding(text, text, text, text) to service_role;
 
 create or replace function public.merge_stores(
   p_source_id text,
@@ -268,18 +270,26 @@ grant execute on function public.merge_stores(text, text) to authenticated;
 
 create or replace function public.list_store_accounts(p_store_id text)
 returns table (user_id uuid, email text, name text, store_id text)
-language sql
+language plpgsql
 stable
 security definer
 set search_path = public
 as $$
+begin
+  if not public.is_hq() then
+    raise exception 'Not authorized';
+  end if;
+
+  return query
   select u.user_id, u.email, u.name, u.store_id
   from public.app_users u
   where u.store_id = p_store_id
   order by u.email;
+end;
 $$;
 
-grant execute on function public.list_store_accounts(text) to authenticated;
+revoke all on function public.list_store_accounts(text) from public, anon;
+grant execute on function public.list_store_accounts(text) to authenticated, service_role;
 
 create or replace function public.link_account_to_store(
   p_email text,
@@ -362,35 +372,69 @@ on public.app_users for select
 using (user_id = auth.uid() or public.is_hq());
 
 drop policy if exists "app_users_insert_self" on public.app_users;
+drop policy if exists "app_users_upsert_own" on public.app_users;
 create policy "app_users_insert_self"
 on public.app_users for insert
+to authenticated
 with check (
-  (
-    coalesce(user_id::text, '') = public.current_auth_uid_text()
-    or lower(trim(coalesce(email, ''))) = public.current_auth_email()
-  )
+  coalesce(user_id::text, '') = public.current_auth_uid_text()
+  and lower(trim(coalesce(email, ''))) = public.current_auth_email()
   and (
-    role = 'OWNER'
+    (
+      role = 'OWNER'
+      and store_id is null
+    )
     or (
       role = 'HQ'
+      and store_id is null
       and public.is_authorized_hq_email(email)
       and public.is_authorized_hq_email(public.current_auth_email())
     )
   )
 );
 
+create or replace function public.guard_owner_app_user_assignment()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+begin
+  if public.is_hq() then
+    return new;
+  end if;
+
+  if new.user_id is distinct from old.user_id
+    or lower(trim(new.email)) is distinct from lower(trim(old.email))
+    or new.role is distinct from old.role
+    or new.store_id is distinct from old.store_id
+  then
+    raise exception 'Store assignment and account role can only be changed by HQ.';
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists app_users_guard_owner_assignment on public.app_users;
+create trigger app_users_guard_owner_assignment
+before update on public.app_users
+for each row execute function public.guard_owner_app_user_assignment();
+
+revoke all on function public.guard_owner_app_user_assignment() from public, anon, authenticated;
+grant execute on function public.guard_owner_app_user_assignment() to service_role;
+
 drop policy if exists "app_users_update_self" on public.app_users;
+drop policy if exists "app_users_update_own" on public.app_users;
+drop policy if exists "app_users_update_own_check" on public.app_users;
 create policy "app_users_update_self"
 on public.app_users for update
+to authenticated
 using (
   coalesce(user_id::text, '') = public.current_auth_uid_text()
-  or lower(trim(coalesce(email, ''))) = public.current_auth_email()
 )
 with check (
-  (
-    coalesce(user_id::text, '') = public.current_auth_uid_text()
-    or lower(trim(coalesce(email, ''))) = public.current_auth_email()
-  )
+  coalesce(user_id::text, '') = public.current_auth_uid_text()
+  and lower(trim(coalesce(email, ''))) = public.current_auth_email()
   and (
     role = 'OWNER'
     or (
@@ -432,20 +476,26 @@ with check (public.is_hq());
 
 -- stores: HQ all; OWNER only their store
 drop policy if exists "stores_select_hq_or_own" on public.stores;
+drop policy if exists "stores_select_own" on public.stores;
 create policy "stores_select_hq_or_own"
 on public.stores for select
 using (public.is_hq() or id = public.current_store_id());
 
 drop policy if exists "stores_write_hq_or_own" on public.stores;
-create policy "stores_write_hq_or_own"
+drop policy if exists "stores_insert_own_email" on public.stores;
+drop policy if exists "stores_insert_hq" on public.stores;
+create policy "stores_insert_hq"
 on public.stores for insert
-with check (public.is_hq() or id = public.current_store_id());
+to authenticated
+with check (public.is_hq());
 
 drop policy if exists "stores_update_hq_or_own" on public.stores;
-create policy "stores_update_hq_or_own"
+drop policy if exists "stores_update_hq" on public.stores;
+create policy "stores_update_hq"
 on public.stores for update
-using (public.is_hq() or id = public.current_store_id())
-with check (public.is_hq() or id = public.current_store_id());
+to authenticated
+using (public.is_hq())
+with check (public.is_hq());
 
 drop policy if exists "stores_delete_hq" on public.stores;
 create policy "stores_delete_hq"

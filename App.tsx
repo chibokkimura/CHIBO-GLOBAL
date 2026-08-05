@@ -333,17 +333,17 @@ async function getMyAppUser(): Promise<AppUserRow | null> {
   return (data as any) ?? null;
 }
 
-async function upsertMyOwnerProfile(params: { name: string; email: string; storeId: string }) {
+async function createMyPendingOwnerProfile(params: { name: string; email: string }) {
   const { data: authData } = await supabase.auth.getUser();
   const uid = authData.user?.id;
   if (!uid) throw new Error('No auth user');
 
-  const { error } = await supabase.from('app_users').upsert({
+  const { error } = await supabase.from('app_users').insert({
     user_id: uid,
     email: params.email,
     name: params.name,
     role: 'OWNER',
-    store_id: params.storeId,
+    store_id: null,
   });
 
   if (error) throw error;
@@ -4146,13 +4146,14 @@ const SalesReporter: React.FC<{
 
     setCheckingMonthLock(true);
     const monthStart = `${date.slice(0, 7)}-01`;
-    void supabase
-      .from('monthly_close_periods')
-      .select('status')
-      .eq('store_id', store.id)
-      .eq('month_start', monthStart)
-      .maybeSingle()
-      .then(({ data, error }) => {
+    void (async () => {
+      try {
+        const { data, error } = await supabase
+          .from('monthly_close_periods')
+          .select('status')
+          .eq('store_id', store.id)
+          .eq('month_start', monthStart)
+          .maybeSingle();
         if (!active) return;
         if (error) {
           console.error('Failed to check monthly close lock', error);
@@ -4161,10 +4162,10 @@ const SalesReporter: React.FC<{
           return;
         }
         setCloseStatus((data?.status as 'draft' | 'submitted' | 'approved' | 'reopened' | undefined) ?? 'draft');
-      })
-      .finally(() => {
+      } finally {
         if (active) setCheckingMonthLock(false);
-      });
+      }
+    })();
 
     return () => {
       active = false;
@@ -6757,7 +6758,7 @@ const HQStoreDetail: React.FC<{
     useEffect(() => {
         let cancelled = false;
         const loadOwners = async () => {
-            if (isLocalPreview()) {
+            if (isLocalHqPreviewMode()) {
                 setOwnersError(null);
                 setOwners(store.ownerEmail ? [{
                     email: store.ownerEmail,
@@ -8095,9 +8096,9 @@ const HQStoreDetail: React.FC<{
                     )}
 
                     <div className="bg-white p-6 rounded-2xl shadow-sm border">
-                        <h2 className="text-xl font-bold mb-2">Link Account to This Store</h2>
+                        <h2 className="text-xl font-bold mb-2">Approve Account for This Store</h2>
                         <p className="text-xs text-gray-500 mb-4">
-                            Use this when a manager created the wrong store. This links their account to this store without touching existing data.
+                            Enter the email after the owner signs in and submits an access request. Only HQ can connect an account to an approved store.
                         </p>
                         <div className="flex flex-col md:flex-row gap-3">
                             <input
@@ -8112,13 +8113,13 @@ const HQStoreDetail: React.FC<{
                                 disabled={linkBusy}
                                 className="px-4 py-2 rounded-xl bg-black text-white text-sm font-bold disabled:opacity-50"
                             >
-                                {linkBusy ? 'Linking...' : 'Link Account'}
+                                {linkBusy ? 'Approving...' : 'Approve Account'}
                             </button>
                         </div>
                         {linkError && <div className="mt-3 text-xs text-red-600">{linkError}</div>}
                         {linkSuccess && <div className="mt-3 text-xs text-emerald-600">{linkSuccess}</div>}
                         <div className="mt-3 text-[10px] text-gray-400">
-                            Note: The user must sign in at least once so their account exists.
+                            The user must sign in once and submit an access request before approval.
                         </div>
                         {owners.length > 0 && (
                             <div className="mt-5 space-y-2">
@@ -8348,6 +8349,7 @@ const HQDashboard: React.FC<{
   onUpdateGlobalConfig: (key: string, values: any) => void;
   onUpdateStore: (store: Store) => void;
   onSaveStoreStocks: (storeId: string, rows: { ingredientName: string; unit: string; par: number; reorder: number }[]) => void;
+  onMergeStores: (sourceId: string, targetId: string) => Promise<void>;
   onDeleteStore: (storeId: string) => Promise<void>;
   onUpdateMenu: (menu: Menu) => void;
   onCreateMenu: (menu: Menu) => void;
@@ -8357,7 +8359,7 @@ const HQDashboard: React.FC<{
   onDeleteSetMenu: (id: string) => void;
   onUpdateEmployees: (storeId: string, employees: Employee[]) => void;
     onAddIngredient: (ing: Ingredient) => Promise<void> | void;
-}> = ({ user, onLogout, stores, sales, menus, setMenus, employees, ingredients, storeStocks, globalConfig, salesLookbackLabel, onLoadMoreSales, onUpdateGlobalConfig, onUpdateStore, onSaveStoreStocks, onDeleteStore, onUpdateMenu, onCreateMenu, onDeleteMenu, onUpdateSetMenu, onCreateSetMenu, onDeleteSetMenu, onUpdateEmployees, onAddIngredient }) => {
+}> = ({ user, onLogout, stores, sales, menus, setMenus, employees, ingredients, storeStocks, globalConfig, salesLookbackLabel, onLoadMoreSales, onUpdateGlobalConfig, onUpdateStore, onSaveStoreStocks, onMergeStores, onDeleteStore, onUpdateMenu, onCreateMenu, onDeleteMenu, onUpdateSetMenu, onCreateSetMenu, onDeleteSetMenu, onUpdateEmployees, onAddIngredient }) => {
   const [selectedStore, setSelectedStore] = useState<Store | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isSalesAnalyticsOpen, setIsSalesAnalyticsOpen] = useState(false);
@@ -8729,7 +8731,7 @@ const HQDashboard: React.FC<{
         onBack={closeHqStore}
         onUpdateStore={onUpdateStore}
         onSaveStoreStocks={onSaveStoreStocks}
-        onMergeStores={async (sourceId, targetId) => { await supabase.rpc('merge_stores', { p_source_id: sourceId, p_target_id: targetId }); await refreshAll(); }}
+        onMergeStores={onMergeStores}
         onDeleteStore={onDeleteStore}
         onUpdateMenu={onUpdateMenu}
         onCreateMenu={onCreateMenu}
@@ -10504,41 +10506,14 @@ const LoginScreen: React.FC = () => {
 
 
 
-const OnboardingScreen: React.FC<{
+const AccountAccessScreen: React.FC<{
   onDone: () => Promise<void>;
-  globalConfig: {
-    storeNames: string[];
-    countries: string[];
-    cities: string[];
-    currencies: string[];
-  };
-  globalConfigStatus: GlobalConfigLoadState;
-  globalConfigError: string | null;
-  onReload: () => void;
-}> = ({ onDone, globalConfig, globalConfigStatus, globalConfigError, onReload }) => {
+  profileExists?: boolean;
+}> = ({ onDone, profileExists = false }) => {
 
   const [name, setName] = useState('');
-  const [storeName, setStoreName] = useState('');
-  const [country, setCountry] = useState('South Korea');
-  const [city, setCity] = useState('Seoul');
-  const [currency, setCurrency] = useState('JPY');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  const configReady = globalConfigStatus === 'loaded';
-
-  useEffect(() => {
-    if (!configReady) return;
-    if (globalConfig.countries.length > 0 && !globalConfig.countries.includes(country)) {
-      setCountry(globalConfig.countries[0]);
-    }
-    if (globalConfig.cities.length > 0 && !globalConfig.cities.includes(city)) {
-      setCity(globalConfig.cities[0]);
-    }
-    if (globalConfig.currencies.length > 0 && !globalConfig.currencies.includes(currency)) {
-      setCurrency(globalConfig.currencies[0]);
-    }
-  }, [configReady, globalConfig, country, city, currency]);
 
   const withTimeout = async <T,>(promise: Promise<T>, ms: number, label: string): Promise<T> => {
     let timer: number | undefined;
@@ -10559,12 +10534,6 @@ const OnboardingScreen: React.FC<{
       setLoading(true);
       setError(null);
 
-      if (!storeName || !country || !city || !currency) {
-        setError('Please select store name, country, city, and currency.');
-        setLoading(false);
-        return;
-      }
-
       const { data: authData } = await withTimeout(
         supabase.auth.getUser(),
         8000,
@@ -10572,65 +10541,28 @@ const OnboardingScreen: React.FC<{
       );
       const email = authData.user?.email;
       if (!email) throw new Error('No email in session');
-
-      // 0) Check for existing store with same selections (RPC bypasses RLS)
-      const { data: existingRows, error: existingErr } = await withTimeout(
-        supabase.rpc('find_store_for_onboarding', {
-          p_name: storeName,
-          p_country: country,
-          p_city: city,
-          p_currency: currency,
-        }),
-        10000,
-        'Find store'
-      );
-      if (existingErr) throw existingErr;
-      const existingStoreId = Array.isArray(existingRows) ? existingRows[0]?.id : null;
-
-      if (existingStoreId) {
-        // Join existing store
-        await withTimeout(
-          upsertMyOwnerProfile({ name: name || email, email, storeId: existingStoreId }),
-          10000,
-          'Join existing store'
-        );
-        await withTimeout(onDone(), 12000, 'Sync data');
-        return;
-      }
-
-      const storeId = `S_${crypto.randomUUID()}`;
-
-      // 1) Create owner profile first so RLS allows store insert (current_store_id matches)
       await withTimeout(
-        upsertMyOwnerProfile({ name: name || email, email, storeId }),
+        createMyPendingOwnerProfile({ name: name.trim() || email, email }),
         10000,
-        'Create owner profile'
+        'Register account request'
       );
-
-      // 2) Create store record
-      const { error: storeErr } = await withTimeout(
-        supabase.from('stores').insert({
-          id: storeId,
-          name: storeName,
-          country,
-          city,
-          owner_email: email,
-          currency,
-        }),
-        10000,
-        'Create store'
-      );
-
-      if (storeErr) {
-        // rollback store_id on failure to avoid dangling reference
-        await supabase.from('app_users').update({ store_id: null }).eq('user_id', authData.user?.id);
-        throw storeErr;
-      }
-
       await withTimeout(onDone(), 12000, 'Sync data');
     } catch (e: any) {
-      console.error('Onboarding failed', e);
-      setError(e?.message ?? 'Failed to onboard');
+      console.error('Account request failed', e);
+      setError(e?.message ?? 'Failed to register the account request.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const checkApproval = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      await withTimeout(onDone(), 12000, 'Check approval');
+    } catch (e: any) {
+      console.error('Approval check failed', e);
+      setError(e?.message ?? 'Failed to check approval.');
     } finally {
       setLoading(false);
     }
@@ -10639,78 +10571,38 @@ const OnboardingScreen: React.FC<{
   return (
     <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
       <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-xl">
-        <div className="text-2xl font-extrabold mb-2">Initial Setup</div>
-        <div className="text-gray-500 mb-6">Create your OWNER profile and store.</div>
-
-        {globalConfigStatus !== 'loaded' && (
-          <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700 flex items-center justify-between gap-3">
-            <span>
-              {globalConfigStatus === 'loading'
-                ? 'Loading global settings...'
-                : (globalConfigError ?? 'Failed to load global settings.')}
-            </span>
-            <button
-              type="button"
-              onClick={onReload}
-              className="px-3 py-1 rounded-lg border border-amber-300 bg-white text-amber-700 font-semibold hover:bg-amber-100 transition"
-            >
-              Retry
-            </button>
-          </div>
-        )}
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <label className="text-sm font-semibold text-gray-700">Display Name</label>
-            <input value={name} onChange={(e) => setName(e.target.value)} className="mt-1 w-full px-3 py-2 rounded-xl border border-gray-200" placeholder="e.g. Keito Kimura" />
-          </div>
-          <div>
-            <label className="text-sm font-semibold text-gray-700">Store Name</label>
-          <select value={storeName} onChange={(e) => setStoreName(e.target.value)} disabled={!configReady} className="mt-1 w-full px-3 py-2 rounded-xl border border-gray-200 disabled:opacity-50">
-  <option value="">Select approved name...</option>
-  {globalConfig.storeNames.map(name => (
-    <option key={name} value={name}>{name}</option>
-  ))}
-</select>
-
-<select value={country} onChange={(e) => setCountry(e.target.value)} disabled={!configReady} className="mt-1 w-full px-3 py-2 rounded-xl border border-gray-200 disabled:opacity-50">
-  <option value="">Select Country</option>
-  {globalConfig.countries.map(c => (
-    <option key={c} value={c}>{c}</option>
-  ))}
-</select>
-
-<select value={city} onChange={(e) => setCity(e.target.value)} disabled={!configReady} className="mt-1 w-full px-3 py-2 rounded-xl border border-gray-200 disabled:opacity-50">
-  <option value="">Select City</option>
-  {globalConfig.cities.map(c => (
-    <option key={c} value={c}>{c}</option>
-  ))}
-</select>
-
-<select value={currency} onChange={(e) => setCurrency(e.target.value)} disabled={!configReady} className="mt-1 w-full px-3 py-2 rounded-xl border border-gray-200 disabled:opacity-50">
-  <option value="">Select Currency</option>
-  {globalConfig.currencies.map(c => (
-    <option key={c} value={c}>{c}</option>
-  ))}
-</select>
-
-          </div>
-
+        <div className="text-2xl font-extrabold mb-2">{profileExists ? 'Waiting for HQ Approval' : 'Request Store Access'}</div>
+        <div className="text-gray-500 mb-6 leading-relaxed">
+          {profileExists
+            ? 'Your account request is registered. HQ must connect this email to an approved store before store data becomes available.'
+            : 'Stores, countries and currencies are registered by HQ. Submit this account request, then ask HQ to connect your email to the approved store.'}
         </div>
+
+        {!profileExists && (
+        <>
+        <label className="text-sm font-semibold text-gray-700">Your name</label>
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          className="mt-1 w-full px-3 py-3 rounded-xl border border-gray-200"
+          placeholder="e.g. Store manager name"
+        />
+        </>
+        )}
 
         {error && <div className="mt-4 text-sm text-red-600">{error}</div>}
 
         <div className="mt-6 flex gap-3">
-          <button onClick={submit} disabled={loading || !storeName || !configReady} className="px-4 py-2 rounded-xl bg-black text-white font-semibold disabled:opacity-50">
-            {loading ? 'Creating...' : 'Create'}
+          <button onClick={profileExists ? checkApproval : submit} disabled={loading} className="px-4 py-3 rounded-xl bg-black text-white font-semibold disabled:opacity-50">
+            {loading ? (profileExists ? 'Checking...' : 'Registering...') : profileExists ? 'Check Approval' : 'Request Access'}
           </button>
-          <button onClick={() => signOut()} className="px-4 py-2 rounded-xl border border-gray-200 hover:bg-gray-50 transition font-semibold">
+          <button onClick={() => signOut()} className="px-4 py-3 rounded-xl border border-gray-200 hover:bg-gray-50 transition font-semibold">
             Sign Out
           </button>
         </div>
 
-        <div className="mt-6 text-xs text-gray-400 leading-relaxed">
-          For HQ accounts, manually registering role=HQ in app_users is the most stable method.
+        <div className="mt-6 rounded-xl border border-blue-200 bg-blue-50 p-3 text-xs text-blue-800 leading-relaxed">
+          This account cannot create or join a store by itself. HQ approval is required before store data becomes available.
         </div>
       </div>
     </div>
@@ -10862,50 +10754,50 @@ VITE_SUPABASE_ANON_KEY=...`}</div>
     const errors: string[] = [];
 
     const stRes = results[0];
-    if (stRes.status === 'fulfilled' && canApplyScopeResult('stores', scopeSnapshot)) {
-      setStores(stRes.value);
+    if (stRes.status === 'fulfilled') {
+      if (canApplyScopeResult('stores', scopeSnapshot)) setStores(stRes.value);
     } else {
       errors.push(stRes.reason?.message ?? 'Failed to load stores');
     }
 
     const ingRes = results[1];
-    if (ingRes.status === 'fulfilled' && canApplyScopeResult('ingredients', scopeSnapshot)) {
-      setIngredients(ingRes.value);
+    if (ingRes.status === 'fulfilled') {
+      if (canApplyScopeResult('ingredients', scopeSnapshot)) setIngredients(ingRes.value);
     } else {
       errors.push(ingRes.reason?.message ?? 'Failed to load ingredients');
     }
 
     const empRes = results[2];
-    if (empRes.status === 'fulfilled' && canApplyScopeResult('employees', scopeSnapshot)) {
-      setEmployees(empRes.value);
+    if (empRes.status === 'fulfilled') {
+      if (canApplyScopeResult('employees', scopeSnapshot)) setEmployees(empRes.value);
     } else {
       errors.push(empRes.reason?.message ?? 'Failed to load employees');
     }
 
     const mnRes = results[3];
-    if (mnRes.status === 'fulfilled' && canApplyScopeResult('menus', scopeSnapshot)) {
-      setMenuRows(mnRes.value);
+    if (mnRes.status === 'fulfilled') {
+      if (canApplyScopeResult('menus', scopeSnapshot)) setMenuRows(mnRes.value);
     } else {
       errors.push(mnRes.reason?.message ?? 'Failed to load menus');
     }
 
     const smRes = results[4];
-    if (smRes.status === 'fulfilled' && canApplyScopeResult('setMenus', scopeSnapshot)) {
-      setSetMenus(smRes.value);
+    if (smRes.status === 'fulfilled') {
+      if (canApplyScopeResult('setMenus', scopeSnapshot)) setSetMenus(smRes.value);
     } else {
       errors.push(smRes.reason?.message ?? 'Failed to load set menus');
     }
 
     const slRes = results[5];
-    if (slRes.status === 'fulfilled' && canApplyScopeResult('sales', scopeSnapshot)) {
-      setSales(slRes.value);
+    if (slRes.status === 'fulfilled') {
+      if (canApplyScopeResult('sales', scopeSnapshot)) setSales(slRes.value);
     } else {
       errors.push(slRes.reason?.message ?? 'Failed to load sales');
     }
 
     const ssRes = results[6];
-    if (ssRes.status === 'fulfilled' && canApplyScopeResult('storeStocks', scopeSnapshot)) {
-      setStoreStocks(ssRes.value);
+    if (ssRes.status === 'fulfilled') {
+      if (canApplyScopeResult('storeStocks', scopeSnapshot)) setStoreStocks(ssRes.value);
     } else {
       errors.push(ssRes.reason?.message ?? 'Failed to load store stock');
     }
@@ -10954,25 +10846,25 @@ VITE_SUPABASE_ANON_KEY=...`}</div>
     const tasks: Promise<void>[] = [];
 
     if (scopes.has('stores')) {
-      tasks.push(loadStores().then((rows) => { if (canApplyScopeResult('stores', scopeSnapshot)) setStores(rows); }).catch(e => errors.push(e?.message ?? 'Failed to load stores')));
+      tasks.push(loadStores().then((rows) => { if (canApplyScopeResult('stores', scopeSnapshot)) setStores(rows); }).catch(e => { errors.push(e?.message ?? 'Failed to load stores'); }));
     }
     if (scopes.has('ingredients')) {
-      tasks.push(loadIngredients().then((rows) => { if (canApplyScopeResult('ingredients', scopeSnapshot)) setIngredients(rows); }).catch(e => errors.push(e?.message ?? 'Failed to load ingredients')));
+      tasks.push(loadIngredients().then((rows) => { if (canApplyScopeResult('ingredients', scopeSnapshot)) setIngredients(rows); }).catch(e => { errors.push(e?.message ?? 'Failed to load ingredients'); }));
     }
     if (scopes.has('employees')) {
-      tasks.push(loadEmployees().then((rows) => { if (canApplyScopeResult('employees', scopeSnapshot)) setEmployees(rows); }).catch(e => errors.push(e?.message ?? 'Failed to load employees')));
+      tasks.push(loadEmployees().then((rows) => { if (canApplyScopeResult('employees', scopeSnapshot)) setEmployees(rows); }).catch(e => { errors.push(e?.message ?? 'Failed to load employees'); }));
     }
     if (scopes.has('menus')) {
-      tasks.push(loadMenus().then((rows) => { if (canApplyScopeResult('menus', scopeSnapshot)) setMenuRows(rows); }).catch(e => errors.push(e?.message ?? 'Failed to load menus')));
+      tasks.push(loadMenus().then((rows) => { if (canApplyScopeResult('menus', scopeSnapshot)) setMenuRows(rows); }).catch(e => { errors.push(e?.message ?? 'Failed to load menus'); }));
     }
     if (scopes.has('setMenus')) {
-      tasks.push(loadSetMenus().then((rows) => { if (canApplyScopeResult('setMenus', scopeSnapshot)) setSetMenus(rows); }).catch(e => errors.push(e?.message ?? 'Failed to load set menus')));
+      tasks.push(loadSetMenus().then((rows) => { if (canApplyScopeResult('setMenus', scopeSnapshot)) setSetMenus(rows); }).catch(e => { errors.push(e?.message ?? 'Failed to load set menus'); }));
     }
     if (scopes.has('sales')) {
-      tasks.push(loadSales(salesLookbackRef.current).then((rows) => { if (canApplyScopeResult('sales', scopeSnapshot)) setSales(rows); }).catch(e => errors.push(e?.message ?? 'Failed to load sales')));
+      tasks.push(loadSales(salesLookbackRef.current).then((rows) => { if (canApplyScopeResult('sales', scopeSnapshot)) setSales(rows); }).catch(e => { errors.push(e?.message ?? 'Failed to load sales'); }));
     }
     if (scopes.has('storeStocks')) {
-      tasks.push(loadStoreIngredientStocks().then((rows) => { if (canApplyScopeResult('storeStocks', scopeSnapshot)) setStoreStocks(rows); }).catch(e => errors.push(e?.message ?? 'Failed to load store stock')));
+      tasks.push(loadStoreIngredientStocks().then((rows) => { if (canApplyScopeResult('storeStocks', scopeSnapshot)) setStoreStocks(rows); }).catch(e => { errors.push(e?.message ?? 'Failed to load store stock'); }));
     }
     if (scopes.has('globalConfig')) {
       tasks.push(
@@ -11418,6 +11310,7 @@ if (localHqPreviewMode) {
       onUpdateGlobalConfig={() => {}}
       onUpdateStore={() => {}}
       onSaveStoreStocks={() => {}}
+      onMergeStores={async () => {}}
       onDeleteStore={async () => {}}
       onUpdateMenu={() => {}}
       onCreateMenu={() => {}}
@@ -11525,11 +11418,7 @@ if (!resolvedUser) {
     );
   }
   return (
-    <OnboardingScreen
-      globalConfig={globalConfig}
-      globalConfigStatus={globalConfigStatus}
-      globalConfigError={globalConfigError}
-      onReload={() => refreshAll()}
+    <AccountAccessScreen
       onDone={async () => {
         await refreshAll();
         await loadResolvedUser();
@@ -11592,6 +11481,14 @@ if (!resolvedUser) {
                   endScopeMutation(['storeStocks']);
                   schedulePartialRefresh(['storeStocks']);
                 }
+              }}
+              onMergeStores={async (sourceId, targetId) => {
+                const { error } = await supabase.rpc('merge_stores', {
+                  p_source_id: sourceId,
+                  p_target_id: targetId,
+                });
+                if (error) throw error;
+                await refreshAll();
               }}
               onDeleteStore={async (storeId) => {
                 setStores(prev => prev.filter(s => s.id !== storeId));
@@ -11708,11 +11605,8 @@ const myStore = stores.find(s => s.id === user.storeId);
 
 if (!myStore) {
   return (
-    <OnboardingScreen
-      globalConfig={globalConfig}
-      globalConfigStatus={globalConfigStatus}
-      globalConfigError={globalConfigError}
-      onReload={() => refreshAll()}
+    <AccountAccessScreen
+      profileExists
       onDone={async () => {
         await refreshAll();
         await loadResolvedUser();
@@ -11747,11 +11641,13 @@ if (!myStore) {
               if (s.items && s.items.length > 0) {
                 const standardIngredients = globalConfig.standardIngredients ?? [];
                 const standardSet = new Set(standardIngredients.map(si => si.name));
-                const standardMap = new Map(standardIngredients.map(si => [si.name, si]));
+                const standardMap = new Map<string, GlobalConfig['standardIngredients'][number]>(
+                  standardIngredients.map(si => [si.name, si]),
+                );
                 const storeMenus = menus.filter(m => m.storeId === s.storeId);
 
                 if (storeMenus.length > 0 && standardIngredients.length > 0) {
-                  const ingredientById = new Map(ingredients.map(i => [i.id, i]));
+                  const ingredientById = new Map<string, Ingredient>(ingredients.map(i => [i.id, i]));
                   const categories = globalConfig.categories ?? [];
                   const categoryUsageMap: Record<string, Record<string, number>> = {};
 
