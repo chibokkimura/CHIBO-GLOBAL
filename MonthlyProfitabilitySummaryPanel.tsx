@@ -13,6 +13,8 @@ import { Store } from './types';
 import { supabase } from './supabaseClient';
 import AIProfitabilityAdvisor from './AIProfitabilityAdvisor';
 
+const AI_ADVISOR_ENABLED = import.meta.env.VITE_AI_ADVISOR_ENABLED === 'true';
+
 type ProfitabilitySummary = {
   currency: string;
   reportedSales: number | null;
@@ -494,7 +496,7 @@ const MonthlyProfitabilitySummaryPanel: React.FC<Props> = ({
             </div>
           </div>
 
-          {mode === 'hq' && summary ? (
+          {AI_ADVISOR_ENABLED && mode === 'hq' && summary ? (
             <AIProfitabilityAdvisor
               store={store}
               monthStart={monthStart}
