@@ -162,7 +162,15 @@ const AIProfitabilityAdvisor: React.FC<Props> = ({ store, monthStart, summary, p
       const { data, error: invokeError } = await supabase.functions.invoke<AdvisorResponse>('profitability-advisor', {
         body: { store_id: store.id, month_start: monthStart, language },
       });
-      if (invokeError) throw invokeError;
+      if (invokeError) {
+        let message = invokeError.message;
+        const response = (invokeError as any)?.context;
+        if (response && typeof response.clone === 'function') {
+          const errorBody = await response.clone().json().catch(() => null);
+          if (typeof errorBody?.error === 'string') message = errorBody.error;
+        }
+        throw new Error(message);
+      }
       if (!data?.advice) throw new Error('The AI advice response was empty.');
       setResult(data);
     } catch (generateError: any) {

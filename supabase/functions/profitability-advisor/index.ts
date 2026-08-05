@@ -187,8 +187,8 @@ Deno.serve(async (request) => {
   ]);
   const dataError = storeResult.error || currentResult.error || previousResult.error || costResult.error;
   if (dataError) return jsonResponse(request, 500, { error: 'Failed to load the monthly analysis data.' });
-  if (!storeResult.data || storeResult.data.reporting_status !== 'active') {
-    return jsonResponse(request, 404, { error: 'The active store was not found.' });
+  if (!storeResult.data || !['active', 'test'].includes(storeResult.data.reporting_status)) {
+    return jsonResponse(request, 404, { error: 'The store was not found.' });
   }
   if (!currentResult.data?.profitability_ready) {
     return jsonResponse(request, 409, { error: 'Complete the monthly inputs and inventory close before generating AI advice.' });
@@ -202,6 +202,7 @@ Deno.serve(async (request) => {
       city: storeResult.data.city,
       country: storeResult.data.country,
       currency: storeResult.data.currency,
+      data_status: storeResult.data.reporting_status,
     },
     month_start: monthStart,
     current_month: compactSummary(currentResult.data),
@@ -257,6 +258,7 @@ Deno.serve(async (request) => {
     'Every priority must cite specific supplied numbers in evidence and propose a concrete next operational check.',
     'Do not invent savings, causes, forecasts, tax advice, accounting conclusions, staffing-by-shift findings, or recipe-level findings not present in the data.',
     'If prior-month data is unavailable, say that trend comparison is unavailable.',
+    'If store.data_status is test, clearly state that the result uses test data and must not be treated as an operating-store finding.',
     'Expected effect must be directional unless the supplied facts support a precise target gap.',
     'Keep the response concise enough for a monthly store review meeting.',
   ].join(' ');
@@ -295,6 +297,12 @@ Deno.serve(async (request) => {
   const responseBody = await openAiResponse.json().catch(() => ({})) as Record<string, unknown>;
   if (!openAiResponse.ok) {
     console.error('OpenAI request failed', openAiResponse.status, responseBody?.error);
+    const errorCode = typeof (responseBody as any)?.error?.code === 'string'
+      ? (responseBody as any).error.code
+      : '';
+    if (errorCode === 'insufficient_quota') {
+      return jsonResponse(request, 503, { error: 'OpenAI billing or usage quota is not active yet. HQ must enable API billing before generating advice.' });
+    }
     return jsonResponse(request, 502, { error: 'The AI service could not generate advice.' });
   }
   const outputText = extractOutputText(responseBody);
