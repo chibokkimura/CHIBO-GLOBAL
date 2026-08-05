@@ -77,6 +77,16 @@ type MonthlySalesBasis = {
   salesTaxRate: number;
 };
 
+type ProductSalesSourceMode = 'daily_reports' | 'monthly_pos';
+
+type MonthlyProductSalesBasis = {
+  sourceMode: ProductSalesSourceMode;
+  confirmed: boolean;
+  notes: string;
+  menuQuantities: Record<string, number>;
+  setMenuQuantities: Record<string, number>;
+};
+
 type WorkspaceSection = 'summary' | 'purchases' | 'inventory';
 type CloseStatus = 'draft' | 'submitted' | 'approved' | 'reopened';
 type CloseSnapshotMeta = {
@@ -237,6 +247,14 @@ const CostInventoryWorkspace: React.FC<Props> = ({
   const [previousClosingCosts, setPreviousClosingCosts] = useState<Record<string, number>>({});
   const [previousCostSummary, setPreviousCostSummary] = useState<PreviousCostSummary | null>(null);
   const [monthlySalesBasis, setMonthlySalesBasis] = useState<MonthlySalesBasis | null>(null);
+  const [monthlyProductSalesBasis, setMonthlyProductSalesBasis] = useState<MonthlyProductSalesBasis | null>(null);
+  const [monthlyProductSalesDraft, setMonthlyProductSalesDraft] = useState<MonthlyProductSalesBasis>({
+    sourceMode: 'daily_reports',
+    confirmed: false,
+    notes: '',
+    menuQuantities: {},
+    setMenuQuantities: {},
+  });
   const [loading, setLoading] = useState(true);
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -342,7 +360,60 @@ const CostInventoryWorkspace: React.FC<Props> = ({
   }, [lockedSnapshotPayload]);
   const analysisMenus = snapshotAnalysisData?.menus ?? menus;
   const analysisSetMenus = snapshotAnalysisData?.setMenus ?? setMenus;
-  const analysisSales = snapshotAnalysisData?.sales ?? sales;
+  const storeAnalysisMenus = useMemo(
+    () => analysisMenus.filter((menu) => menu.storeId === store.id),
+    [analysisMenus, store.id],
+  );
+  const storeAnalysisSetMenus = useMemo(
+    () => analysisSetMenus.filter((setMenu) => setMenu.storeId === store.id),
+    [analysisSetMenus, store.id],
+  );
+  const baseAnalysisSales = snapshotAnalysisData?.sales ?? sales;
+  const dailyProductQuantities = useMemo(() => {
+    const menuQuantities: Record<string, number> = {};
+    const setMenuQuantities: Record<string, number> = {};
+    baseAnalysisSales
+      .filter((sale) => sale.storeId === store.id && sale.date.startsWith(`${monthKey}-`) && !sale.isClosed)
+      .forEach((sale) => {
+        (sale.menuItems ?? []).forEach((item) => {
+          menuQuantities[item.menuId] = (menuQuantities[item.menuId] ?? 0) + Number(item.quantity || 0);
+        });
+        (sale.setItems ?? []).forEach((item) => {
+          setMenuQuantities[item.setMenuId] = (setMenuQuantities[item.setMenuId] ?? 0) + Number(item.quantity || 0);
+        });
+      });
+    return { menuQuantities, setMenuQuantities };
+  }, [baseAnalysisSales, monthKey, store.id]);
+  const analysisSales = useMemo(() => {
+    if (!monthlyProductSalesBasis?.confirmed || monthlyProductSalesBasis.sourceMode !== 'monthly_pos') {
+      return baseAnalysisSales;
+    }
+    const reportedMonthTotal = baseAnalysisSales
+      .filter((sale) => sale.storeId === store.id && sale.date.startsWith(`${monthKey}-`))
+      .reduce((sum, sale) => sum + Number(sale.totalAmount || 0), 0);
+    const syntheticMonthlySale: Sale = {
+      id: `monthly-pos-${store.id}-${monthKey}`,
+      storeId: store.id,
+      date: `${monthKey}-01`,
+      totalAmount: reportedMonthTotal,
+      items: [],
+      menuItems: storeAnalysisMenus.map((menu) => ({
+        menuId: menu.id,
+        quantity: monthlyProductSalesBasis.menuQuantities[menu.id] ?? 0,
+      })),
+      setItems: storeAnalysisSetMenus.map((setMenu) => ({
+        setMenuId: setMenu.id,
+        quantity: monthlyProductSalesBasis.setMenuQuantities[setMenu.id] ?? 0,
+      })),
+      isClosed: false,
+    };
+    return [
+      ...baseAnalysisSales.filter(
+        (sale) => !(sale.storeId === store.id && sale.date.startsWith(`${monthKey}-`)),
+      ),
+      syntheticMonthlySale,
+    ];
+  }, [baseAnalysisSales, monthKey, monthlyProductSalesBasis, store.id, storeAnalysisMenus, storeAnalysisSetMenus]);
 
   const showInputError = (message: string) => {
     setError(message);
@@ -582,6 +653,19 @@ const CostInventoryWorkspace: React.FC<Props> = ({
     waste: totals.waste + (row.wasteVarianceValue ?? 0),
     usage: totals.usage + (row.operationalUsageVarianceValue ?? 0),
   }), { price: 0, waste: 0, usage: 0 }), [theoreticalAnalysis.ingredientRows]);
+  const dailyReportedProductUnits = (Object.values(dailyProductQuantities.menuQuantities) as number[])
+    .reduce((sum, quantity) => sum + quantity, 0)
+    + (Object.values(dailyProductQuantities.setMenuQuantities) as number[])
+      .reduce((sum, quantity) => sum + quantity, 0);
+  const monthlyPosProductUnits = (Object.values(monthlyProductSalesDraft.menuQuantities) as number[])
+    .reduce((sum, quantity) => sum + (Number.isFinite(quantity) ? quantity : 0), 0)
+    + (Object.values(monthlyProductSalesDraft.setMenuQuantities) as number[])
+      .reduce((sum, quantity) => sum + (Number.isFinite(quantity) ? quantity : 0), 0);
+  const productSalesDraftDirty = !monthlyProductSalesBasis
+    || monthlyProductSalesDraft.sourceMode !== monthlyProductSalesBasis.sourceMode
+    || monthlyProductSalesDraft.notes !== monthlyProductSalesBasis.notes
+    || JSON.stringify(monthlyProductSalesDraft.menuQuantities) !== JSON.stringify(monthlyProductSalesBasis.menuQuantities)
+    || JSON.stringify(monthlyProductSalesDraft.setMenuQuantities) !== JSON.stringify(monthlyProductSalesBasis.setMenuQuantities);
 
   const seedPreview = useCallback(() => {
     const sampleIngredients = localIngredients.slice(0, 3);
@@ -660,6 +744,15 @@ const CostInventoryWorkspace: React.FC<Props> = ({
       inventoryComplete: true,
     });
     setMonthlySalesBasis(null);
+    const previewProductBasis: MonthlyProductSalesBasis = {
+      sourceMode: 'daily_reports',
+      confirmed: true,
+      notes: '',
+      menuQuantities: {},
+      setMenuQuantities: {},
+    };
+    setMonthlyProductSalesBasis(previewProductBasis);
+    setMonthlyProductSalesDraft(previewProductBasis);
   }, [localIngredients, monthKey, monthStart, store.currency, store.id]);
 
   const loadData = useCallback(async () => {
@@ -687,6 +780,8 @@ const CostInventoryWorkspace: React.FC<Props> = ({
         currentProfitabilityResult,
         closePeriodResult,
         snapshotResult,
+        productSalesSubmissionResult,
+        productSalesTotalsResult,
       ] = await Promise.all([
         supabase
           .from('store_ingredient_profiles')
@@ -740,6 +835,17 @@ const CostInventoryWorkspace: React.FC<Props> = ({
           .eq('store_id', store.id)
           .eq('month_start', monthStart)
           .order('revision', { ascending: false }),
+        supabase
+          .from('monthly_product_sales_submissions')
+          .select('source_mode,confirmed,notes')
+          .eq('store_id', store.id)
+          .eq('month_start', monthStart)
+          .maybeSingle(),
+        supabase
+          .from('monthly_product_sales_totals')
+          .select('product_type,product_id,quantity')
+          .eq('store_id', store.id)
+          .eq('month_start', monthStart),
       ]);
 
       const firstError = profileResult.error
@@ -750,7 +856,9 @@ const CostInventoryWorkspace: React.FC<Props> = ({
         || previousSummaryResult.error
         || currentProfitabilityResult.error
         || closePeriodResult.error
-        || snapshotResult.error;
+        || snapshotResult.error
+        || productSalesSubmissionResult.error
+        || productSalesTotalsResult.error;
       if (firstError) throw firstError;
 
       const nextCloseStatus = (closePeriodResult.data?.status as CloseStatus | undefined) ?? 'draft';
@@ -763,6 +871,11 @@ const CostInventoryWorkspace: React.FC<Props> = ({
       const inventorySourceRows = snapshotPayload?.inventory ?? inventoryResult.data ?? [];
       const controlRow = snapshotPayload?.costControl ?? controlResult.data;
       const profitabilityRow = snapshotPayload?.profitabilitySummary ?? currentProfitabilityResult.data;
+      const productSalesSubmission = snapshotPayload?.monthlyProductSalesSubmission
+        ?? productSalesSubmissionResult.data;
+      const productSalesTotals = snapshotPayload?.monthlyProductSalesTotals
+        ?? productSalesTotalsResult.data
+        ?? [];
 
       const nextProfiles = profileRows.map(mapProfile);
       const nextPreviousClosingCosts = Object.fromEntries(
@@ -818,6 +931,23 @@ const CostInventoryWorkspace: React.FC<Props> = ({
         salesTaxMode: (profitabilityRow.sales_tax_mode as MonthlySalesBasis['salesTaxMode'] | null) ?? 'excluded',
         salesTaxRate: Number(profitabilityRow.sales_tax_rate ?? 0),
       } : null);
+      const nextProductSalesBasis: MonthlyProductSalesBasis = {
+        sourceMode: productSalesSubmission?.source_mode === 'monthly_pos' ? 'monthly_pos' : 'daily_reports',
+        confirmed: Boolean(productSalesSubmission?.confirmed),
+        notes: productSalesSubmission?.notes ?? '',
+        menuQuantities: Object.fromEntries(
+          productSalesTotals
+            .filter((row: any) => row.product_type === 'menu')
+            .map((row: any) => [row.product_id, Number(row.quantity ?? 0)]),
+        ),
+        setMenuQuantities: Object.fromEntries(
+          productSalesTotals
+            .filter((row: any) => row.product_type === 'set_menu')
+            .map((row: any) => [row.product_id, Number(row.quantity ?? 0)]),
+        ),
+      };
+      setMonthlyProductSalesBasis(nextProductSalesBasis);
+      setMonthlyProductSalesDraft(nextProductSalesBasis);
       setCloseStatus(nextCloseStatus);
       setLockedSnapshotPayload(snapshotPayload);
       setLockedSnapshotMeta(matchingSnapshot ? {
@@ -836,6 +966,14 @@ const CostInventoryWorkspace: React.FC<Props> = ({
       setLockedSnapshotPayload(null);
       setLockedSnapshotMeta(null);
       setMonthlySalesBasis(null);
+      setMonthlyProductSalesBasis(null);
+      setMonthlyProductSalesDraft({
+        sourceMode: 'daily_reports',
+        confirmed: false,
+        notes: '',
+        menuQuantities: {},
+        setMenuQuantities: {},
+      });
     } finally {
       setLoading(false);
     }
@@ -899,6 +1037,93 @@ const CostInventoryWorkspace: React.FC<Props> = ({
       setNotice('Monthly cost settings saved.');
     } catch (saveError: any) {
       setError(saveError?.message ?? 'Failed to save monthly cost settings.');
+    } finally {
+      setSavingKey(null);
+    }
+  };
+
+  const selectProductSalesSource = (sourceMode: ProductSalesSourceMode) => {
+    if (!editable) return;
+    setMonthlyProductSalesDraft((current) => ({
+      ...current,
+      sourceMode,
+      confirmed: false,
+      menuQuantities: sourceMode === 'monthly_pos'
+        ? Object.fromEntries(storeAnalysisMenus.map((menu) => [
+          menu.id,
+          current.menuQuantities[menu.id] ?? dailyProductQuantities.menuQuantities[menu.id] ?? 0,
+        ]))
+        : current.menuQuantities,
+      setMenuQuantities: sourceMode === 'monthly_pos'
+        ? Object.fromEntries(storeAnalysisSetMenus.map((setMenu) => [
+          setMenu.id,
+          current.setMenuQuantities[setMenu.id] ?? dailyProductQuantities.setMenuQuantities[setMenu.id] ?? 0,
+        ]))
+        : current.setMenuQuantities,
+    }));
+  };
+
+  const saveMonthlyProductSales = async () => {
+    if (!editable) {
+      showInputError('This month is locked. HQ must reopen it before product quantities can be changed.');
+      return;
+    }
+
+    const rows = [
+      ...storeAnalysisMenus.map((menu) => ({
+        product_type: 'menu',
+        product_id: menu.id,
+        quantity: monthlyProductSalesDraft.menuQuantities[menu.id],
+      })),
+      ...storeAnalysisSetMenus.map((setMenu) => ({
+        product_type: 'set_menu',
+        product_id: setMenu.id,
+        quantity: monthlyProductSalesDraft.setMenuQuantities[setMenu.id],
+      })),
+    ];
+    if (monthlyProductSalesDraft.sourceMode === 'monthly_pos') {
+      if (rows.length === 0) {
+        showInputError('Register at least one menu or course before entering monthly POS quantities.');
+        return;
+      }
+      const invalidRow = rows.find((row) => (
+        !Number.isFinite(row.quantity)
+        || row.quantity < 0
+        || !Number.isInteger(row.quantity)
+      ));
+      if (invalidRow) {
+        showInputError('Enter a whole-number monthly quantity for every menu and course. Enter 0 when none were sold.');
+        return;
+      }
+    }
+
+    setSavingKey('monthly-product-sales');
+    setError(null);
+    setNotice(null);
+    try {
+      if (!preview) {
+        const { error: saveError } = await supabase.rpc('save_monthly_product_sales', {
+          p_store_id: store.id,
+          p_month_start: monthStart,
+          p_source_mode: monthlyProductSalesDraft.sourceMode,
+          p_rows: monthlyProductSalesDraft.sourceMode === 'monthly_pos' ? rows : [],
+          p_notes: monthlyProductSalesDraft.notes.trim() || null,
+        });
+        if (saveError) throw saveError;
+      }
+      const savedBasis: MonthlyProductSalesBasis = {
+        ...monthlyProductSalesDraft,
+        confirmed: true,
+      };
+      setMonthlyProductSalesBasis(savedBasis);
+      setMonthlyProductSalesDraft(savedBasis);
+      setNotice(
+        savedBasis.sourceMode === 'monthly_pos'
+          ? 'Monthly POS menu and course quantities saved. Daily sales amounts were not changed.'
+          : 'Daily sales reports are now the source for menu and course quantities.',
+      );
+    } catch (saveError: any) {
+      showInputError(saveError?.message ?? 'Failed to save monthly product quantities.');
     } finally {
       setSavingKey(null);
     }
@@ -1298,6 +1523,169 @@ const CostInventoryWorkspace: React.FC<Props> = ({
 
       {activeSection === 'summary' && (
         <>
+          <section className="rounded-2xl border border-gray-200 bg-white p-5">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+              <div>
+                <div className="text-xs font-black tracking-[0.12em] text-gray-400">PRODUCT SALES QUANTITIES</div>
+                <h3 className="mt-1 text-xl font-extrabold">Choose the source used for recipe-cost analysis</h3>
+                <p className="mt-1 max-w-3xl text-sm leading-6 text-gray-500">
+                  This changes only menu and course quantities used for theoretical cost. It never changes the daily sales amount.
+                </p>
+              </div>
+              <span className={`w-fit rounded-full px-3 py-2 text-xs font-extrabold ${
+                monthlyProductSalesBasis?.confirmed && !productSalesDraftDirty
+                  ? 'bg-emerald-100 text-emerald-800'
+                  : 'bg-amber-100 text-amber-900'
+              }`}>
+                {monthlyProductSalesBasis?.confirmed && !productSalesDraftDirty
+                  ? 'SOURCE CONFIRMED'
+                  : productSalesDraftDirty
+                    ? 'UNSAVED CHANGES'
+                    : 'CONFIRM FOR ANALYSIS'}
+              </span>
+            </div>
+
+            <div className="mt-5 grid gap-3 md:grid-cols-2">
+              <button
+                type="button"
+                disabled={!editable}
+                onClick={() => selectProductSalesSource('daily_reports')}
+                className={`min-h-24 rounded-2xl border p-4 text-left transition disabled:cursor-default ${
+                  monthlyProductSalesDraft.sourceMode === 'daily_reports'
+                    ? 'border-gray-950 bg-gray-950 text-white'
+                    : 'border-gray-200 bg-white hover:border-gray-400'
+                }`}
+              >
+                <div className="text-sm font-extrabold">Use daily sales reports</div>
+                <div className={`mt-1 text-xs leading-5 ${monthlyProductSalesDraft.sourceMode === 'daily_reports' ? 'text-gray-300' : 'text-gray-500'}`}>
+                  For stores that enter menu and course quantities with each daily report.
+                </div>
+                <div className="mt-3 text-lg font-black">{formatAmount(dailyReportedProductUnits, 0)} recorded units</div>
+              </button>
+              <button
+                type="button"
+                disabled={!editable}
+                onClick={() => selectProductSalesSource('monthly_pos')}
+                className={`min-h-24 rounded-2xl border p-4 text-left transition disabled:cursor-default ${
+                  monthlyProductSalesDraft.sourceMode === 'monthly_pos'
+                    ? 'border-gray-950 bg-gray-950 text-white'
+                    : 'border-gray-200 bg-white hover:border-gray-400'
+                }`}
+              >
+                <div className="text-sm font-extrabold">Enter monthly POS totals</div>
+                <div className={`mt-1 text-xs leading-5 ${monthlyProductSalesDraft.sourceMode === 'monthly_pos' ? 'text-gray-300' : 'text-gray-500'}`}>
+                  For stores that have one month-end POS product report instead of daily item quantities.
+                </div>
+                <div className="mt-3 text-lg font-black">{formatAmount(monthlyPosProductUnits, 0)} entered units</div>
+              </button>
+            </div>
+
+            {monthlyProductSalesDraft.sourceMode === 'monthly_pos' && (
+              <div className="mt-5 space-y-5 rounded-2xl bg-gray-50 p-4">
+                <div className="rounded-xl border border-blue-200 bg-blue-50 p-3 text-xs font-bold leading-5 text-blue-900">
+                  Copy the quantity from the POS monthly product report. Enter 0 for every item with no sales. Saving these totals does not create or edit daily reports.
+                </div>
+
+                <div>
+                  <div className="mb-2 text-xs font-black tracking-[0.1em] text-gray-500">INDIVIDUAL MENUS</div>
+                  <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                    {storeAnalysisMenus.map((menu) => (
+                      <label key={menu.id} className="rounded-xl border border-gray-200 bg-white p-3 text-sm font-bold">
+                        <span className="block truncate" title={menu.name}>{menu.name}</span>
+                        <span className="mt-0.5 block text-[11px] font-normal text-gray-400">{store.currency} {formatAmount(menu.price)}</span>
+                        <input
+                          type="number"
+                          inputMode="numeric"
+                          min="0"
+                          step="1"
+                          disabled={!editable}
+                          value={Number.isFinite(monthlyProductSalesDraft.menuQuantities[menu.id])
+                            ? monthlyProductSalesDraft.menuQuantities[menu.id]
+                            : ''}
+                          onChange={(event) => setMonthlyProductSalesDraft((current) => ({
+                            ...current,
+                            confirmed: false,
+                            menuQuantities: {
+                              ...current.menuQuantities,
+                              [menu.id]: event.target.value === '' ? Number.NaN : Number(event.target.value),
+                            },
+                          }))}
+                          className="mt-2 min-h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-right text-base font-black text-gray-950 disabled:bg-gray-100"
+                          aria-label={`${menu.name} monthly POS quantity`}
+                        />
+                      </label>
+                    ))}
+                    {storeAnalysisMenus.length === 0 && (
+                      <div className="rounded-xl bg-white p-4 text-sm font-bold text-amber-800">No individual menus are registered.</div>
+                    )}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="mb-2 text-xs font-black tracking-[0.1em] text-gray-500">COURSES / SET MENUS</div>
+                  <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                    {storeAnalysisSetMenus.map((setMenu) => (
+                      <label key={setMenu.id} className="rounded-xl border border-gray-200 bg-white p-3 text-sm font-bold">
+                        <span className="block truncate" title={setMenu.name}>{setMenu.name}</span>
+                        <span className="mt-0.5 block text-[11px] font-normal text-gray-400">{store.currency} {formatAmount(setMenu.price)}</span>
+                        <input
+                          type="number"
+                          inputMode="numeric"
+                          min="0"
+                          step="1"
+                          disabled={!editable}
+                          value={Number.isFinite(monthlyProductSalesDraft.setMenuQuantities[setMenu.id])
+                            ? monthlyProductSalesDraft.setMenuQuantities[setMenu.id]
+                            : ''}
+                          onChange={(event) => setMonthlyProductSalesDraft((current) => ({
+                            ...current,
+                            confirmed: false,
+                            setMenuQuantities: {
+                              ...current.setMenuQuantities,
+                              [setMenu.id]: event.target.value === '' ? Number.NaN : Number(event.target.value),
+                            },
+                          }))}
+                          className="mt-2 min-h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-right text-base font-black text-gray-950 disabled:bg-gray-100"
+                          aria-label={`${setMenu.name} monthly POS quantity`}
+                        />
+                      </label>
+                    ))}
+                    {storeAnalysisSetMenus.length === 0 && (
+                      <div className="rounded-xl bg-white p-4 text-sm font-bold text-gray-500">No courses or set menus are registered.</div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end">
+              <label className="flex-1 text-xs font-bold text-gray-600">
+                Source note (optional)
+                <input
+                  value={monthlyProductSalesDraft.notes}
+                  disabled={!editable}
+                  onChange={(event) => setMonthlyProductSalesDraft((current) => ({
+                    ...current,
+                    confirmed: false,
+                    notes: event.target.value,
+                  }))}
+                  placeholder="Example: POS monthly product report checked by manager"
+                  className="mt-1 min-h-11 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm text-gray-950 disabled:bg-gray-100"
+                />
+              </label>
+              {mode === 'owner' && (
+                <button
+                  type="button"
+                  disabled={!editable || savingKey !== null}
+                  onClick={() => void saveMonthlyProductSales()}
+                  className="min-h-11 rounded-xl bg-black px-5 text-sm font-extrabold text-white disabled:opacity-40"
+                >
+                  {savingKey === 'monthly-product-sales' ? 'Saving…' : 'Save & Confirm Source'}
+                </button>
+              )}
+            </div>
+          </section>
+
           <section className="rounded-2xl border border-gray-200 bg-white p-5">
             <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
               <div>
