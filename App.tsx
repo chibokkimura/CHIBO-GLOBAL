@@ -4740,7 +4740,7 @@ const SalesReporter: React.FC<{
                           type="button"
                           aria-label={`Decrease ${menu.name}`}
                           onClick={() => handleDirectMenuQuantityChange(menu.id, -1)}
-                          className="flex h-7 w-7 items-center justify-center rounded-full bg-gray-100 font-bold hover:bg-gray-200"
+                          className="flex h-11 w-11 items-center justify-center rounded-full bg-gray-100 text-lg font-bold hover:bg-gray-200"
                         >
                           -
                         </button>
@@ -4751,13 +4751,13 @@ const SalesReporter: React.FC<{
                           aria-label={`${menu.name} direct quantity`}
                           value={String(quantity)}
                           onChange={(event) => handleDirectMenuQuantityInput(menu.id, event.target.value)}
-                          className="w-12 rounded-lg border border-gray-200 p-1.5 text-center text-sm font-bold outline-none focus:border-black"
+                          className="h-11 w-14 rounded-lg border border-gray-200 px-2 text-center text-base font-bold outline-none focus:border-black"
                         />
                         <button
                           type="button"
                           aria-label={`Increase ${menu.name}`}
                           onClick={() => handleDirectMenuQuantityChange(menu.id, 1)}
-                          className="flex h-7 w-7 items-center justify-center rounded-full bg-black font-bold text-white hover:bg-gray-800"
+                          className="flex h-11 w-11 items-center justify-center rounded-full bg-black text-lg font-bold text-white hover:bg-gray-800"
                         >
                           +
                         </button>
@@ -4781,7 +4781,7 @@ const SalesReporter: React.FC<{
                   {setMenus.map((setMenu) => {
                     const qty = setMenuItems.find((item) => item.setMenuId === setMenu.id)?.quantity || 0;
                     return (
-                      <div key={setMenu.id} className="flex items-center justify-between p-3 border rounded-xl hover:border-black transition">
+                      <div key={setMenu.id} className="flex flex-col gap-3 border p-3 rounded-xl transition hover:border-black sm:flex-row sm:items-center sm:justify-between">
                         <div className="flex items-center gap-3">
                           <div className="w-10 h-10 bg-gray-100 rounded-lg flex items-center justify-center text-gray-500">
                             <Layers className="w-5 h-5" />
@@ -4791,17 +4791,17 @@ const SalesReporter: React.FC<{
                             <div className="text-xs text-gray-500">{setMenu.items.length} menu item(s)</div>
                           </div>
                         </div>
-                        <div className="flex items-center gap-2">
-                          <button onClick={() => handleSetQuantityChange(setMenu.id, -1)} className="w-8 h-8 flex items-center justify-center bg-gray-100 rounded-full hover:bg-gray-200 font-bold">-</button>
+                        <div className="flex items-center gap-2 self-end sm:self-auto">
+                          <button type="button" aria-label={`Decrease ${setMenu.name}`} onClick={() => handleSetQuantityChange(setMenu.id, -1)} className="flex h-11 w-11 items-center justify-center rounded-full bg-gray-100 text-lg font-bold hover:bg-gray-200">-</button>
                           <input
                             type="text"
                             inputMode="numeric"
                             pattern="[0-9]*"
-                            className="w-16 p-2 text-center border border-gray-200 rounded-lg font-bold text-lg focus:ring-2 focus:ring-black outline-none"
+                            className="h-11 w-16 rounded-lg border border-gray-200 px-2 text-center text-lg font-bold outline-none focus:ring-2 focus:ring-black"
                             value={String(qty)}
                             onChange={(e) => handleSetQuantityInput(setMenu.id, e.target.value)}
                           />
-                          <button onClick={() => handleSetQuantityChange(setMenu.id, 1)} className="w-8 h-8 flex items-center justify-center bg-black text-white rounded-full hover:bg-gray-800 font-bold">+</button>
+                          <button type="button" aria-label={`Increase ${setMenu.name}`} onClick={() => handleSetQuantityChange(setMenu.id, 1)} className="flex h-11 w-11 items-center justify-center rounded-full bg-black text-lg font-bold text-white hover:bg-gray-800">+</button>
                         </div>
                       </div>
                     );
@@ -4912,8 +4912,8 @@ const MenuManager: React.FC<{
                     <div className="flex items-center justify-center h-full text-gray-300"><ImageIcon className="w-8 h-8"/></div>
                 )}
                 <div className="absolute right-2 top-2 flex gap-2">
-                    <button type="button" aria-label={`Edit ${menu.name}`} onClick={() => onEdit(menu)} className="rounded-full bg-white p-2 shadow-sm hover:bg-gray-100"><Settings className="w-4 h-4"/></button>
-                    <button type="button" aria-label={`Delete ${menu.name}`} onClick={() => onDelete(menu.id)} className="rounded-full bg-white p-2 text-red-500 shadow-sm hover:bg-red-50"><Trash2 className="w-4 h-4"/></button>
+                    <button type="button" aria-label={`Edit ${menu.name}`} onClick={() => onEdit(menu)} className="flex h-11 w-11 items-center justify-center rounded-full bg-white shadow-sm hover:bg-gray-100"><Settings className="w-4 h-4"/></button>
+                    <button type="button" aria-label={`Delete ${menu.name}`} onClick={() => onDelete(menu.id)} className="flex h-11 w-11 items-center justify-center rounded-full bg-white text-red-500 shadow-sm hover:bg-red-50"><Trash2 className="w-4 h-4"/></button>
                 </div>
              </div>
              <div className="flex justify-between items-start">
@@ -5183,8 +5183,8 @@ const SetMenuManager: React.FC<{
                             )}
                         </div>
                         <div className="mt-4 flex justify-end gap-2 border-t pt-4">
-                            <button type="button" onClick={() => onEdit(setMenu)} className="inline-flex items-center gap-1 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-bold hover:bg-gray-100"><Settings className="w-4 h-4" /> Edit</button>
-                            <button type="button" onClick={() => onDelete(setMenu.id)} className="inline-flex items-center gap-1 rounded-lg border border-red-100 bg-white px-3 py-2 text-xs font-bold text-red-600 hover:bg-red-50"><Trash2 className="w-4 h-4" /> Delete</button>
+                            <button type="button" onClick={() => onEdit(setMenu)} className="inline-flex min-h-11 items-center gap-1 rounded-lg border border-gray-200 bg-white px-4 py-2 text-xs font-bold hover:bg-gray-100"><Settings className="w-4 h-4" /> Edit</button>
+                            <button type="button" onClick={() => onDelete(setMenu.id)} className="inline-flex min-h-11 items-center gap-1 rounded-lg border border-red-100 bg-white px-4 py-2 text-xs font-bold text-red-600 hover:bg-red-50"><Trash2 className="w-4 h-4" /> Delete</button>
                         </div>
                     </div>
                 ))}
@@ -5790,8 +5790,8 @@ const EmployeeManager: React.FC<{
                             </div>
                         </div>
                         <div className="flex shrink-0 gap-2">
-                             <button type="button" aria-label={`Edit ${emp.name}`} onClick={() => setEditingEmp(emp)} className="rounded-full p-2 text-gray-500 hover:bg-gray-100"><Settings className="w-4 h-4"/></button>
-                             <button type="button" aria-label={`Delete ${emp.name}`} onClick={() => handleDelete(emp.id)} className="rounded-full p-2 text-red-500 hover:bg-red-50"><Trash2 className="w-4 h-4"/></button>
+                             <button type="button" aria-label={`Edit ${emp.name}`} onClick={() => setEditingEmp(emp)} className="flex h-11 w-11 items-center justify-center rounded-full text-gray-500 hover:bg-gray-100"><Settings className="w-4 h-4"/></button>
+                             <button type="button" aria-label={`Delete ${emp.name}`} onClick={() => handleDelete(emp.id)} className="flex h-11 w-11 items-center justify-center rounded-full text-red-500 hover:bg-red-50"><Trash2 className="w-4 h-4"/></button>
                         </div>
                     </div>
                 ))}
@@ -6970,7 +6970,7 @@ const HQStoreDetail: React.FC<{
     }, [standardIngredients, categoryUsageMap, canonicalStoreSales, storeStockMap, inventoryMetricsEnabled]);
 
     return (
-        <div className="p-8 max-w-7xl mx-auto w-full relative">
+        <div className="relative mx-auto w-full min-w-0 max-w-7xl overflow-x-hidden p-4 sm:p-6 lg:p-8">
             {showReminderComposer && reminderDate && (
                 <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
                     <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl">
@@ -7261,17 +7261,17 @@ const HQStoreDetail: React.FC<{
                 />
             )}
 
-            <button onClick={onBack} className="flex items-center gap-2 text-gray-500 hover:text-black mb-6 font-bold">
+            <button onClick={onBack} className="mb-5 flex min-h-11 items-center gap-2 rounded-xl px-1 font-bold text-gray-500 hover:text-black">
                 <ArrowLeft className="w-5 h-5"/> Back to Dashboard
             </button>
 
-            <div className="flex items-start justify-between mb-8">
-                <div>
-                    <h1 className="text-3xl font-extrabold">{store.name}</h1>
-                    <div className="flex items-center gap-2 text-gray-500 mt-2">
+            <div className="mb-6 flex min-w-0 flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+                <div className="min-w-0">
+                    <h1 className="break-words text-2xl font-extrabold sm:text-3xl">{store.name}</h1>
+                    <div className="mt-2 flex min-w-0 items-start gap-2 text-sm text-gray-500 sm:text-base">
                         <MapPin className="w-4 h-4"/> {store.city}, {store.country} • Owner: {store.ownerEmail}
                     </div>
-                    <div className="mt-2 text-xs text-gray-500">
+                    <div className="mt-2 break-all text-xs text-gray-500">
                         {owners.length > 0 ? (
                             <span>
                                 Linked Accounts: {owners.map(o => {
@@ -7284,13 +7284,14 @@ const HQStoreDetail: React.FC<{
                         )}
                     </div>
                 </div>
-                <div className="text-right">
+                <div className="grid w-full shrink-0 grid-cols-1 gap-3 sm:grid-cols-2 lg:w-auto lg:min-w-[320px]">
+                  <div className="rounded-xl border border-gray-200 bg-white p-3 text-left lg:text-right">
                     <div className="text-sm font-bold text-gray-500">Currency</div>
-                    <div className="mt-1 flex items-center gap-2 justify-end">
+                    <div className="mt-2 flex min-w-0 items-center gap-2 lg:justify-end">
                         <select
                             value={currencyDraft}
                             onChange={(e) => setCurrencyDraft(e.target.value)}
-                            className="px-2 py-1 rounded-lg border border-gray-200 text-right font-bold bg-white"
+                            className="min-h-11 min-w-0 flex-1 rounded-lg border border-gray-200 bg-white px-3 py-2 text-right font-bold"
                         >
                             <option value="">Select</option>
                             {currencies.map(cur => (
@@ -7301,35 +7302,38 @@ const HQStoreDetail: React.FC<{
                             type="button"
                             onClick={saveCurrency}
                             disabled={currencySaving || !currencyDraft}
-                            className="px-3 py-1 rounded-lg bg-black text-white text-xs font-bold disabled:opacity-50"
+                            className="min-h-11 shrink-0 rounded-lg bg-black px-4 py-2 text-xs font-bold text-white disabled:opacity-50"
                         >
                             {currencySaving ? 'Saving...' : 'Save'}
                         </button>
                     </div>
                     {currencyError && (
-                        <div className="mt-2 text-xs text-red-600 text-right">{currencyError}</div>
+                        <div className="mt-2 text-xs text-red-600 lg:text-right">{currencyError}</div>
                     )}
-                    <div className="mt-4 text-sm font-bold text-gray-500">Royalty Rate (%)</div>
-                    <div className="mt-1 flex items-center gap-2 justify-end">
+                  </div>
+                  <div className="rounded-xl border border-gray-200 bg-white p-3 text-left lg:text-right">
+                    <div className="text-sm font-bold text-gray-500">Royalty Rate (%)</div>
+                    <div className="mt-2 flex items-center gap-2 lg:justify-end">
                         <input
                             type="text"
                             inputMode="decimal"
                             value={royaltyDraft}
                             onChange={(e) => setRoyaltyDraft(normalizePercentInput(e.target.value))}
-                            className="w-24 px-2 py-1 rounded-lg border border-gray-200 text-right font-bold"
+                            className="min-h-11 min-w-0 flex-1 rounded-lg border border-gray-200 px-3 py-2 text-right font-bold"
                         />
                         <button
                             type="button"
                             onClick={saveRoyaltyRate}
                             disabled={royaltySaving || Number.isNaN(parseFloat(royaltyDraft))}
-                            className="px-3 py-1 rounded-lg bg-black text-white text-xs font-bold disabled:opacity-50"
+                            className="min-h-11 shrink-0 rounded-lg bg-black px-4 py-2 text-xs font-bold text-white disabled:opacity-50"
                         >
                             {royaltySaving ? 'Saving...' : 'Save'}
                         </button>
                     </div>
                     {royaltyError && (
-                        <div className="mt-2 text-xs text-red-600 text-right">{royaltyError}</div>
+                        <div className="mt-2 text-xs text-red-600 lg:text-right">{royaltyError}</div>
                     )}
+                  </div>
                 </div>
             </div>
 
@@ -7394,8 +7398,8 @@ const HQStoreDetail: React.FC<{
                 </section>
             )}
 
-            <div className="sticky top-0 z-20 bg-gray-50/95 backdrop-blur supports-[backdrop-filter]:bg-gray-50/80 py-2 mb-6 overflow-x-auto">
-                <div className="inline-flex items-center gap-2 rounded-2xl border border-gray-200 bg-white p-1 min-w-max">
+            <div className="sticky top-0 z-20 mb-6 bg-gray-50/95 py-2 backdrop-blur supports-[backdrop-filter]:bg-gray-50/80">
+                <div className="grid w-full grid-cols-2 gap-1 rounded-2xl border border-gray-200 bg-white p-1 sm:flex sm:flex-wrap sm:items-center">
                     {[
                         { key: 'sales', label: 'Sales' },
                         { key: 'close', label: 'Month Close' },
@@ -7409,7 +7413,7 @@ const HQStoreDetail: React.FC<{
                             key={tab.key}
                             type="button"
                             onClick={() => setDetailSection(tab.key as 'sales' | 'close' | 'inventory' | 'invoice' | 'menu' | 'staff' | 'accounts')}
-                            className={`px-4 py-2 rounded-xl text-sm font-bold transition ${
+                            className={`min-h-11 rounded-xl px-3 py-2 text-sm font-bold transition sm:px-4 ${
                                 detailSection === tab.key
                                     ? 'bg-black text-white'
                                     : 'text-gray-600 hover:bg-gray-100'
@@ -8365,15 +8369,6 @@ const HQDashboard: React.FC<{
   const [selectedStore, setSelectedStore] = useState<Store | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isSalesAnalyticsOpen, setIsSalesAnalyticsOpen] = useState(false);
-  const hqMonthOptions = useMemo(() => {
-    const keys = new Set<string>([formatMonthKey(new Date())]);
-    dedupeSalesByStoreDate(sales).forEach((sale) => {
-      const key = extractMonthKey(sale.date);
-      if (key) keys.add(key);
-    });
-    return Array.from(keys).sort((a, b) => b.localeCompare(a));
-  }, [sales]);
-  const [selectedMonthKey, setSelectedMonthKey] = useState(() => formatMonthKey(new Date()));
   const reportingStores = useMemo(
     () => stores.filter((store) => (
       (store.reportingStatus ?? 'active') === 'active'
@@ -8382,6 +8377,17 @@ const HQDashboard: React.FC<{
     )),
     [stores],
   );
+  const hqMonthOptions = useMemo(() => {
+    const keys = new Set<string>([formatMonthKey(new Date())]);
+    const reportingStoreIds = new Set(reportingStores.map((store) => store.id));
+    dedupeSalesByStoreDate(sales).forEach((sale) => {
+      if (!reportingStoreIds.has(sale.storeId)) return;
+      const key = extractMonthKey(sale.date);
+      if (key) keys.add(key);
+    });
+    return Array.from(keys).sort((a, b) => b.localeCompare(a));
+  }, [reportingStores, sales]);
+  const [selectedMonthKey, setSelectedMonthKey] = useState(() => formatMonthKey(new Date()));
   const hqCountries = useMemo<string[]>(
     () => Array.from(new Set<string>(reportingStores.map((store) => store.country))).sort((a, b) => a.localeCompare(b)),
     [reportingStores],
@@ -8893,7 +8899,7 @@ const HQDashboard: React.FC<{
             fxSourceText={fxSourceText}
        />
 
-       <div className="flex-1 p-8 overflow-y-auto space-y-8 max-w-7xl mx-auto w-full">
+       <div className="mx-auto w-full max-w-7xl flex-1 space-y-6 overflow-y-auto p-4 sm:p-6 lg:space-y-8 lg:p-8">
            {testStoreSummaries.length > 0 && (
              <section className="rounded-2xl border-2 border-amber-300 bg-amber-50 p-5 shadow-sm">
                <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
@@ -9147,20 +9153,31 @@ const HQDashboard: React.FC<{
              monthLabel={formatMonthKeyLabel(selectedMonthKey)}
              fxLabel={formatFxSourceLabel(fxStatus, fxSourceText)}
              preview={isLocalHqPreviewMode()}
+             previewSales={sales}
              convertToJpy={convertHqAmountToJpy}
              onOpenStore={(store, section) => openHqStore(store, section, selectedMonthKey)}
            />
 
-           {/* Financials Table */}
-           <FinancialsTable
-             stores={filteredStores}
-             sales={sales}
-             fxRates={fxRates}
-             fxStatus={fxStatus}
-             fxSourceText={fxSourceText}
-             monthKey={selectedMonthKey}
-             onExportExcel={handleExportSalesProgress}
-           />
+           <details className="group overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
+             <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-3 p-5 [&::-webkit-details-marker]:hidden">
+               <div>
+                 <div className="font-extrabold">Sales reporting detail & Excel</div>
+                 <div className="mt-1 text-xs text-gray-500">Open the store-by-store local currency, JPY and royalty table when needed.</div>
+               </div>
+               <ChevronRight className="h-5 w-5 shrink-0 text-gray-400 transition group-open:rotate-90" />
+             </summary>
+             <div className="border-t border-gray-100">
+               <FinancialsTable
+                 stores={filteredStores}
+                 sales={sales}
+                 fxRates={fxRates}
+                 fxStatus={fxStatus}
+                 fxSourceText={fxSourceText}
+                 monthKey={selectedMonthKey}
+                 onExportExcel={handleExportSalesProgress}
+               />
+             </div>
+           </details>
 
            {/* Store Grid (Clickable) */}
            <div>
@@ -9224,8 +9241,18 @@ const HQDashboard: React.FC<{
               </div>
            </div>
 
-           {/* Global Supply Chain Overview */}
-           <SupplyChainIntelligence stores={reportingStores} sales={sales} menus={menus} storeStocks={storeStocks} />
+           <details className="group overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
+             <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-3 p-5 [&::-webkit-details-marker]:hidden">
+               <div>
+                 <div className="font-extrabold">Supply chain setup</div>
+                 <div className="mt-1 text-xs text-gray-500">Open PB item stock coverage and setup gaps.</div>
+               </div>
+               <ChevronRight className="h-5 w-5 shrink-0 text-gray-400 transition group-open:rotate-90" />
+             </summary>
+             <div className="border-t border-gray-100">
+               <SupplyChainIntelligence stores={reportingStores} sales={sales} menus={menus} storeStocks={storeStocks} />
+             </div>
+           </details>
        </div>
     </div>
   );
@@ -10319,7 +10346,7 @@ const StoreDashboard: React.FC<{
                                 <div className="text-xs font-black uppercase tracking-[0.18em] text-gray-400">People records</div>
                                 <h2 className="text-2xl font-extrabold mt-1">Staff & Labor</h2>
                                 <p className="text-sm text-gray-500 mt-1">
-                                    Keep the active staff list current. Working hours, overtime, payroll, and labor-cost ratio are added in Update 7.
+                                    Keep the active staff list current. Monthly payroll, total labor hours, and labor-cost ratio are managed in Month Close.
                                 </p>
                             </div>
                             <EmployeeManager

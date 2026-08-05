@@ -2,6 +2,14 @@
 @tailwind components;
 @tailwind utilities;
 
+html,
+body,
+#root {
+  max-width: 100%;
+  min-width: 0;
+}
+
 body {
   font-family: 'Inter', sans-serif;
+  overflow-x: hidden;
 }

@@ -17,7 +17,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { Store } from './types';
+import { Sale, Store } from './types';
 import { supabase } from './supabaseClient';
 
 type ProfitabilitySummaryRow = {
@@ -115,6 +115,7 @@ type Props = {
   monthLabel: string;
   fxLabel: string;
   preview: boolean;
+  previewSales?: Sale[];
   convertToJpy: (amount: number, currency: string) => number | null;
   onOpenStore: (store: Store, section: ReviewSection) => void;
 };
@@ -244,7 +245,7 @@ function buildPriority(
   if (laborVariance !== null && laborVariance > 0) {
     return {
       title: 'Improve labor scheduling',
-      detail: `${laborVariance.toFixed(1)} pt above target. Compare staffing hours with sales by day and shift.`,
+      detail: `${laborVariance.toFixed(1)} pt above target. Review the monthly payroll total and labor hours; day/shift analysis requires detailed attendance data.`,
       tone: laborVariance >= 3 ? 'urgent' : 'watch',
       severity: 95 + laborVariance,
       section: 'close',
@@ -284,18 +285,9 @@ function formatLocal(currency: string, value: number | null): string {
   return value === null ? '—' : `${currency} ${formatAmount(value)}`;
 }
 
-function previewSummary(currency: string, index: number): NormalizedSummary | null {
-  if (index === 3) return null;
+function previewSummary(currency: string, index: number, netSales: number): NormalizedSummary | null {
+  if (!Number.isFinite(netSales) || netSales <= 0) return null;
   const margin = [12.4, 4.2, -2.8, 0, 9.6][index % 5];
-  const monthlySalesByCurrency: Record<string, number> = {
-    TWD: 4_800_000,
-    VND: 1_850_000_000,
-    PHP: 7_200_000,
-    CNY: 920_000,
-    KRW: 185_000_000,
-    JPY: 21_000_000,
-    USD: 620_000,
-  };
   const averageGuestSpendByCurrency: Record<string, number> = {
     TWD: 900,
     VND: 320_000,
@@ -305,7 +297,6 @@ function previewSummary(currency: string, index: number): NormalizedSummary | nu
     JPY: 3_800,
     USD: 42,
   };
-  const netSales = (monthlySalesByCurrency[currency] ?? 1_000_000) * (0.92 + ((index % 4) * 0.04));
   const food = [29.2, 34.8, 36.1, 0, 30.5][index % 5];
   const labor = [24.1, 29.4, 31.2, 0, 25.2][index % 5];
   const ready = index !== 4;
@@ -362,6 +353,7 @@ const HQProfitabilityAnalysis: React.FC<Props> = ({
   monthLabel,
   fxLabel,
   preview,
+  previewSales = [],
   convertToJpy,
   onOpenStore,
 }) => {
@@ -378,7 +370,10 @@ const HQProfitabilityAnalysis: React.FC<Props> = ({
       const previewSummaries = new Map<string, NormalizedSummary>();
       const previewTargets = new Map<string, number | null>();
       stores.forEach((store, index) => {
-        const summary = previewSummary(store.currency, index);
+        const storeMonthSales = previewSales
+          .filter((sale) => sale.storeId === store.id && sale.date.slice(0, 7) === monthKey)
+          .reduce((sum, sale) => sum + Number(sale.totalAmount || 0), 0);
+        const summary = previewSummary(store.currency, index, storeMonthSales);
         if (summary) previewSummaries.set(store.id, summary);
         previewTargets.set(store.id, index % 3 === 2 ? 31 : 30);
       });
@@ -471,7 +466,7 @@ const HQProfitabilityAnalysis: React.FC<Props> = ({
     } finally {
       setLoading(false);
     }
-  }, [monthKey, preview, stores]);
+  }, [monthKey, preview, previewSales, stores]);
 
   useEffect(() => {
     void loadAnalysis();
@@ -700,7 +695,7 @@ const HQProfitabilityAnalysis: React.FC<Props> = ({
                     <button
                       type="button"
                       onClick={() => onOpenStore(row.store, row.priority.section)}
-                      className="mt-3 inline-flex items-center gap-2 text-xs font-black text-slate-800"
+                      className="mt-3 inline-flex min-h-11 items-center gap-2 rounded-lg px-2 text-xs font-black text-slate-800"
                     >
                       Review store month <ArrowRight className="h-3.5 w-3.5" />
                     </button>
@@ -780,7 +775,7 @@ const HQProfitabilityAnalysis: React.FC<Props> = ({
                           <button
                             type="button"
                             onClick={() => onOpenStore(row.store, row.priority.section)}
-                            className="inline-flex items-center gap-1 whitespace-nowrap rounded-lg border border-slate-300 px-2.5 py-2 text-[10px] font-black text-slate-800 hover:border-slate-500 hover:bg-white"
+                            className="inline-flex min-h-11 items-center gap-1 whitespace-nowrap rounded-lg border border-slate-300 px-3 py-2 text-[10px] font-black text-slate-800 hover:border-slate-500 hover:bg-white"
                           >
                             Review <ArrowRight className="h-3 w-3" />
                           </button>

@@ -74,6 +74,29 @@ const EMPTY_PROFITABILITY_PROGRESS: ProfitabilityProgress = {
   profitabilityReady: false,
 };
 
+type CollapsibleDetailsProps = Omit<React.DetailsHTMLAttributes<HTMLDetailsElement>, 'open'> & {
+  initialOpen?: boolean;
+};
+
+const CollapsibleDetails: React.FC<CollapsibleDetailsProps> = ({
+  initialOpen = false,
+  onToggle,
+  ...props
+}) => {
+  const [isOpen, setIsOpen] = useState(initialOpen);
+
+  return (
+    <details
+      {...props}
+      open={isOpen}
+      onToggle={(event) => {
+        setIsOpen(event.currentTarget.open);
+        onToggle?.(event);
+      }}
+    />
+  );
+};
+
 function formatAmount(value: number): string {
   return new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(Number(value || 0));
 }
@@ -544,7 +567,7 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
               aria-label="Monthly operations month"
               value={monthKey}
               onChange={(event) => setMonthKey(event.target.value)}
-              className="appearance-none rounded-xl border border-gray-200 bg-white py-2.5 pl-3 pr-9 text-sm font-bold"
+              className="min-h-11 appearance-none rounded-xl border border-gray-200 bg-white py-2.5 pl-3 pr-9 text-sm font-bold"
             >
               {monthOptions.map((key) => <option key={key} value={key}>{monthLabel(key)}</option>)}
             </select>
@@ -557,7 +580,7 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
               void loadData();
               setProfitabilityRefreshKey((current) => current + 1);
             }}
-            className="rounded-xl border border-gray-200 bg-white p-2.5 text-gray-600 hover:bg-gray-50"
+            className="flex h-11 w-11 items-center justify-center rounded-xl border border-gray-200 bg-white text-gray-600 hover:bg-gray-50"
             title="Reload"
           >
             <RefreshCw className="h-4 w-4" />
@@ -736,17 +759,29 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
         </div>
       </div>
 
-      <section className="rounded-2xl border border-gray-200 bg-white p-5">
-        <div className="mb-4">
+      <CollapsibleDetails
+        key={`sales-checks-${store.id}-${monthKey}-${reportingComplete && receiptsComplete ? 'complete' : 'open'}`}
+        initialOpen={!reportingComplete || !receiptsComplete}
+        className="group rounded-2xl border border-gray-200 bg-white"
+      >
+        <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-3 p-5 [&::-webkit-details-marker]:hidden">
+          <div>
           <h3 className="font-extrabold">
             {mode === 'hq' ? '1. Sales Reporting Completeness' : 'Step 1A. Complete Daily Reports'}
           </h3>
           <p className="mt-1 text-xs text-gray-500">
             These checks come directly from the daily reports already stored in the system.
           </p>
-        </div>
+          </div>
+          <span className={`inline-flex shrink-0 items-center gap-2 rounded-full px-3 py-1 text-xs font-bold ${
+            reportingComplete && receiptsComplete ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'
+          }`}>
+            {reportingComplete && receiptsComplete ? 'Complete' : 'Action needed'}
+            <ChevronDown className="h-4 w-4 transition group-open:rotate-180" />
+          </span>
+        </summary>
 
-        <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+        <div className="grid grid-cols-1 gap-3 border-t border-gray-100 p-5 lg:grid-cols-2">
           <div className={`rounded-xl border p-4 ${reportingComplete ? 'border-emerald-200 bg-emerald-50' : 'border-red-200 bg-red-50'}`}>
             <div className="flex items-start gap-3">
               {reportingComplete
@@ -767,7 +802,7 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
                           key={date}
                           type="button"
                           onClick={() => onOpenSalesReport(date)}
-                          className="rounded-lg border border-red-200 bg-white px-2.5 py-1.5 text-xs font-bold text-red-700 hover:bg-red-100"
+                          className="min-h-11 rounded-lg border border-red-200 bg-white px-3 py-2 text-xs font-bold text-red-700 hover:bg-red-100"
                         >
                           Enter {date}
                         </button>
@@ -810,7 +845,7 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
                           key={sale.id}
                           type="button"
                           onClick={() => onOpenSalesReport(sale.date)}
-                          className="rounded-lg border border-red-200 bg-white px-2.5 py-1.5 text-xs font-bold text-red-700 hover:bg-red-100"
+                          className="min-h-11 rounded-lg border border-red-200 bg-white px-3 py-2 text-xs font-bold text-red-700 hover:bg-red-100"
                         >
                           Add receipt {sale.date}
                         </button>
@@ -833,38 +868,86 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
             </div>
           </div>
         </div>
-      </section>
+      </CollapsibleDetails>
 
       {mode === 'hq' ? (
-        <StoreProfitabilitySettingsPanel
-          store={store}
-          preview={preview}
-          onSaved={() => setProfitabilityRefreshKey((current) => current + 1)}
-        />
+        <CollapsibleDetails
+          key={`hq-settings-${store.id}-${profitabilityProgress.settingsComplete ? 'complete' : 'open'}`}
+          initialOpen={!profitabilityProgress.settingsComplete}
+          className="group rounded-2xl border border-gray-200 bg-white"
+        >
+          <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-3 p-5 [&::-webkit-details-marker]:hidden">
+            <div>
+              <div className="font-extrabold">2. HQ Store Profit Settings</div>
+              <div className="mt-1 text-xs text-gray-500">Fixed tax, rent, fee and target settings</div>
+            </div>
+            <span className="inline-flex shrink-0 items-center gap-2 rounded-full bg-gray-100 px-3 py-1 text-xs font-bold text-gray-700">
+              {profitabilityProgress.settingsComplete ? 'Configured' : 'Setup required'}
+              <ChevronDown className="h-4 w-4 transition group-open:rotate-180" />
+            </span>
+          </summary>
+          <div className="border-t border-gray-100 p-3 sm:p-4">
+            <StoreProfitabilitySettingsPanel
+              store={store}
+              preview={preview}
+              onSaved={() => setProfitabilityRefreshKey((current) => current + 1)}
+            />
+          </div>
+        </CollapsibleDetails>
       ) : null}
 
-      <div id="monthly-totals" className="scroll-mt-24">
-        <MonthlyProfitabilityInputPanel
-          store={store}
-          monthStart={monthStart}
-          mode={mode}
-          lockedForOwner={lockedForOwner}
-          preview={preview}
-          sectionNumber={mode === 'hq' ? 3 : 2}
-          refreshKey={profitabilityRefreshKey}
-          onSaved={(complete) => refreshProfitability(complete)}
-        />
-      </div>
+      <CollapsibleDetails
+        id="monthly-totals"
+        key={`monthly-totals-${store.id}-${monthKey}-${profitabilityProgress.operatingInputsComplete ? 'complete' : 'open'}`}
+        initialOpen={!profitabilityProgress.operatingInputsComplete}
+        className="group scroll-mt-24 rounded-2xl border border-gray-200 bg-white"
+      >
+        <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-3 p-5 [&::-webkit-details-marker]:hidden">
+          <div>
+            <div className="font-extrabold">{mode === 'hq' ? '3. Monthly Profit Inputs' : 'Step 1B. Enter Monthly Totals'}</div>
+            <div className="mt-1 text-xs text-gray-500">Labor, hours, fees, utilities and other operating totals</div>
+          </div>
+          <span className={`inline-flex shrink-0 items-center gap-2 rounded-full px-3 py-1 text-xs font-bold ${
+            profitabilityProgress.operatingInputsComplete ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-800'
+          }`}>
+            {profitabilityProgress.operatingInputsComplete ? 'Complete' : 'Input needed'}
+            <ChevronDown className="h-4 w-4 transition group-open:rotate-180" />
+          </span>
+        </summary>
+        <div className="border-t border-gray-100 p-3 sm:p-4">
+          <MonthlyProfitabilityInputPanel
+            store={store}
+            monthStart={monthStart}
+            mode={mode}
+            lockedForOwner={lockedForOwner}
+            preview={preview}
+            sectionNumber={mode === 'hq' ? 3 : 2}
+            refreshKey={profitabilityRefreshKey}
+            onSaved={(complete) => refreshProfitability(complete)}
+          />
+        </div>
+      </CollapsibleDetails>
 
-      <ProfitabilityImportPanel
-        store={store}
-        monthStart={monthStart}
-        mode={mode}
-        lockedForOwner={lockedForOwner}
-        preview={preview}
-        sectionNumber={mode === 'hq' ? 4 : 3}
-        onApplied={() => refreshProfitability()}
-      />
+      <CollapsibleDetails className="group rounded-2xl border border-gray-200 bg-white">
+        <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-3 p-5 [&::-webkit-details-marker]:hidden">
+          <div>
+            <div className="font-extrabold">{mode === 'hq' ? '4. File Import History' : 'Optional: import a POS, attendance or cost file'}</div>
+            <div className="mt-1 text-xs text-gray-500">Open only when a CSV/XLS/XLSX file is available</div>
+          </div>
+          <ChevronDown className="h-5 w-5 shrink-0 text-gray-500 transition group-open:rotate-180" />
+        </summary>
+        <div className="border-t border-gray-100 p-3 sm:p-4">
+          <ProfitabilityImportPanel
+            store={store}
+            monthStart={monthStart}
+            mode={mode}
+            lockedForOwner={lockedForOwner}
+            preview={preview}
+            sectionNumber={mode === 'hq' ? 4 : 3}
+            onApplied={() => refreshProfitability()}
+          />
+        </div>
+      </CollapsibleDetails>
 
       {mode === 'owner' ? (
         <section className="rounded-2xl border border-slate-300 bg-white p-5">
@@ -882,7 +965,7 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
               type="button"
               onClick={onOpenInventory}
               disabled={!onOpenInventory}
-              className="shrink-0 rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-black text-white hover:bg-slate-800 disabled:opacity-40"
+              className="min-h-11 shrink-0 rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-black text-white hover:bg-slate-800 disabled:opacity-40"
             >
               {stepTwoComplete ? 'Review Inventory' : 'Open Cost & Inventory'}
             </button>
@@ -901,8 +984,12 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
         />
       </div>
 
-      <section className="rounded-2xl border border-gray-200 bg-white p-5">
-        <div className="mb-4 flex items-center justify-between gap-3">
+      <CollapsibleDetails
+        key={`store-confirmation-${store.id}-${monthKey}-${confirmationComplete ? 'complete' : 'open'}`}
+        initialOpen={!confirmationComplete}
+        className="group rounded-2xl border border-gray-200 bg-white"
+      >
+        <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-3 p-5 [&::-webkit-details-marker]:hidden">
           <div>
             <h3 className="flex flex-wrap items-center gap-2 font-extrabold">
               {mode === 'hq' ? '6. Store Confirmation' : 'Final check before submission'}
@@ -916,11 +1003,13 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
                 : 'Confirm only after checking the monthly total against the store record.'}
             </p>
           </div>
-          <span className={`rounded-full px-3 py-1 text-xs font-bold ${confirmationComplete ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-600'}`}>
+          <span className={`inline-flex shrink-0 items-center gap-2 rounded-full px-3 py-1 text-xs font-bold ${confirmationComplete ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-600'}`}>
             {confirmationComplete ? 'Confirmed' : 'Pending'}
+            <ChevronDown className="h-4 w-4 transition group-open:rotate-180" />
           </span>
-        </div>
+        </summary>
 
+        <div className="space-y-3 border-t border-gray-100 p-5">
         {visibleTasks.map((task) => (
           <div key={task.taskKey} className="rounded-xl border border-gray-200 p-4">
             <label className={`flex items-start gap-3 ${mode === 'owner' && !lockedForOwner ? 'cursor-pointer' : ''}`}>
@@ -950,7 +1039,8 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
             </label>
           </div>
         ))}
-      </section>
+        </div>
+      </CollapsibleDetails>
 
       <section className="rounded-2xl border border-gray-200 bg-white p-5">
         <h3 className="font-extrabold">
@@ -994,7 +1084,7 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
             type="button"
             disabled={saving || lockedForOwner}
             onClick={() => void saveNotes()}
-            className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-bold disabled:opacity-40"
+            className="min-h-11 rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-bold disabled:opacity-40"
           >
             Save Notes
           </button>
@@ -1011,7 +1101,7 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
                     type="button"
                     disabled={saving}
                     onClick={submitOwnerMonth}
-                    className="rounded-xl bg-black px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-40"
+                    className="min-h-11 rounded-xl bg-black px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     Submit to HQ
                   </button>
@@ -1025,7 +1115,7 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
                     type="button"
                     disabled={saving}
                     onClick={() => void savePeriod('reopened')}
-                    className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-bold"
+                    className="min-h-11 rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-bold"
                   >
                     Reopen
                   </button>
@@ -1034,7 +1124,7 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
                   type="button"
                   disabled={saving || !canSubmit || period?.status !== 'submitted'}
                   onClick={() => void savePeriod('approved')}
-                  className="rounded-xl bg-black px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-40"
+                  className="min-h-11 rounded-xl bg-black px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   Approve Month
                 </button>
