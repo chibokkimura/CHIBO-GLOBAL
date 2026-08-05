@@ -410,7 +410,7 @@ async function saveGlobalConfig(config: GlobalConfig) {
 async function loadStores(): Promise<Store[]> {
   const { data, error } = await supabase
     .from('stores')
-    .select('id,name,country,city,owner_email,currency,royalty_percentage')
+    .select('id,name,country,city,owner_email,currency,royalty_percentage,reporting_status,data_quality_note')
     .order('id');
   if (error) throw error;
   return (data ?? []).map((r: any) => ({
@@ -421,6 +421,8 @@ async function loadStores(): Promise<Store[]> {
     ownerEmail: r.owner_email,
     currency: r.currency,
     royaltyPercentage: Number(r.royalty_percentage),
+    reportingStatus: r.reporting_status ?? 'active',
+    dataQualityNote: r.data_quality_note ?? undefined,
   }));
 }
 
@@ -8372,15 +8374,29 @@ const HQDashboard: React.FC<{
     return Array.from(keys).sort((a, b) => b.localeCompare(a));
   }, [sales]);
   const [selectedMonthKey, setSelectedMonthKey] = useState(() => formatMonthKey(new Date()));
-  const hqCountries = useMemo<string[]>(
-    () => Array.from(new Set<string>(stores.map((store) => store.country))).sort((a, b) => a.localeCompare(b)),
+  const reportingStores = useMemo(
+    () => stores.filter((store) => (
+      (store.reportingStatus ?? 'active') === 'active'
+      && store.country.trim().toUpperCase() !== 'TEST'
+      && !store.id.startsWith('TEST_')
+    )),
     [stores],
+  );
+  const hqCountries = useMemo<string[]>(
+    () => Array.from(new Set<string>(reportingStores.map((store) => store.country))).sort((a, b) => a.localeCompare(b)),
+    [reportingStores],
   );
   const [selectedCountry, setSelectedCountry] = useState<string>('all');
   const testStores = useMemo(
     () => stores.filter((store) => (
-      store.country.trim().toUpperCase() === 'TEST' || store.id.startsWith('TEST_')
+      store.reportingStatus === 'test'
+      || store.country.trim().toUpperCase() === 'TEST'
+      || store.id.startsWith('TEST_')
     )),
+    [stores],
+  );
+  const quarantinedStores = useMemo(
+    () => stores.filter((store) => store.reportingStatus === 'quarantined'),
     [stores],
   );
   const testStoreSummaries = useMemo(() => testStores.map((store) => {
@@ -8402,9 +8418,9 @@ const HQDashboard: React.FC<{
   }), [menus, sales, setMenus, testStores]);
   const filteredStores = useMemo(
     () => selectedCountry === 'all'
-      ? stores
-      : stores.filter((store) => store.country === selectedCountry),
-    [stores, selectedCountry],
+      ? reportingStores
+      : reportingStores.filter((store) => store.country === selectedCountry),
+    [reportingStores, selectedCountry],
   );
   const navRestoreRef = useRef(false);
   const { rates: fxRates, status: fxStatus, sourceText: fxSourceText, refreshNow: refreshFxNow } = useFxRates();
@@ -8429,7 +8445,7 @@ const HQDashboard: React.FC<{
   }, [hqCountries, selectedCountry]);
 
   const countryPerformance = useMemo(() => hqCountries.map((country) => {
-    const countryStores = stores.filter((store) => store.country === country);
+    const countryStores = reportingStores.filter((store) => store.country === country);
     const storeIds = new Set(countryStores.map((store) => store.id));
     const localTotals: Record<string, number> = {};
     let totalJPY = 0;
@@ -8453,7 +8469,7 @@ const HQDashboard: React.FC<{
       totalJPY,
       missingReports,
     };
-  }), [hqCountries, stores, sales, selectedMonthKey, fxRates]);
+  }), [hqCountries, reportingStores, sales, selectedMonthKey, fxRates]);
 
   const formatCountryLocalTotals = (totals: Record<string, number>) => {
     const entries = Object.entries(totals).sort(([a], [b]) => a.localeCompare(b));
@@ -8514,12 +8530,12 @@ const HQDashboard: React.FC<{
 
   const handleExportSalesProgress = useCallback(async () => {
     try {
-      await exportGlobalSalesProgressWorkbook(stores, sales, fxRates, fxStatus, fxSourceText);
+      await exportGlobalSalesProgressWorkbook(reportingStores, sales, fxRates, fxStatus, fxSourceText);
     } catch (error) {
       console.error('Failed to export HD sales workbook', error);
       alert(`Excel export failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
-  }, [stores, sales, fxRates, fxStatus, fxSourceText]);
+  }, [reportingStores, sales, fxRates, fxStatus, fxSourceText]);
 
   const openHqDashboardOverlay = useCallback((overlay: 'settings' | 'sales-analytics') => {
     if (typeof window === 'undefined') return;
@@ -8871,7 +8887,7 @@ const HQDashboard: React.FC<{
             isOpen={isSalesAnalyticsOpen}
             onClose={() => closeHqDashboardOverlay('sales-analytics')}
             sales={sales}
-            stores={stores}
+            stores={reportingStores}
             fxRates={fxRates}
             fxStatus={fxStatus}
             fxSourceText={fxSourceText}
@@ -8914,6 +8930,37 @@ const HQDashboard: React.FC<{
                        </button>
                      </div>
                    </div>
+                 ))}
+               </div>
+             </section>
+           )}
+
+           {quarantinedStores.length > 0 && (
+             <section className="rounded-2xl border border-red-200 bg-red-50 p-5 shadow-sm">
+               <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+                 <div>
+                   <div className="text-xs font-black uppercase tracking-[0.18em] text-red-700">Data quality hold</div>
+                   <h2 className="mt-1 text-xl font-extrabold">Excluded from HQ totals</h2>
+                   <p className="mt-1 text-sm text-red-950/70">
+                     These records are preserved for review but cannot affect sales, FX, royalty or profitability totals.
+                   </p>
+                 </div>
+                 <div className="rounded-full bg-red-100 px-3 py-1 text-xs font-black text-red-800">
+                   {quarantinedStores.length} store{quarantinedStores.length === 1 ? '' : 's'}
+                 </div>
+               </div>
+               <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                 {quarantinedStores.map((store) => (
+                   <button
+                     key={store.id}
+                     type="button"
+                     onClick={() => openHqStore(store)}
+                     className="rounded-xl border border-red-200 bg-white p-4 text-left hover:border-red-400"
+                   >
+                     <div className="font-extrabold">{store.name}</div>
+                     <div className="mt-1 text-xs text-gray-500">{store.city}, {store.country} · {store.currency}</div>
+                     <div className="mt-2 text-sm text-red-800">{store.dataQualityNote ?? 'HQ review required.'}</div>
+                   </button>
                  ))}
                </div>
              </section>
@@ -9178,7 +9225,7 @@ const HQDashboard: React.FC<{
            </div>
 
            {/* Global Supply Chain Overview */}
-           <SupplyChainIntelligence stores={stores} sales={sales} menus={menus} storeStocks={storeStocks} />
+           <SupplyChainIntelligence stores={reportingStores} sales={sales} menus={menus} storeStocks={storeStocks} />
        </div>
     </div>
   );
@@ -11612,6 +11659,30 @@ if (!myStore) {
         await loadResolvedUser();
       }}
     />
+  );
+}
+
+if (myStore.reportingStatus === 'quarantined') {
+  return (
+    <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
+      <div className="w-full max-w-lg rounded-2xl border border-red-200 bg-white p-7 shadow-sm">
+        <div className="text-xs font-black uppercase tracking-[0.18em] text-red-700">HQ review required</div>
+        <h1 className="mt-2 text-2xl font-extrabold">Store access is temporarily paused</h1>
+        <p className="mt-3 text-sm leading-relaxed text-gray-600">
+          This account is connected to a store record with an invalid country or currency setup. Existing data is preserved, but new reports are blocked until HQ confirms the correct store.
+        </p>
+        {myStore.dataQualityNote && (
+          <div className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-800">{myStore.dataQualityNote}</div>
+        )}
+        <button
+          type="button"
+          onClick={handleLogout}
+          className="mt-6 rounded-xl bg-black px-5 py-3 text-sm font-bold text-white"
+        >
+          Sign Out
+        </button>
+      </div>
+    </div>
   );
 }
 

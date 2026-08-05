@@ -19,6 +19,8 @@ export interface Store {
   ownerEmail: string;
   currency: string;
   royaltyPercentage: number; // New: Royalty Rate (e.g., 5 for 5%)
+  reportingStatus?: 'active' | 'quarantined' | 'test';
+  dataQualityNote?: string;
 }
 
 export interface Employee {

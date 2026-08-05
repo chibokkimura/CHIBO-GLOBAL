@@ -28,7 +28,26 @@ create table if not exists public.stores (
   city text not null,
   owner_email text not null,
   currency text not null,
-  royalty_percentage numeric not null default 5.0
+  royalty_percentage numeric not null default 5.0,
+  reporting_status text not null default 'active' check (reporting_status in ('active', 'quarantined', 'test')),
+  data_quality_note text
+);
+
+alter table public.stores
+  add column if not exists reporting_status text not null default 'active',
+  add column if not exists data_quality_note text;
+
+alter table public.stores
+  drop constraint if exists stores_reporting_status_check;
+alter table public.stores
+  add constraint stores_reporting_status_check
+  check (reporting_status in ('active', 'quarantined', 'test'));
+
+create table if not exists public.store_id_aliases (
+  legacy_store_id text primary key,
+  canonical_store_id text not null references public.stores(id) on update cascade on delete restrict,
+  reason text not null,
+  migrated_at timestamptz not null default now()
 );
 
 create table if not exists public.ingredients (
@@ -353,6 +372,7 @@ grant execute on function public.unlink_account_from_store(text, text) to authen
 alter table public.app_users enable row level security;
 alter table public.global_config enable row level security;
 alter table public.stores enable row level security;
+alter table public.store_id_aliases enable row level security;
 alter table public.ingredients enable row level security;
 alter table public.store_ingredient_stock enable row level security;
 alter table public.employees enable row level security;
@@ -364,6 +384,16 @@ alter table public.sales enable row level security;
 alter table public.sale_items enable row level security;
 alter table public.sale_menu_items enable row level security;
 alter table public.sale_set_items enable row level security;
+
+revoke all on table public.store_id_aliases from public, anon, authenticated;
+create index if not exists store_id_aliases_canonical_store_idx
+  on public.store_id_aliases(canonical_store_id);
+drop policy if exists "store_id_aliases_select_hq_or_canonical" on public.store_id_aliases;
+create policy "store_id_aliases_select_hq_or_canonical"
+on public.store_id_aliases for select
+to authenticated
+using (public.is_hq() or canonical_store_id = public.current_store_id());
+grant select on table public.store_id_aliases to authenticated, service_role;
 
 -- app_users: users can read/update their own profile; HQ can read all
 drop policy if exists "app_users_select_own_or_hq" on public.app_users;
@@ -399,7 +429,7 @@ language plpgsql
 set search_path = public
 as $$
 begin
-  if public.is_hq() then
+  if current_user in ('postgres', 'service_role', 'supabase_admin') or public.is_hq() then
     return new;
   end if;
 
@@ -1041,55 +1071,65 @@ insert into storage.buckets (id, name, public)
 values ('receipts', 'receipts', false)
 on conflict (id) do nothing;
 
+create or replace function public.can_access_store_storage_path(p_path_store_id text)
+returns boolean
+language sql
+stable
+security invoker
+set search_path = public
+as $$
+  select
+    public.is_hq()
+    or p_path_store_id = public.current_store_id()
+    or exists (
+      select 1
+      from public.store_id_aliases a
+      where a.legacy_store_id = p_path_store_id
+        and a.canonical_store_id = public.current_store_id()
+    );
+$$;
+
+revoke all on function public.can_access_store_storage_path(text) from public, anon;
+grant execute on function public.can_access_store_storage_path(text) to authenticated, service_role;
+
 drop policy if exists "receipts_select_hq_or_own" on storage.objects;
 create policy "receipts_select_hq_or_own"
 on storage.objects for select
+to authenticated
 using (
   bucket_id = 'receipts'
-  and (
-    public.is_hq()
-    or split_part(name, '/', 1) = public.current_store_id()
-  )
+  and public.can_access_store_storage_path(split_part(name, '/', 1))
 );
 
 drop policy if exists "receipts_insert_hq_or_own" on storage.objects;
 create policy "receipts_insert_hq_or_own"
 on storage.objects for insert
+to authenticated
 with check (
   bucket_id = 'receipts'
-  and (
-    public.is_hq()
-    or split_part(name, '/', 1) = public.current_store_id()
-  )
+  and public.can_access_store_storage_path(split_part(name, '/', 1))
 );
 
 drop policy if exists "receipts_update_hq_or_own" on storage.objects;
 create policy "receipts_update_hq_or_own"
 on storage.objects for update
+to authenticated
 using (
   bucket_id = 'receipts'
-  and (
-    public.is_hq()
-    or split_part(name, '/', 1) = public.current_store_id()
-  )
+  and public.can_access_store_storage_path(split_part(name, '/', 1))
 )
 with check (
   bucket_id = 'receipts'
-  and (
-    public.is_hq()
-    or split_part(name, '/', 1) = public.current_store_id()
-  )
+  and public.can_access_store_storage_path(split_part(name, '/', 1))
 );
 
 drop policy if exists "receipts_delete_hq_or_own" on storage.objects;
 create policy "receipts_delete_hq_or_own"
 on storage.objects for delete
+to authenticated
 using (
   bucket_id = 'receipts'
-  and (
-    public.is_hq()
-    or split_part(name, '/', 1) = public.current_store_id()
-  )
+  and public.can_access_store_storage_path(split_part(name, '/', 1))
 );
 
 alter table public.sales
