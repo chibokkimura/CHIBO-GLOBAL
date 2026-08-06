@@ -255,6 +255,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
     menuQuantities: {},
     setMenuQuantities: {},
   });
+  const [monthlyPosReportChecked, setMonthlyPosReportChecked] = useState(false);
   const [loading, setLoading] = useState(true);
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -661,6 +662,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
     .reduce((sum, quantity) => sum + (Number.isFinite(quantity) ? quantity : 0), 0)
     + (Object.values(monthlyProductSalesDraft.setMenuQuantities) as number[])
       .reduce((sum, quantity) => sum + (Number.isFinite(quantity) ? quantity : 0), 0);
+  const monthlyPosQuantityDifference = monthlyPosProductUnits - dailyReportedProductUnits;
   const productSalesDraftDirty = !monthlyProductSalesBasis
     || monthlyProductSalesDraft.sourceMode !== monthlyProductSalesBasis.sourceMode
     || monthlyProductSalesDraft.notes !== monthlyProductSalesBasis.notes
@@ -753,6 +755,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
     };
     setMonthlyProductSalesBasis(previewProductBasis);
     setMonthlyProductSalesDraft(previewProductBasis);
+    setMonthlyPosReportChecked(false);
   }, [localIngredients, monthKey, monthStart, store.currency, store.id]);
 
   const loadData = useCallback(async () => {
@@ -948,6 +951,9 @@ const CostInventoryWorkspace: React.FC<Props> = ({
       };
       setMonthlyProductSalesBasis(nextProductSalesBasis);
       setMonthlyProductSalesDraft(nextProductSalesBasis);
+      setMonthlyPosReportChecked(
+        nextProductSalesBasis.sourceMode === 'monthly_pos' && nextProductSalesBasis.confirmed,
+      );
       setCloseStatus(nextCloseStatus);
       setLockedSnapshotPayload(snapshotPayload);
       setLockedSnapshotMeta(matchingSnapshot ? {
@@ -974,6 +980,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
         menuQuantities: {},
         setMenuQuantities: {},
       });
+      setMonthlyPosReportChecked(false);
     } finally {
       setLoading(false);
     }
@@ -1044,6 +1051,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
 
   const selectProductSalesSource = (sourceMode: ProductSalesSourceMode) => {
     if (!editable) return;
+    const hasSavedMonthlyPos = monthlyProductSalesBasis?.sourceMode === 'monthly_pos';
     setMonthlyProductSalesDraft((current) => ({
       ...current,
       sourceMode,
@@ -1051,16 +1059,21 @@ const CostInventoryWorkspace: React.FC<Props> = ({
       menuQuantities: sourceMode === 'monthly_pos'
         ? Object.fromEntries(storeAnalysisMenus.map((menu) => [
           menu.id,
-          current.menuQuantities[menu.id] ?? dailyProductQuantities.menuQuantities[menu.id] ?? 0,
+          hasSavedMonthlyPos && Number.isFinite(current.menuQuantities[menu.id])
+            ? current.menuQuantities[menu.id]
+            : Number.NaN,
         ]))
         : current.menuQuantities,
       setMenuQuantities: sourceMode === 'monthly_pos'
         ? Object.fromEntries(storeAnalysisSetMenus.map((setMenu) => [
           setMenu.id,
-          current.setMenuQuantities[setMenu.id] ?? dailyProductQuantities.setMenuQuantities[setMenu.id] ?? 0,
+          hasSavedMonthlyPos && Number.isFinite(current.setMenuQuantities[setMenu.id])
+            ? current.setMenuQuantities[setMenu.id]
+            : Number.NaN,
         ]))
         : current.setMenuQuantities,
     }));
+    setMonthlyPosReportChecked(sourceMode === 'monthly_pos' && hasSavedMonthlyPos);
   };
 
   const saveMonthlyProductSales = async () => {
@@ -1095,6 +1108,14 @@ const CostInventoryWorkspace: React.FC<Props> = ({
         showInputError('Enter a whole-number monthly quantity for every menu and course. Enter 0 when none were sold.');
         return;
       }
+      if (!monthlyPosReportChecked) {
+        showInputError('Check every quantity against the monthly POS report, then select the confirmation checkbox.');
+        return;
+      }
+      if (!monthlyProductSalesDraft.notes.trim()) {
+        showInputError('Enter who checked the monthly POS report or the report name in Source note.');
+        return;
+      }
     }
 
     setSavingKey('monthly-product-sales');
@@ -1117,6 +1138,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
       };
       setMonthlyProductSalesBasis(savedBasis);
       setMonthlyProductSalesDraft(savedBasis);
+      setMonthlyPosReportChecked(savedBasis.sourceMode === 'monthly_pos');
       setNotice(
         savedBasis.sourceMode === 'monthly_pos'
           ? 'Monthly POS menu and course quantities saved. Daily sales amounts were not changed.'
@@ -1582,8 +1604,11 @@ const CostInventoryWorkspace: React.FC<Props> = ({
 
             {monthlyProductSalesDraft.sourceMode === 'monthly_pos' && (
               <div className="mt-5 space-y-5 rounded-2xl bg-gray-50 p-4">
-                <div className="rounded-xl border border-blue-200 bg-blue-50 p-3 text-xs font-bold leading-5 text-blue-900">
-                  Copy the quantity from the POS monthly product report. Enter 0 for every item with no sales. Saving these totals does not create or edit daily reports.
+                <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm leading-6 text-amber-950">
+                  <div className="font-black">Start with the actual monthly POS report</div>
+                  <div className="mt-1 text-xs font-bold">
+                    Quantities are intentionally blank. Copy every number from the POS report and enter 0 when none were sold. Daily-report quantities are shown only for comparison and are never copied automatically.
+                  </div>
                 </div>
 
                 <div>
@@ -1602,14 +1627,17 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                           value={Number.isFinite(monthlyProductSalesDraft.menuQuantities[menu.id])
                             ? monthlyProductSalesDraft.menuQuantities[menu.id]
                             : ''}
-                          onChange={(event) => setMonthlyProductSalesDraft((current) => ({
-                            ...current,
-                            confirmed: false,
-                            menuQuantities: {
-                              ...current.menuQuantities,
-                              [menu.id]: event.target.value === '' ? Number.NaN : Number(event.target.value),
-                            },
-                          }))}
+                          onChange={(event) => {
+                            setMonthlyProductSalesDraft((current) => ({
+                              ...current,
+                              confirmed: false,
+                              menuQuantities: {
+                                ...current.menuQuantities,
+                                [menu.id]: event.target.value === '' ? Number.NaN : Number(event.target.value),
+                              },
+                            }));
+                            setMonthlyPosReportChecked(false);
+                          }}
                           className="mt-2 min-h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-right text-base font-black text-gray-950 disabled:bg-gray-100"
                           aria-label={`${menu.name} monthly POS quantity`}
                         />
@@ -1637,14 +1665,17 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                           value={Number.isFinite(monthlyProductSalesDraft.setMenuQuantities[setMenu.id])
                             ? monthlyProductSalesDraft.setMenuQuantities[setMenu.id]
                             : ''}
-                          onChange={(event) => setMonthlyProductSalesDraft((current) => ({
-                            ...current,
-                            confirmed: false,
-                            setMenuQuantities: {
-                              ...current.setMenuQuantities,
-                              [setMenu.id]: event.target.value === '' ? Number.NaN : Number(event.target.value),
-                            },
-                          }))}
+                          onChange={(event) => {
+                            setMonthlyProductSalesDraft((current) => ({
+                              ...current,
+                              confirmed: false,
+                              setMenuQuantities: {
+                                ...current.setMenuQuantities,
+                                [setMenu.id]: event.target.value === '' ? Number.NaN : Number(event.target.value),
+                              },
+                            }));
+                            setMonthlyPosReportChecked(false);
+                          }}
                           className="mt-2 min-h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-right text-base font-black text-gray-950 disabled:bg-gray-100"
                           aria-label={`${setMenu.name} monthly POS quantity`}
                         />
@@ -1655,21 +1686,54 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                     )}
                   </div>
                 </div>
+
+                <div className="grid gap-3 rounded-xl border border-gray-200 bg-white p-4 sm:grid-cols-3">
+                  <div>
+                    <div className="text-[10px] font-black uppercase tracking-wide text-gray-400">Monthly POS total</div>
+                    <div className="mt-1 text-lg font-black">{formatAmount(monthlyPosProductUnits, 0)} units</div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] font-black uppercase tracking-wide text-gray-400">Daily reports</div>
+                    <div className="mt-1 text-lg font-black">{formatAmount(dailyReportedProductUnits, 0)} units</div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] font-black uppercase tracking-wide text-gray-400">Difference</div>
+                    <div className={`mt-1 text-lg font-black ${monthlyPosQuantityDifference === 0 ? 'text-emerald-700' : 'text-amber-800'}`}>
+                      {monthlyPosQuantityDifference > 0 ? '+' : ''}{formatAmount(monthlyPosQuantityDifference, 0)} units
+                    </div>
+                  </div>
+                </div>
+
+                <label className="flex min-h-12 cursor-pointer items-start gap-3 rounded-xl border-2 border-gray-300 bg-white p-4 text-sm font-bold text-gray-900">
+                  <input
+                    type="checkbox"
+                    checked={monthlyPosReportChecked}
+                    disabled={!editable}
+                    onChange={(event) => setMonthlyPosReportChecked(event.target.checked)}
+                    className="mt-0.5 h-5 w-5 shrink-0 accent-black"
+                  />
+                  <span>
+                    I checked every menu and course quantity against the monthly POS report.
+                    <span className="mt-1 block text-xs font-normal text-gray-500">Required before saving monthly POS totals.</span>
+                  </span>
+                </label>
               </div>
             )}
 
             <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end">
               <label className="flex-1 text-xs font-bold text-gray-600">
-                Source note (optional)
+                Source note {monthlyProductSalesDraft.sourceMode === 'monthly_pos' ? '(required)' : '(optional)'}
                 <input
                   value={monthlyProductSalesDraft.notes}
                   disabled={!editable}
-                  onChange={(event) => setMonthlyProductSalesDraft((current) => ({
-                    ...current,
-                    confirmed: false,
-                    notes: event.target.value,
-                  }))}
-                  placeholder="Example: POS monthly product report checked by manager"
+                  onChange={(event) => {
+                    setMonthlyProductSalesDraft((current) => ({
+                      ...current,
+                      confirmed: false,
+                      notes: event.target.value,
+                    }));
+                  }}
+                  placeholder="Example: POS July report checked by store manager"
                   className="mt-1 min-h-11 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm text-gray-950 disabled:bg-gray-100"
                 />
               </label>

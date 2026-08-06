@@ -65,7 +65,7 @@ const DEFAULT_GLOBAL_CONFIG: GlobalConfig = {
   storeNames: ['CHIBO', 'CHIBO Express', 'CHIBO Premium'],
   countries: ['South Korea', 'Vietnam', 'Philippines', 'China', 'Taiwan', 'Others'],
   cities: ['Seoul', 'Hanoi', 'Manila', 'Ningbo', 'Kaohsiung', 'Daejeon', 'Unknown', 'Osaka', 'Tokyo'],
-  currencies: ['JPY', 'USD', 'KRW', 'VND', 'THB'],
+  currencies: ['JPY', 'USD', 'KRW', 'VND', 'PHP', 'CNY', 'TWD', 'THB', 'MYR'],
   positions: ['Manager', 'Chef', 'Server', 'Part-time'],
   categories: ['Okonomiyaki', 'Yakisoba', 'Teppan Dishes', 'Side Menu', 'Alcohol', 'Soft Drinks'],
   standardIngredients: [
@@ -3376,7 +3376,7 @@ const exportGlobalSalesProgressWorkbook = async (
   const usdRoyaltyRows = storeBlocks.filter((block) => block.settlement === 'USD').map((block) => block.royaltyRow);
   const jpyRoyaltyRows = storeBlocks.filter((block) => block.settlement === 'JPY').map((block) => block.royaltyRow);
   const sumRefs = (rowNumbers: number[], col: string) =>
-    rowNumbers.length > 0 ? rowNumbers.map((row) => `${col}${row}`).join('+') : '0';
+    rowNumbers.length > 0 ? `SUM(${rowNumbers.map((row) => `${col}${row}`).join(',')})` : '0';
 
   rows.push([
     '',
@@ -3408,7 +3408,7 @@ const exportGlobalSalesProgressWorkbook = async (
     '',
     ...monthHeaders.map((_, index) => {
       const col = XLSX.utils.encode_col(3 + index);
-      return makeFormula(`${col}${summaryStartRow + 1}+${col}${summaryStartRow + 2}`);
+      return makeFormula(`SUM(${col}${summaryStartRow + 1},${col}${summaryStartRow + 2})`);
     }),
     makeFormula(`SUM(D${summaryStartRow + 3}:O${summaryStartRow + 3})`),
   ]);
@@ -3430,7 +3430,8 @@ const exportGlobalSalesProgressWorkbook = async (
     });
     return;
   } catch (error) {
-    console.warn('HD template preserving export failed. Falling back to generated workbook export.', error);
+    console.error('HD template-preserving export failed.', error);
+    throw new Error(`Template-preserving export failed: ${error instanceof Error ? error.message : String(error)}`);
   }
 
   const worksheet = XLSX.utils.aoa_to_sheet(rows);
@@ -5843,6 +5844,10 @@ const HQStoreDetail: React.FC<{
     const storeMenus = menus.filter(m => m.storeId === store.id);
     const storeSetMenus = setMenus.filter(sm => sm.storeId === store.id);
     const storeEmployees = employees.filter(e => e.storeId === store.id);
+    const currencyOptions = useMemo(
+        () => Array.from(new Set([store.currency, ...currencies].filter(Boolean))).sort(),
+        [currencies, store.currency],
+    );
     const storeSales = useMemo(() => sales.filter(s => s.storeId === store.id), [sales, store.id]);
     const canonicalStoreSales = useMemo(
         () => dedupeSalesByStoreDate(storeSales),
@@ -6984,7 +6989,7 @@ const HQStoreDetail: React.FC<{
                             <button
                                 type="button"
                                 onClick={closeReminderComposer}
-                                className="p-2 rounded-full hover:bg-gray-100 transition"
+                                className="flex h-11 w-11 items-center justify-center rounded-full transition hover:bg-gray-100"
                             >
                                 <X className="w-5 h-5 text-gray-500" />
                             </button>
@@ -7001,14 +7006,14 @@ const HQStoreDetail: React.FC<{
                                             setSelectedReminderEmails(reminderRecipients.map((recipient) => recipient.email));
                                             setReminderError(null);
                                         }}
-                                        className="px-3 py-1 rounded-lg border border-gray-200 text-xs font-semibold hover:bg-gray-50"
+                                        className="min-h-11 rounded-lg border border-gray-200 px-3 py-2 text-xs font-semibold hover:bg-gray-50"
                                     >
                                         Select All
                                     </button>
                                     <button
                                         type="button"
                                         onClick={() => setSelectedReminderEmails([])}
-                                        className="px-3 py-1 rounded-lg border border-gray-200 text-xs font-semibold hover:bg-gray-50"
+                                        className="min-h-11 rounded-lg border border-gray-200 px-3 py-2 text-xs font-semibold hover:bg-gray-50"
                                     >
                                         Clear
                                     </button>
@@ -7048,7 +7053,7 @@ const HQStoreDetail: React.FC<{
                             <button
                                 type="button"
                                 onClick={copyReminderEmails}
-                                className="px-4 py-2 rounded-xl border border-gray-200 text-sm font-semibold hover:bg-gray-50"
+                                className="min-h-11 rounded-xl border border-gray-200 px-4 py-2 text-sm font-semibold hover:bg-gray-50"
                             >
                                 Copy Recipient List
                             </button>
@@ -7056,21 +7061,21 @@ const HQStoreDetail: React.FC<{
                                 <button
                                     type="button"
                                     onClick={closeReminderComposer}
-                                    className="px-4 py-2 rounded-xl border border-gray-200 text-sm font-semibold hover:bg-gray-50"
+                                    className="min-h-11 rounded-xl border border-gray-200 px-4 py-2 text-sm font-semibold hover:bg-gray-50"
                                 >
                                     Cancel
                                 </button>
                                 <button
                                     type="button"
                                     onClick={() => openReminderDraft('mailto')}
-                                    className="px-4 py-2 rounded-xl border border-gray-200 text-sm font-semibold hover:bg-gray-50"
+                                    className="min-h-11 rounded-xl border border-gray-200 px-4 py-2 text-sm font-semibold hover:bg-gray-50"
                                 >
                                     Open Mail App
                                 </button>
                                 <button
                                     type="button"
                                     onClick={() => openReminderDraft('gmail')}
-                                    className="px-4 py-2 rounded-xl bg-black text-white text-sm font-bold hover:bg-gray-800"
+                                    className="min-h-11 rounded-xl bg-black px-4 py-2 text-sm font-bold text-white hover:bg-gray-800"
                                 >
                                     Open Gmail Draft
                                 </button>
@@ -7087,7 +7092,7 @@ const HQStoreDetail: React.FC<{
                             <button
                                 type="button"
                                 onClick={() => setShowMissingCalendar(false)}
-                                className="p-2 rounded-full hover:bg-gray-100 transition"
+                                className="flex h-11 w-11 items-center justify-center rounded-full transition hover:bg-gray-100"
                             >
                                 <X className="w-5 h-5 text-gray-500" />
                             </button>
@@ -7097,7 +7102,7 @@ const HQStoreDetail: React.FC<{
                                 <button
                                     type="button"
                                     onClick={goPrevMonth}
-                                    className="px-3 py-1 rounded-lg border border-gray-200 text-sm font-semibold hover:bg-gray-50 transition"
+                                    className="min-h-11 rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold transition hover:bg-gray-50"
                                 >
                                     Prev
                                 </button>
@@ -7108,7 +7113,7 @@ const HQStoreDetail: React.FC<{
                                     type="button"
                                     onClick={goNextMonth}
                                     disabled={!canGoNextMonth}
-                                    className="px-3 py-1 rounded-lg border border-gray-200 text-sm font-semibold disabled:opacity-50 hover:bg-gray-50 transition"
+                                    className="min-h-11 rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold transition hover:bg-gray-50 disabled:opacity-50"
                                 >
                                     Next
                                 </button>
@@ -7141,7 +7146,7 @@ const HQStoreDetail: React.FC<{
                                                 if (!isMissing) return;
                                                 openEmailReminder(dateStr);
                                             }}
-                                            className={`h-9 rounded-lg text-xs font-semibold border transition ${
+                                            className={`h-11 rounded-lg border text-xs font-semibold transition ${
                                                 isMissing
                                                     ? 'bg-red-100 border-red-300 text-red-700 hover:bg-red-200'
                                                     : isSubmitted
@@ -7178,7 +7183,7 @@ const HQStoreDetail: React.FC<{
                             <button
                                 type="button"
                                 onClick={() => setShowStockEditor(false)}
-                                className="p-2 rounded-full hover:bg-gray-100 transition"
+                                className="flex h-11 w-11 items-center justify-center rounded-full transition hover:bg-gray-100"
                             >
                                 <X className="w-5 h-5 text-gray-500" />
                             </button>
@@ -7189,11 +7194,11 @@ const HQStoreDetail: React.FC<{
                             </div>
                             <div className="space-y-2 max-h-[50vh] overflow-y-auto">
                                 {stockDrafts.map((row, idx) => (
-                                    <div key={`${row.ingredientName}-${idx}`} className="grid grid-cols-12 gap-2 items-center">
-                                        <div className="col-span-5 text-sm font-semibold text-gray-800">{row.ingredientName}</div>
-                                        <div className="col-span-2 text-xs text-gray-500">{row.unit}</div>
+                                    <div key={`${row.ingredientName}-${idx}`} className="grid grid-cols-1 items-center gap-2 rounded-xl border border-gray-100 p-3 sm:grid-cols-12 sm:border-0 sm:p-0">
+                                        <div className="text-sm font-semibold text-gray-800 sm:col-span-5">{row.ingredientName}</div>
+                                        <div className="text-xs text-gray-500 sm:col-span-2">{row.unit}</div>
                                         <input
-                                            className="col-span-2 border border-gray-200 rounded-lg p-2 text-sm text-right"
+                                            className="min-h-11 rounded-lg border border-gray-200 p-2 text-right text-sm sm:col-span-2"
                                             value={String(row.par ?? 0)}
                                             onChange={(e) => {
                                                 const val = e.target.value.replace(/[^\d.]/g, '');
@@ -7202,7 +7207,7 @@ const HQStoreDetail: React.FC<{
                                             placeholder="Stock"
                                         />
                                         <input
-                                            className="col-span-2 border border-gray-200 rounded-lg p-2 text-sm text-right"
+                                            className="min-h-11 rounded-lg border border-gray-200 p-2 text-right text-sm sm:col-span-2"
                                             value={String(row.reorder ?? 0)}
                                             onChange={(e) => {
                                                 const val = e.target.value.replace(/[^\d.]/g, '');
@@ -7219,7 +7224,7 @@ const HQStoreDetail: React.FC<{
                             <button
                                 type="button"
                                 onClick={() => setShowStockEditor(false)}
-                                className="px-4 py-2 rounded-xl border border-gray-200 text-sm font-semibold hover:bg-gray-50"
+                                className="min-h-11 rounded-xl border border-gray-200 px-4 py-2 text-sm font-semibold hover:bg-gray-50"
                             >
                                 Cancel
                             </button>
@@ -7227,7 +7232,7 @@ const HQStoreDetail: React.FC<{
                                 type="button"
                                 onClick={saveStockSettings}
                                 disabled={stockSaving}
-                                className="px-4 py-2 rounded-xl bg-black text-white text-sm font-bold disabled:opacity-50"
+                                className="min-h-11 rounded-xl bg-black px-4 py-2 text-sm font-bold text-white disabled:opacity-50"
                             >
                                 {stockSaving ? 'Saving...' : 'Save'}
                             </button>
@@ -7294,7 +7299,7 @@ const HQStoreDetail: React.FC<{
                             className="min-h-11 min-w-0 flex-1 rounded-lg border border-gray-200 bg-white px-3 py-2 text-right font-bold"
                         >
                             <option value="">Select</option>
-                            {currencies.map(cur => (
+                            {currencyOptions.map(cur => (
                                 <option key={cur} value={cur}>{cur}</option>
                             ))}
                         </select>
@@ -7673,7 +7678,7 @@ const HQStoreDetail: React.FC<{
                                                         onClick={() => {
                                                             openEmailReminder(d);
                                                         }}
-                                                        className="bg-white border border-red-200 px-2 py-1 rounded text-xs font-bold text-red-600 shadow-sm hover:bg-red-50 transition"
+                                                        className="min-h-11 rounded border border-red-200 bg-white px-3 py-2 text-xs font-bold text-red-600 shadow-sm transition hover:bg-red-50"
                                                         title="Send email reminder"
                                                     >
                                                         {d}
@@ -7685,7 +7690,7 @@ const HQStoreDetail: React.FC<{
                                                         setCalendarMonth(new Date(new Date().getFullYear(), new Date().getMonth(), 1));
                                                         setShowMissingCalendar(true);
                                                     }}
-                                                    className="bg-white border border-red-200 px-2 py-1 rounded text-xs font-bold text-red-700 shadow-sm hover:bg-red-50 transition"
+                                                    className="min-h-11 rounded border border-red-200 bg-white px-3 py-2 text-xs font-bold text-red-700 shadow-sm transition hover:bg-red-50"
                                                 >
                                                     View Older Dates
                                                 </button>
@@ -7784,15 +7789,15 @@ const HQStoreDetail: React.FC<{
 
             {detailSection === 'sales' && (
             <div className="bg-white p-6 rounded-2xl shadow-sm border mb-8">
-                <div className="flex items-center justify-between mb-6">
+                <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                     <h2 className="text-xl font-bold flex items-center gap-2">
                         <ClipboardList className="w-5 h-5"/> Sales History
                     </h2>
-                    <div className="flex items-center gap-3">
+                    <div className="flex flex-wrap items-center gap-3">
                         <select
                             value={salesMonthFilter}
                             onChange={(e) => setSalesMonthFilter(e.target.value)}
-                            className="text-xs font-semibold border border-gray-200 rounded-lg px-2 py-1 bg-white"
+                            className="min-h-11 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-semibold"
                         >
                             <option value="all">All Months</option>
                             {salesMonthOptions.map((monthKey) => (
@@ -7805,7 +7810,7 @@ const HQStoreDetail: React.FC<{
                         <button
                             type="button"
                             onClick={onLoadMoreSales}
-                            className="text-xs font-bold px-3 py-1 rounded-full border border-gray-200 hover:bg-gray-50 transition"
+                            className="min-h-11 rounded-full border border-gray-200 px-3 py-2 text-xs font-bold transition hover:bg-gray-50"
                         >
                             Load more
                         </button>
@@ -7837,13 +7842,13 @@ const HQStoreDetail: React.FC<{
                                                         inputMode="decimal"
                                                         value={editingSaleAmountDraft}
                                                         onChange={(e) => setEditingSaleAmountDraft(normalizeDecimalInput(e.target.value, 2))}
-                                                        className="w-32 border border-gray-200 rounded-lg px-2 py-1 text-right text-sm bg-white"
+                                                        className="min-h-11 w-32 rounded-lg border border-gray-200 bg-white px-2 py-2 text-right text-sm"
                                                     />
                                                     <button
                                                         type="button"
                                                         onClick={() => void saveSaleAmount(sale)}
                                                         disabled={saleAmountSaving}
-                                                        className="text-[11px] font-bold px-2 py-1 rounded-md bg-black text-white disabled:opacity-50"
+                                                        className="min-h-11 rounded-md bg-black px-3 py-2 text-[11px] font-bold text-white disabled:opacity-50"
                                                     >
                                                         Save
                                                     </button>
@@ -7851,7 +7856,7 @@ const HQStoreDetail: React.FC<{
                                                         type="button"
                                                         onClick={cancelEditSaleAmount}
                                                         disabled={saleAmountSaving}
-                                                        className="text-[11px] font-bold px-2 py-1 rounded-md border border-gray-200"
+                                                        className="min-h-11 rounded-md border border-gray-200 px-3 py-2 text-[11px] font-bold"
                                                     >
                                                         Cancel
                                                     </button>
@@ -7884,7 +7889,7 @@ const HQStoreDetail: React.FC<{
                                                 <button
                                                     type="button"
                                                     onClick={() => toggleSaleDetails(sale.id)}
-                                                    className="text-xs font-bold text-gray-700 px-3 py-1 rounded-full border border-gray-200 hover:bg-gray-50 transition"
+                                                    className="min-h-11 rounded-full border border-gray-200 px-3 py-2 text-xs font-bold text-gray-700 transition hover:bg-gray-50"
                                                 >
                                                     {expandedSales.has(sale.id) ? 'Hide' : 'View'}
                                                 </button>
@@ -7892,7 +7897,7 @@ const HQStoreDetail: React.FC<{
                                                     <button
                                                         type="button"
                                                         onClick={() => startEditSaleAmount(sale)}
-                                                        className="text-xs font-bold text-blue-700 px-3 py-1 rounded-full border border-blue-200 hover:bg-blue-50 transition"
+                                                        className="min-h-11 rounded-full border border-blue-200 px-3 py-2 text-xs font-bold text-blue-700 transition hover:bg-blue-50"
                                                     >
                                                         Edit
                                                     </button>
@@ -7906,7 +7911,7 @@ const HQStoreDetail: React.FC<{
                                                 <button
                                                     onClick={() => openReceipt(sale.id)}
                                                     disabled={receiptLoadingId === sale.id}
-                                                    className="inline-flex items-center gap-1 text-xs font-bold text-blue-600 hover:bg-blue-50 px-3 py-1 rounded-full transition disabled:opacity-60"
+                                                    className="inline-flex min-h-11 items-center gap-1 rounded-full px-3 py-2 text-xs font-bold text-blue-600 transition hover:bg-blue-50 disabled:opacity-60"
                                                 >
                                                     <ImageIcon className="w-3 h-3"/> {receiptLoadingId === sale.id ? 'Loading...' : 'View Receipt'}
                                                 </button>
@@ -8770,7 +8775,7 @@ const HQDashboard: React.FC<{
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
        {/* Header */}
-       <div className="bg-white border-b px-8 py-4 flex justify-between items-center sticky top-0 z-40">
+       <div className="sticky top-0 z-40 flex items-center justify-between border-b bg-white px-4 py-3 sm:px-8 sm:py-4">
           <div className="flex items-center gap-4">
              <div className="w-10 h-10 bg-black text-white rounded-full flex items-center justify-center text-lg font-bold">HQ</div>
              <div>
@@ -8779,7 +8784,7 @@ const HQDashboard: React.FC<{
              </div>
           </div>
           <div className="flex items-center gap-4">
-             <button onClick={() => openHqDashboardOverlay('settings')} className="p-2 hover:bg-gray-100 rounded-full transition text-gray-600 flex items-center gap-2">
+             <button aria-label="Open global settings" onClick={() => openHqDashboardOverlay('settings')} className="flex min-h-11 min-w-11 items-center justify-center gap-2 rounded-full p-2 text-gray-600 transition hover:bg-gray-100">
                  <Settings className="w-5 h-5" />
                  <span className="text-sm font-bold hidden md:inline">Global Settings</span>
              </button>
@@ -8787,7 +8792,7 @@ const HQDashboard: React.FC<{
                 <div className="font-bold text-sm">{user.name}</div>
                 <div className="text-xs text-gray-500">{user.email}</div>
              </div>
-             <button onClick={onLogout} className="p-2 hover:bg-gray-100 rounded-full transition"><LogOut className="w-5 h-5 text-gray-600" /></button>
+             <button aria-label="Sign out" onClick={onLogout} className="flex h-11 w-11 items-center justify-center rounded-full transition hover:bg-gray-100"><LogOut className="w-5 h-5 text-gray-600" /></button>
           </div>
        </div>
 
@@ -8802,15 +8807,15 @@ const HQDashboard: React.FC<{
                <div className="bg-white rounded-2xl shadow-xl max-w-2xl w-full flex flex-col max-h-[90vh]" onClick={e => e.stopPropagation()}>
                    <div className="p-6 border-b flex justify-between items-center bg-gray-50 rounded-t-2xl">
                        <h2 className="text-xl font-bold">Global Configuration</h2>
-                       <button onClick={() => closeHqDashboardOverlay('settings')}><XCircle className="w-6 h-6 text-gray-400 hover:text-black"/></button>
+                       <button aria-label="Close global settings" onClick={() => closeHqDashboardOverlay('settings')} className="flex h-11 w-11 items-center justify-center rounded-full hover:bg-gray-200"><XCircle className="w-6 h-6 text-gray-400 hover:text-black"/></button>
                    </div>
 
-                   <div className="flex border-b">
-                       <button onClick={() => selectSettingsTab('general')} className={`flex-1 py-3 text-sm font-bold border-b-2 ${settingsTab === 'general' ? 'border-black text-black' : 'border-transparent text-gray-500 hover:bg-gray-50'}`}>Store Setup</button>
-                       <button onClick={() => selectSettingsTab('locations')} className={`flex-1 py-3 text-sm font-bold border-b-2 ${settingsTab === 'locations' ? 'border-black text-black' : 'border-transparent text-gray-500 hover:bg-gray-50'}`}>Locations</button>
-                       <button onClick={() => selectSettingsTab('finance')} className={`flex-1 py-3 text-sm font-bold border-b-2 ${settingsTab === 'finance' ? 'border-black text-black' : 'border-transparent text-gray-500 hover:bg-gray-50'}`}>Finance</button>
-                       <button onClick={() => selectSettingsTab('ops')} className={`flex-1 py-3 text-sm font-bold border-b-2 ${settingsTab === 'ops' ? 'border-black text-black' : 'border-transparent text-gray-500 hover:bg-gray-50'}`}>Operations</button>
-                       <button onClick={() => selectSettingsTab('menu')} className={`flex-1 py-3 text-sm font-bold border-b-2 ${settingsTab === 'menu' ? 'border-black text-black' : 'border-transparent text-gray-500 hover:bg-gray-50'}`}>Menu Config</button>
+                   <div className="flex overflow-x-auto border-b">
+                       <button onClick={() => selectSettingsTab('general')} className={`min-h-12 min-w-[120px] flex-1 border-b-2 px-3 py-3 text-sm font-bold ${settingsTab === 'general' ? 'border-black text-black' : 'border-transparent text-gray-500 hover:bg-gray-50'}`}>Store Setup</button>
+                       <button onClick={() => selectSettingsTab('locations')} className={`min-h-12 min-w-[120px] flex-1 border-b-2 px-3 py-3 text-sm font-bold ${settingsTab === 'locations' ? 'border-black text-black' : 'border-transparent text-gray-500 hover:bg-gray-50'}`}>Locations</button>
+                       <button onClick={() => selectSettingsTab('finance')} className={`min-h-12 min-w-[120px] flex-1 border-b-2 px-3 py-3 text-sm font-bold ${settingsTab === 'finance' ? 'border-black text-black' : 'border-transparent text-gray-500 hover:bg-gray-50'}`}>Finance</button>
+                       <button onClick={() => selectSettingsTab('ops')} className={`min-h-12 min-w-[120px] flex-1 border-b-2 px-3 py-3 text-sm font-bold ${settingsTab === 'ops' ? 'border-black text-black' : 'border-transparent text-gray-500 hover:bg-gray-50'}`}>Operations</button>
+                       <button onClick={() => selectSettingsTab('menu')} className={`min-h-12 min-w-[120px] flex-1 border-b-2 px-3 py-3 text-sm font-bold ${settingsTab === 'menu' ? 'border-black text-black' : 'border-transparent text-gray-500 hover:bg-gray-50'}`}>Menu Config</button>
                    </div>
 
                    <div className="p-6 overflow-y-auto">
@@ -9035,7 +9040,7 @@ const HQDashboard: React.FC<{
                                               ? 'bg-red-100 text-red-700'
                                               : 'bg-emerald-100 text-emerald-700'
                                   }`}>
-                                      {row.missingReports > 0 ? `${row.missingReports} missing` : 'Complete'}
+                                      {row.missingReports > 0 ? `${row.missingReports} report days missing` : 'Reports complete'}
                                   </span>
                               </div>
                               <div className="text-sm font-bold mt-3">{formatCountryLocalTotals(row.localTotals)}</div>
@@ -9046,8 +9051,21 @@ const HQDashboard: React.FC<{
               </div>
            </section>
 
+           <details className="group overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
+             <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-4 p-5 [&::-webkit-details-marker]:hidden">
+               <div className="min-w-0">
+                 <div className="text-[11px] font-black uppercase tracking-[0.16em] text-gray-400">Network summary</div>
+                 <div className="mt-1 flex flex-wrap items-baseline gap-x-4 gap-y-1">
+                   <span className="text-lg font-extrabold text-gray-950">JPY {Math.round(metrics.totalSalesCurrentMonth).toLocaleString()}</span>
+                   <span className="text-xs font-bold text-gray-500">{metrics.activeStores} stores · {formatMonthKeyLabel(selectedMonthKey)}</span>
+                 </div>
+                 <div className="mt-1 text-xs text-gray-500">Open only when you need sales, royalty and setup totals.</div>
+               </div>
+               <ChevronRight className="h-5 w-5 shrink-0 text-gray-400 transition group-open:rotate-90" />
+             </summary>
+             <div className="border-t border-gray-100 p-5">
            {/* KPI Cards */}
-           <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+           <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
               {/* Sales Card */}
               <button
                 type="button"
@@ -9130,11 +9148,11 @@ const HQDashboard: React.FC<{
                {/* Inventory Card */}
                <div className="bg-white p-6 rounded-2xl shadow-sm border">
                   <div className="flex justify-between items-start">
-                      <h3 className="text-sm font-bold text-gray-500">Inventory Setup Gaps</h3>
+                      <h3 className="text-sm font-bold text-gray-500">PB Stock Setup Gaps</h3>
                       <div className="group/tooltip relative">
                           <Info className="w-4 h-4 text-gray-300 hover:text-gray-600 cursor-help"/>
                           <div className="absolute right-0 top-6 w-48 bg-black text-white text-xs p-2 rounded shadow-lg opacity-0 group-hover/tooltip:opacity-100 transition-opacity pointer-events-none z-50">
-                              Number of standard ingredients without both a stock level and reorder point configured.
+                              Standard PB ingredients without both a stock level and reorder point. This is separate from monthly profitability readiness.
                           </div>
                       </div>
                   </div>
@@ -9146,6 +9164,8 @@ const HQDashboard: React.FC<{
                   </div>
               </div>
            </div>
+             </div>
+           </details>
 
            <HQProfitabilityAnalysis
              stores={filteredStores}
@@ -9209,12 +9229,12 @@ const HQDashboard: React.FC<{
                                 {store.country.substring(0, 2).toUpperCase()}
                              </div>
                              {reportStatus.missingDates.length > 0 ? (
-                                 <span className="text-[10px] font-black px-2 py-1 rounded-full bg-red-100 text-red-700">
-                                     {reportStatus.missingDates.length} missing
+                                 <span className="whitespace-nowrap rounded-full bg-red-100 px-2 py-1 text-[10px] font-black text-red-700">
+                                     {reportStatus.missingDates.length} report days missing
                                  </span>
                              ) : (
-                                 <span className="text-[10px] font-black px-2 py-1 rounded-full bg-emerald-100 text-emerald-700">
-                                     Complete
+                                 <span className="whitespace-nowrap rounded-full bg-emerald-100 px-2 py-1 text-[10px] font-black text-emerald-700">
+                                     Reports complete
                                  </span>
                              )}
                           </div>
@@ -9846,7 +9866,7 @@ const StoreDashboard: React.FC<{
                         <div className="font-bold text-sm">{user.name}</div>
                         <div className="text-xs text-gray-500">Store Manager</div>
                      </div>
-                    <button onClick={onLogout} className="p-2 hover:bg-gray-100 rounded-full transition"><LogOut className="w-5 h-5 text-gray-600" /></button>
+                    <button aria-label="Sign out" onClick={onLogout} className="flex h-11 w-11 items-center justify-center rounded-full transition hover:bg-gray-100"><LogOut className="w-5 h-5 text-gray-600" /></button>
                 </div>
             </div>
 
@@ -11379,7 +11399,7 @@ if (localHqPreviewMode) {
       ingredients={MOCK_INGREDIENTS}
       storeStocks={previewStoreStocks}
       globalConfig={DEFAULT_GLOBAL_CONFIG}
-      salesLookbackLabel="sample data"
+      salesLookbackLabel="sample"
       onLoadMoreSales={() => {}}
       onUpdateGlobalConfig={() => {}}
       onUpdateStore={() => {}}
@@ -11420,28 +11440,33 @@ if (localOwnerPreviewMode) {
   ];
 
   return (
-    <StoreDashboard
-      user={previewUser}
-      store={previewStore}
-      onLogout={() => {
-        window.location.href = window.location.pathname;
-      }}
-      sales={MOCK_SALES}
-      menus={MOCK_MENUS}
-      setMenus={previewSetMenus}
-      employees={MOCK_EMPLOYEES}
-      ingredients={MOCK_INGREDIENTS}
-      globalConfig={DEFAULT_GLOBAL_CONFIG}
-      onAddSale={() => {}}
-      onUpdateMenu={() => {}}
-      onCreateMenu={() => {}}
-      onDeleteMenu={() => {}}
-      onUpdateSetMenu={() => {}}
-      onCreateSetMenu={() => {}}
-      onDeleteSetMenu={() => {}}
-      onUpdateEmployees={() => {}}
-      onAddIngredient={() => {}}
-    />
+    <div className="min-h-screen bg-gray-50">
+      <div className="sticky top-0 z-[80] border-b border-amber-300 bg-amber-100 px-4 py-2 text-center text-xs font-black text-amber-950">
+        DEMO PREVIEW · Sample numbers only · Never use this screen to verify operating data
+      </div>
+      <StoreDashboard
+        user={previewUser}
+        store={previewStore}
+        onLogout={() => {
+          window.location.href = window.location.pathname;
+        }}
+        sales={MOCK_SALES}
+        menus={MOCK_MENUS}
+        setMenus={previewSetMenus}
+        employees={MOCK_EMPLOYEES}
+        ingredients={MOCK_INGREDIENTS}
+        globalConfig={DEFAULT_GLOBAL_CONFIG}
+        onAddSale={() => {}}
+        onUpdateMenu={() => {}}
+        onCreateMenu={() => {}}
+        onDeleteMenu={() => {}}
+        onUpdateSetMenu={() => {}}
+        onCreateSetMenu={() => {}}
+        onDeleteSetMenu={() => {}}
+        onUpdateEmployees={() => {}}
+        onAddIngredient={() => {}}
+      />
+    </div>
   );
 }
 

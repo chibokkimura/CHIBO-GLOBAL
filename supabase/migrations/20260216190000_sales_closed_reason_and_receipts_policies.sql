@@ -61,4 +61,3 @@ using (
 
 -- 4) refresh PostgREST schema cache
 notify pgrst, 'reload schema';
-

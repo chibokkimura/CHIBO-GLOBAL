@@ -593,13 +593,50 @@ const HQProfitabilityAnalysis: React.FC<Props> = ({
           <div className="py-16 text-center text-sm font-bold text-slate-500">Loading profitability analysis…</div>
         ) : (
           <>
-            <div className="mt-6 grid gap-5 xl:grid-cols-[1.15fr_0.85fr]">
-              <div className="rounded-xl border border-slate-200 p-4">
+            <div className="mt-6 rounded-xl border border-slate-200 p-4">
+              <h3 className="text-sm font-black text-slate-950">First actions for HQ</h3>
+              <p className="mt-1 text-xs text-slate-500">Highest-impact exception or missing step first.</p>
+              <div className="mt-4 grid gap-3 xl:grid-cols-3">
+                {topActions.length > 0 ? topActions.map((row, index) => (
+                  <button
+                    key={row.store.id}
+                    type="button"
+                    onClick={() => onOpenStore(row.store, row.priority.section)}
+                    className="flex min-h-24 w-full items-start gap-3 rounded-xl border border-slate-200 p-3 text-left hover:border-slate-400 hover:bg-slate-50"
+                  >
+                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-950 text-xs font-black text-white">
+                      {index + 1}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-black text-slate-950">{row.store.name}</span>
+                      <span className="mt-0.5 block text-xs font-bold text-slate-700">{row.priority.title}</span>
+                      <span className="mt-1 block text-[11px] leading-4 text-slate-500">{row.priority.detail}</span>
+                    </span>
+                    <ArrowRight className="mt-1 h-4 w-4 shrink-0 text-slate-400" />
+                  </button>
+                )) : (
+                  <div className="rounded-xl border border-teal-200 bg-teal-50 p-4 text-sm text-teal-900 xl:col-span-3">
+                    <div className="flex items-center gap-2 font-black">
+                      <CheckCircle2 className="h-4 w-4" /> No target breach detected
+                    </div>
+                    <p className="mt-1 text-xs">Continue monthly monitoring and verify data completeness.</p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <details className="group mt-5 overflow-hidden rounded-xl border border-slate-200">
+              <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-3 bg-slate-50 px-4 py-3 [&::-webkit-details-marker]:hidden">
                 <div className="flex items-center gap-2">
                   <BarChart3 className="h-4 w-4 text-slate-500" />
-                  <h3 className="text-sm font-black text-slate-950">Management margin vs store target</h3>
+                  <span>
+                    <span className="block text-sm font-black text-slate-950">Management margin vs store target</span>
+                    <span className="mt-0.5 block text-[11px] text-slate-500">Open the graph for {chartData.length} analysis-ready store{chartData.length === 1 ? '' : 's'}.</span>
+                  </span>
                 </div>
-                <p className="mt-1 text-xs text-slate-500">Percentages make stores comparable without mixing local currencies.</p>
+                <ArrowRight className="h-4 w-4 shrink-0 text-slate-400 transition group-open:rotate-90" />
+              </summary>
+              <div className="border-t border-slate-200 p-4">
                 {chartData.length > 0 ? (
                   <div className="mt-4 h-[280px] w-full">
                     <ResponsiveContainer width="100%" height="100%">
@@ -620,41 +657,18 @@ const HQProfitabilityAnalysis: React.FC<Props> = ({
                   </div>
                 )}
               </div>
+            </details>
 
-              <div className="rounded-xl border border-slate-200 p-4">
-                <h3 className="text-sm font-black text-slate-950">First actions for HQ</h3>
-                <p className="mt-1 text-xs text-slate-500">Highest-impact exception or missing step first.</p>
-                <div className="mt-4 space-y-3">
-                  {topActions.length > 0 ? topActions.map((row, index) => (
-                    <button
-                      key={row.store.id}
-                      type="button"
-                      onClick={() => onOpenStore(row.store, row.priority.section)}
-                      className="flex w-full items-start gap-3 rounded-xl border border-slate-200 p-3 text-left hover:border-slate-400 hover:bg-slate-50"
-                    >
-                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-950 text-xs font-black text-white">
-                        {index + 1}
-                      </span>
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-sm font-black text-slate-950">{row.store.name}</span>
-                        <span className="mt-0.5 block text-xs font-bold text-slate-700">{row.priority.title}</span>
-                        <span className="mt-1 block text-[11px] leading-4 text-slate-500">{row.priority.detail}</span>
-                      </span>
-                      <ArrowRight className="mt-1 h-4 w-4 shrink-0 text-slate-400" />
-                    </button>
-                  )) : (
-                    <div className="rounded-xl border border-teal-200 bg-teal-50 p-4 text-sm text-teal-900">
-                      <div className="flex items-center gap-2 font-black">
-                        <CheckCircle2 className="h-4 w-4" /> No target breach detected
-                      </div>
-                      <p className="mt-1 text-xs">Continue monthly monitoring and verify data completeness.</p>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            <div className="mt-6 space-y-3 lg:hidden">
+            <details className="group mt-6 overflow-hidden rounded-xl border border-slate-200">
+              <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-3 bg-slate-50 px-4 py-3 [&::-webkit-details-marker]:hidden">
+                <span>
+                  <span className="block text-sm font-black text-slate-950">All store results</span>
+                  <span className="mt-0.5 block text-[11px] text-slate-500">Open the full store-by-store figures only when needed.</span>
+                </span>
+                <ArrowRight className="h-4 w-4 shrink-0 text-slate-400 transition group-open:rotate-90" />
+              </summary>
+              <div className="border-t border-slate-200 p-3 sm:p-4">
+            <div className="space-y-3 lg:hidden">
               {rows.map((row) => {
                 const summary = row.summary;
                 return (
@@ -704,7 +718,7 @@ const HQProfitabilityAnalysis: React.FC<Props> = ({
               })}
             </div>
 
-            <div className="mt-6 hidden overflow-x-auto rounded-xl border border-slate-200 lg:block">
+            <div className="hidden overflow-x-auto rounded-xl border border-slate-200 lg:block">
               <table className="w-full min-w-[1280px] text-left text-xs">
                 <thead className="border-b border-slate-200 bg-slate-50 text-[10px] font-black uppercase tracking-wide text-slate-500">
                   <tr>
@@ -786,6 +800,8 @@ const HQProfitabilityAnalysis: React.FC<Props> = ({
                 </tbody>
               </table>
             </div>
+              </div>
+            </details>
           </>
         )}
 
