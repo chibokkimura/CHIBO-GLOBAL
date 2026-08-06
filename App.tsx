@@ -14,6 +14,12 @@ import { MOCK_EMPLOYEES, MOCK_INGREDIENTS, MOCK_MENUS, MOCK_SALES, MOCK_STORES, 
 import MonthlyCloseWorkspace from './MonthlyCloseWorkspace';
 import CostInventoryWorkspace from './CostInventoryWorkspace';
 import HQProfitabilityAnalysis from './HQProfitabilityAnalysis';
+import {
+  HQLanguageBoundary,
+  HQLanguageSwitch,
+  HQ_LANGUAGE_STORAGE_KEY,
+  type HQLocale,
+} from './HQLanguageBoundary';
 
 
 // --- Supabase Data Layer ---
@@ -5840,7 +5846,9 @@ const HQStoreDetail: React.FC<{
     onDeleteSetMenu: (id: string) => void;
     onUpdateEmployees: (storeId: string, employees: Employee[]) => void;
     onAddIngredient: (ing: Ingredient) => Promise<void> | void;
-}> = ({ store, initialMonthKey, sales, menus, setMenus, employees, ingredients, storeStocks, allStores, categories, standardIngredients, currencies, positions, fxRates, fxStatus, fxSourceText, onRefreshFx, salesLookbackLabel, onLoadMoreSales, onBack, onUpdateStore, onSaveStoreStocks, onMergeStores, onDeleteStore, onUpdateMenu, onCreateMenu, onDeleteMenu, onUpdateSetMenu, onCreateSetMenu, onDeleteSetMenu, onUpdateEmployees, onAddIngredient }) => {
+    hqLocale: HQLocale;
+    onHqLocaleChange: (locale: HQLocale) => void;
+}> = ({ store, initialMonthKey, sales, menus, setMenus, employees, ingredients, storeStocks, allStores, categories, standardIngredients, currencies, positions, fxRates, fxStatus, fxSourceText, onRefreshFx, salesLookbackLabel, onLoadMoreSales, onBack, onUpdateStore, onSaveStoreStocks, onMergeStores, onDeleteStore, onUpdateMenu, onCreateMenu, onDeleteMenu, onUpdateSetMenu, onCreateSetMenu, onDeleteSetMenu, onUpdateEmployees, onAddIngredient, hqLocale, onHqLocaleChange }) => {
     const storeMenus = menus.filter(m => m.storeId === store.id);
     const storeSetMenus = setMenus.filter(sm => sm.storeId === store.id);
     const storeEmployees = employees.filter(e => e.storeId === store.id);
@@ -7266,9 +7274,12 @@ const HQStoreDetail: React.FC<{
                 />
             )}
 
-            <button onClick={onBack} className="mb-5 flex min-h-11 items-center gap-2 rounded-xl px-1 font-bold text-gray-500 hover:text-black">
-                <ArrowLeft className="w-5 h-5"/> Back to Dashboard
-            </button>
+            <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+                <button onClick={onBack} className="flex min-h-11 items-center gap-2 rounded-xl px-1 font-bold text-gray-500 hover:text-black">
+                    <ArrowLeft className="w-5 h-5"/> Back to Dashboard
+                </button>
+                <HQLanguageSwitch locale={hqLocale} onChange={onHqLocaleChange} />
+            </div>
 
             <div className="mb-6 flex min-w-0 flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
                 <div className="min-w-0">
@@ -8374,6 +8385,10 @@ const HQDashboard: React.FC<{
   const [selectedStore, setSelectedStore] = useState<Store | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isSalesAnalyticsOpen, setIsSalesAnalyticsOpen] = useState(false);
+  const [hqLocale, setHqLocale] = useState<HQLocale>(() => {
+    if (typeof window === 'undefined') return 'ja';
+    return window.localStorage.getItem(HQ_LANGUAGE_STORAGE_KEY) === 'en' ? 'en' : 'ja';
+  });
   const reportingStores = useMemo(
     () => stores.filter((store) => (
       (store.reportingStatus ?? 'active') === 'active'
@@ -8442,6 +8457,13 @@ const HQDashboard: React.FC<{
 
   // Tabs for Settings
   const [settingsTab, setSettingsTab] = useState<'general' | 'locations' | 'finance' | 'ops' | 'menu'>('general');
+
+  const updateHqLocale = useCallback((locale: HQLocale) => {
+    setHqLocale(locale);
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(HQ_LANGUAGE_STORAGE_KEY, locale);
+    }
+  }, []);
 
   useEffect(() => {
     if (!hqMonthOptions.includes(selectedMonthKey)) {
@@ -8735,44 +8757,49 @@ const HQDashboard: React.FC<{
 
   if (selectedStore) {
     return (
-      <HQStoreDetail
-        store={selectedStore}
-        initialMonthKey={selectedMonthKey}
-        sales={sales}
-        menus={menus}
-        setMenus={setMenus}
-        employees={employees}
-        ingredients={ingredients}
-        storeStocks={storeStocks}
-        allStores={stores}
-        categories={globalConfig.categories}
-        standardIngredients={globalConfig.standardIngredients}
-        currencies={globalConfig.currencies}
-        positions={globalConfig.positions}
-        fxRates={fxRates}
-        fxStatus={fxStatus}
-        fxSourceText={fxSourceText}
-        onRefreshFx={refreshFxNow}
-        salesLookbackLabel={salesLookbackLabel}
-        onLoadMoreSales={onLoadMoreSales}
-        onBack={closeHqStore}
-        onUpdateStore={onUpdateStore}
-        onSaveStoreStocks={onSaveStoreStocks}
-        onMergeStores={onMergeStores}
-        onDeleteStore={onDeleteStore}
-        onUpdateMenu={onUpdateMenu}
-        onCreateMenu={onCreateMenu}
-        onDeleteMenu={onDeleteMenu}
-        onUpdateSetMenu={onUpdateSetMenu}
-        onCreateSetMenu={onCreateSetMenu}
-        onDeleteSetMenu={onDeleteSetMenu}
-        onUpdateEmployees={onUpdateEmployees}
-        onAddIngredient={onAddIngredient}
-      />
+      <HQLanguageBoundary locale={hqLocale}>
+        <HQStoreDetail
+          store={selectedStore}
+          initialMonthKey={selectedMonthKey}
+          sales={sales}
+          menus={menus}
+          setMenus={setMenus}
+          employees={employees}
+          ingredients={ingredients}
+          storeStocks={storeStocks}
+          allStores={stores}
+          categories={globalConfig.categories}
+          standardIngredients={globalConfig.standardIngredients}
+          currencies={globalConfig.currencies}
+          positions={globalConfig.positions}
+          fxRates={fxRates}
+          fxStatus={fxStatus}
+          fxSourceText={fxSourceText}
+          onRefreshFx={refreshFxNow}
+          salesLookbackLabel={salesLookbackLabel}
+          onLoadMoreSales={onLoadMoreSales}
+          onBack={closeHqStore}
+          onUpdateStore={onUpdateStore}
+          onSaveStoreStocks={onSaveStoreStocks}
+          onMergeStores={onMergeStores}
+          onDeleteStore={onDeleteStore}
+          onUpdateMenu={onUpdateMenu}
+          onCreateMenu={onCreateMenu}
+          onDeleteMenu={onDeleteMenu}
+          onUpdateSetMenu={onUpdateSetMenu}
+          onCreateSetMenu={onCreateSetMenu}
+          onDeleteSetMenu={onDeleteSetMenu}
+          onUpdateEmployees={onUpdateEmployees}
+          onAddIngredient={onAddIngredient}
+          hqLocale={hqLocale}
+          onHqLocaleChange={updateHqLocale}
+        />
+      </HQLanguageBoundary>
     );
   }
 
   return (
+    <HQLanguageBoundary locale={hqLocale}>
     <div className="min-h-screen bg-gray-50 flex flex-col">
        {/* Header */}
        <div className="sticky top-0 z-40 flex items-center justify-between border-b bg-white px-4 py-3 sm:px-8 sm:py-4">
@@ -8796,10 +8823,19 @@ const HQDashboard: React.FC<{
           </div>
        </div>
 
+       <div className="flex justify-end border-b bg-white px-4 py-2 sm:px-8">
+         <HQLanguageSwitch locale={hqLocale} onChange={updateHqLocale} />
+       </div>
+
        {isLocalHqPreviewMode() && (
-         <div className="border-b border-amber-300 bg-amber-100 px-4 py-2 text-center text-xs font-black text-amber-950">
-           DEMO PREVIEW · Sample numbers only · Never use this screen to verify operating data
-         </div>
+         <>
+           <div className="border-b border-amber-300 bg-amber-100 px-4 py-2 text-center text-xs font-black text-amber-950">
+             DEMO PREVIEW · Sample numbers only · Never use this screen to verify operating data
+           </div>
+           <div className="pointer-events-none fixed bottom-4 left-1/2 z-[95] max-w-[calc(100%-2rem)] -translate-x-1/2 whitespace-nowrap rounded-full border-2 border-amber-400 bg-amber-100/95 px-4 py-2 text-center text-xs font-black text-amber-950 shadow-lg backdrop-blur">
+             DEMO · 実データではありません
+           </div>
+         </>
        )}
 
        {isSettingsOpen && (
@@ -9275,6 +9311,7 @@ const HQDashboard: React.FC<{
            </details>
        </div>
     </div>
+    </HQLanguageBoundary>
   );
 };
 
