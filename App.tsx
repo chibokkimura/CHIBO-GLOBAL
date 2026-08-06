@@ -5,12 +5,15 @@ import {
 } from 'recharts';
 import {
   LayoutDashboard, ClipboardList, Users, UtensilsCrossed, LogOut,
-  AlertTriangle, Plus, Trash2, ChevronRight, FileText, Camera, Save, ArrowLeft, BarChart3, Package, MapPin, CheckCircle2, XCircle, TrendingUp, TrendingDown, Minus, DollarSign, Clock, Image as ImageIcon, Layers, UploadCloud, Settings, X, Search, Info, Grid, Briefcase, User as UserIcon, AlertCircle, Mail, ArrowRight, UserPlus, AlertOctagon, ArrowUpRight, ArrowDownRight, CalendarX
+  AlertTriangle, Plus, Trash2, ChevronRight, FileText, Camera, Save, ArrowLeft, BarChart3, Package, MapPin, CheckCircle2, XCircle, TrendingUp, TrendingDown, Minus, DollarSign, Clock, Image as ImageIcon, Layers, UploadCloud, Settings, X, Search, Info, Briefcase, User as UserIcon, AlertCircle, Mail, ArrowRight, UserPlus, AlertOctagon, ArrowUpRight, ArrowDownRight, CalendarX
 } from 'lucide-react';
 import * as XLSX from 'xlsx-js-style';
 import { isSupabaseConfigured, supabase } from './supabaseClient';
 import { signInWithEmailPassword, signInWithGoogle, signOut, signUpWithEmailPassword } from './auth';
 import { MOCK_EMPLOYEES, MOCK_INGREDIENTS, MOCK_MENUS, MOCK_SALES, MOCK_STORES, MOCK_USERS } from './constants';
+import MonthlyCloseWorkspace from './MonthlyCloseWorkspace';
+import CostInventoryWorkspace from './CostInventoryWorkspace';
+import HQProfitabilityAnalysis from './HQProfitabilityAnalysis';
 
 
 // --- Supabase Data Layer ---
@@ -62,7 +65,7 @@ const DEFAULT_GLOBAL_CONFIG: GlobalConfig = {
   storeNames: ['CHIBO', 'CHIBO Express', 'CHIBO Premium'],
   countries: ['South Korea', 'Vietnam', 'Philippines', 'China', 'Taiwan', 'Others'],
   cities: ['Seoul', 'Hanoi', 'Manila', 'Ningbo', 'Kaohsiung', 'Daejeon', 'Unknown', 'Osaka', 'Tokyo'],
-  currencies: ['JPY', 'USD', 'KRW', 'VND', 'THB'],
+  currencies: ['JPY', 'USD', 'KRW', 'VND', 'PHP', 'CNY', 'TWD', 'THB', 'MYR'],
   positions: ['Manager', 'Chef', 'Server', 'Part-time'],
   categories: ['Okonomiyaki', 'Yakisoba', 'Teppan Dishes', 'Side Menu', 'Alcohol', 'Soft Drinks'],
   standardIngredients: [
@@ -82,6 +85,13 @@ const isLocalHqPreviewMode = () => {
   return isLocalHost && new URLSearchParams(window.location.search).get('preview') === 'hq';
 };
 
+const isLocalOwnerPreviewMode = () => {
+  if (typeof window === 'undefined') return false;
+  const host = window.location.hostname;
+  const isLocalHost = host === 'localhost' || host === '127.0.0.1' || host === '::1';
+  return isLocalHost && new URLSearchParams(window.location.search).get('preview') === 'owner';
+};
+
 const SALES_LOOKBACK_DEFAULT_DAYS = 90;
 const SALES_LOOKBACK_STEP_DAYS = 90;
 const RECEIPT_BUCKET = 'receipts';
@@ -94,6 +104,7 @@ let salesIsClosedColumnSupported: boolean | null = null;
 let salesCommentColumnSupported: boolean | null = null;
 let setMenuTableSupported: boolean | null = null;
 let saleSetItemsTableSupported: boolean | null = null;
+let saleMenuItemsTableSupported: boolean | null = null;
 const SALES_RECEIPT_IMAGE_RESIZE = { maxWidth: 1800, maxHeight: 1800, quality: 0.85 };
 const MENU_IMAGE_RESIZE = { maxWidth: 1400, maxHeight: 1400, quality: 0.82 };
 const STAFF_IMAGE_RESIZE = { maxWidth: 640, maxHeight: 640, quality: 0.82 };
@@ -102,6 +113,15 @@ const LEGACY_MEDIA_MIGRATION_LIMIT = 80;
 const signedImageUrlCache = new Map<string, { url: string; expiresAt: number }>();
 const HQ_ADMIN_EMAIL = 'chibo.global.mgsystem@gmail.com';
 const HQ_BOOTSTRAP_EMAILS = [HQ_ADMIN_EMAIL];
+
+function isEditableNavigationTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const tagName = target.tagName;
+  return target.isContentEditable
+    || tagName === 'INPUT'
+    || tagName === 'TEXTAREA'
+    || tagName === 'SELECT';
+}
 
 function isHqAdminEmail(email: string | null | undefined): boolean {
   return (email ?? '').trim().toLowerCase() === HQ_ADMIN_EMAIL;
@@ -313,17 +333,17 @@ async function getMyAppUser(): Promise<AppUserRow | null> {
   return (data as any) ?? null;
 }
 
-async function upsertMyOwnerProfile(params: { name: string; email: string; storeId: string }) {
+async function createMyPendingOwnerProfile(params: { name: string; email: string }) {
   const { data: authData } = await supabase.auth.getUser();
   const uid = authData.user?.id;
   if (!uid) throw new Error('No auth user');
 
-  const { error } = await supabase.from('app_users').upsert({
+  const { error } = await supabase.from('app_users').insert({
     user_id: uid,
     email: params.email,
     name: params.name,
     role: 'OWNER',
-    store_id: params.storeId,
+    store_id: null,
   });
 
   if (error) throw error;
@@ -390,7 +410,7 @@ async function saveGlobalConfig(config: GlobalConfig) {
 async function loadStores(): Promise<Store[]> {
   const { data, error } = await supabase
     .from('stores')
-    .select('id,name,country,city,owner_email,currency,royalty_percentage')
+    .select('id,name,country,city,owner_email,currency,royalty_percentage,reporting_status,data_quality_note')
     .order('id');
   if (error) throw error;
   return (data ?? []).map((r: any) => ({
@@ -401,6 +421,8 @@ async function loadStores(): Promise<Store[]> {
     ownerEmail: r.owner_email,
     currency: r.currency,
     royaltyPercentage: Number(r.royalty_percentage),
+    reportingStatus: r.reporting_status ?? 'active',
+    dataQualityNote: r.data_quality_note ?? undefined,
   }));
 }
 
@@ -721,6 +743,25 @@ async function loadSales(daysBack?: number): Promise<Sale[]> {
     }
   }
 
+  let menuItemData: any[] = [];
+  if (saleIds.length > 0 && saleMenuItemsTableSupported !== false) {
+    const { data, error: menuItemErr } = await supabase
+      .from('sale_menu_items')
+      .select('sale_id,menu_id,quantity')
+      .in('sale_id', saleIds);
+    if (menuItemErr) {
+      if (isSkippableSalesChildTableError(menuItemErr, 'sale_menu_items')) {
+        saleMenuItemsTableSupported = false;
+        console.warn('Skipping sale_menu_items load until the Phase 7 table is active.', menuItemErr);
+      } else {
+        throw menuItemErr;
+      }
+    } else {
+      saleMenuItemsTableSupported = true;
+      menuItemData = data ?? [];
+    }
+  }
+
   const itemsBySale: Record<string, SaleItem[]> = {};
   itemData.forEach((r: any) => {
     const arr = itemsBySale[r.sale_id] ?? [];
@@ -735,12 +776,20 @@ async function loadSales(daysBack?: number): Promise<Sale[]> {
     setItemsBySale[r.sale_id] = arr;
   });
 
+  const menuItemsBySale: Record<string, SaleItem[]> = {};
+  menuItemData.forEach((r: any) => {
+    const arr = menuItemsBySale[r.sale_id] ?? [];
+    arr.push({ menuId: r.menu_id, quantity: Number(r.quantity) });
+    menuItemsBySale[r.sale_id] = arr;
+  });
+
   const mappedSales = (salesData ?? []).map((s: any) => ({
     id: s.id,
     storeId: s.store_id,
     date: s.date,
     totalAmount: Number(s.total_amount),
     items: itemsBySale[s.id] ?? [],
+    menuItems: menuItemsBySale[s.id] ?? [],
     setItems: setItemsBySale[s.id] ?? [],
     hasReceipt: receiptIds.has(s.id),
     isClosed: Boolean(s.is_closed),
@@ -1171,6 +1220,44 @@ async function addSale(sale: Sale) {
     }
   }
 
+  if (existingSaleId && saleMenuItemsTableSupported !== false) {
+    const { error: clearMenuItemsErr } = await supabase
+      .from('sale_menu_items')
+      .delete()
+      .eq('sale_id', targetSaleId);
+    if (clearMenuItemsErr) {
+      if (isSkippableSalesChildTableError(clearMenuItemsErr, 'sale_menu_items')) {
+        saleMenuItemsTableSupported = false;
+        console.warn('Skipping sale_menu_items update until the Phase 7 table is active.', clearMenuItemsErr);
+      } else {
+        throw new Error(`Failed to refresh direct menu quantities: ${clearMenuItemsErr.message || 'Unknown error'}`);
+      }
+    }
+  }
+
+  if (sale.menuItems?.length && saleMenuItemsTableSupported !== false) {
+    const menuRows = sale.menuItems
+      .filter((item) => item.menuId && Number(item.quantity) > 0)
+      .map((item) => ({
+        sale_id: targetSaleId,
+        menu_id: item.menuId,
+        quantity: Number(item.quantity),
+      }));
+    if (menuRows.length > 0) {
+      const { error: menuItemsError } = await supabase.from('sale_menu_items').insert(menuRows);
+      if (menuItemsError) {
+        if (isSkippableSalesChildTableError(menuItemsError, 'sale_menu_items')) {
+          saleMenuItemsTableSupported = false;
+          console.warn('Skipping sale_menu_items save until the Phase 7 table is active.', menuItemsError);
+        } else {
+          throw new Error(`Failed to save direct menu quantities: ${menuItemsError.message || 'Unknown error'}`);
+        }
+      } else {
+        saleMenuItemsTableSupported = true;
+      }
+    }
+  }
+
   if (existingSaleId && saleSetItemsTableSupported !== false) {
     const { error: clearSetItemsErr } = await supabase
       .from('sale_set_items')
@@ -1236,6 +1323,45 @@ const formatMonthKeyLabel = (monthKey: string) => {
 const extractMonthKey = (dateText: string) => {
   if (!dateText || dateText.length < 7) return '';
   return dateText.slice(0, 7);
+};
+
+const getReportingDatesForMonth = (monthKey: string, now = new Date()) => {
+  const [year, month] = monthKey.split('-').map((value) => Number(value));
+  if (!year || !month || month < 1 || month > 12) return [];
+
+  const monthStart = new Date(year, month - 1, 1);
+  const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  if (monthStart.getTime() > currentMonthStart.getTime()) return [];
+
+  const monthEnd = new Date(year, month, 0);
+  const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+  const reportingEnd = monthStart.getTime() === currentMonthStart.getTime()
+    ? yesterday
+    : monthEnd;
+  if (reportingEnd.getTime() < monthStart.getTime()) return [];
+
+  const dates: string[] = [];
+  const cursor = new Date(monthStart);
+  while (cursor.getTime() <= reportingEnd.getTime()) {
+    dates.push(formatDate(cursor));
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return dates;
+};
+
+const getStoreMonthReportStatus = (sales: Sale[], storeId: string, monthKey: string) => {
+  const expectedDates = getReportingDatesForMonth(monthKey);
+  const submittedDates = new Set(
+    dedupeSalesByStoreDate(sales)
+      .filter((sale) => sale.storeId === storeId && extractMonthKey(sale.date) === monthKey)
+      .map((sale) => sale.date),
+  );
+  const missingDates = expectedDates.filter((date) => !submittedDates.has(date));
+  return {
+    expected: expectedDates.length,
+    submitted: expectedDates.filter((date) => submittedDates.has(date)).length,
+    missingDates,
+  };
 };
 
 const scoreSaleCompleteness = (entry: Sale) => {
@@ -3250,7 +3376,7 @@ const exportGlobalSalesProgressWorkbook = async (
   const usdRoyaltyRows = storeBlocks.filter((block) => block.settlement === 'USD').map((block) => block.royaltyRow);
   const jpyRoyaltyRows = storeBlocks.filter((block) => block.settlement === 'JPY').map((block) => block.royaltyRow);
   const sumRefs = (rowNumbers: number[], col: string) =>
-    rowNumbers.length > 0 ? rowNumbers.map((row) => `${col}${row}`).join('+') : '0';
+    rowNumbers.length > 0 ? `SUM(${rowNumbers.map((row) => `${col}${row}`).join(',')})` : '0';
 
   rows.push([
     '',
@@ -3282,7 +3408,7 @@ const exportGlobalSalesProgressWorkbook = async (
     '',
     ...monthHeaders.map((_, index) => {
       const col = XLSX.utils.encode_col(3 + index);
-      return makeFormula(`${col}${summaryStartRow + 1}+${col}${summaryStartRow + 2}`);
+      return makeFormula(`SUM(${col}${summaryStartRow + 1},${col}${summaryStartRow + 2})`);
     }),
     makeFormula(`SUM(D${summaryStartRow + 3}:O${summaryStartRow + 3})`),
   ]);
@@ -3304,7 +3430,8 @@ const exportGlobalSalesProgressWorkbook = async (
     });
     return;
   } catch (error) {
-    console.warn('HD template preserving export failed. Falling back to generated workbook export.', error);
+    console.error('HD template-preserving export failed.', error);
+    throw new Error(`Template-preserving export failed: ${error instanceof Error ? error.message : String(error)}`);
   }
 
   const worksheet = XLSX.utils.aoa_to_sheet(rows);
@@ -3699,23 +3826,27 @@ const FinancialsTable: React.FC<{
   fxRates: Record<string, number> | null;
   fxStatus: FxRatesStatus;
   fxSourceText: string;
+  monthKey?: string;
   onExportExcel: () => void;
-}> = ({ stores, sales, fxRates, fxStatus, fxSourceText, onExportExcel }) => {
+}> = ({ stores, sales, fxRates, fxStatus, fxSourceText, monthKey, onExportExcel }) => {
   const currentMonthKey = useMemo(() => {
+    if (monthKey) return monthKey;
     const monthKeys = dedupeSalesByStoreDate(sales)
       .map((sale) => extractMonthKey(sale.date))
       .filter(Boolean)
       .sort((a, b) => b.localeCompare(a));
     return monthKeys[0] ?? formatMonthKey(new Date());
-  }, [sales]);
+  }, [sales, monthKey]);
   const currentMonthLabel = formatMonthKeyLabel(currentMonthKey);
 
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
         <div className="p-6 border-b flex justify-between items-center bg-gray-50">
             <div>
-              <h3 className="font-bold text-lg text-gray-800">Financial Performance</h3>
-              <div className="text-xs text-gray-500 font-medium">Basis month: {currentMonthLabel} • local currency and JPY estimate shown together</div>
+              <h3 className="font-bold text-lg text-gray-800">Sales Reporting Progress</h3>
+              <div className="text-xs text-gray-500 font-medium">
+                Daily reported sales and estimated royalty only · {currentMonthLabel} · local currency and JPY
+              </div>
             </div>
             <button
               type="button"
@@ -3742,6 +3873,8 @@ const FinancialsTable: React.FC<{
                         const totalRevenue = storeSales.reduce((sum, s) => sum + s.totalAmount, 0);
                         const totalJPY = convertToJPY(totalRevenue, store.currency, fxRates);
                         const royaltyJPY = totalJPY !== null ? totalJPY * (store.royaltyPercentage / 100) : null;
+                        const reportStatus = getStoreMonthReportStatus(sales, store.id, currentMonthKey);
+                        const isComplete = reportStatus.expected > 0 && reportStatus.missingDates.length === 0;
 
                         return (
                             <tr key={store.id} className="hover:bg-gray-50 transition-colors">
@@ -3759,7 +3892,19 @@ const FinancialsTable: React.FC<{
                                     {royaltyJPY === null ? '—' : `JPY ${royaltyJPY.toLocaleString(undefined, {maximumFractionDigits: 0})}`}
                                 </td>
                                 <td className="p-4 text-center">
-                                    <span className="bg-emerald-100 text-emerald-700 px-2 py-1 rounded-full text-[10px] font-black uppercase tracking-wide">Good</span>
+                                    {reportStatus.expected === 0 ? (
+                                        <span className="bg-gray-100 text-gray-600 px-2 py-1 rounded-full text-[10px] font-black uppercase tracking-wide">
+                                            No due dates
+                                        </span>
+                                    ) : (
+                                        <span className={`px-2 py-1 rounded-full text-[10px] font-black uppercase tracking-wide ${
+                                            isComplete
+                                                ? 'bg-emerald-100 text-emerald-700'
+                                                : 'bg-red-100 text-red-700'
+                                        }`}>
+                                            {isComplete ? 'Complete' : `${reportStatus.missingDates.length} missing`}
+                                        </span>
+                                    )}
                                 </td>
                             </tr>
                         );
@@ -3955,16 +4100,25 @@ const SalesReporter: React.FC<{
   onSave: (sale: Sale) => Promise<void> | void;
   onCancel: () => void;
 }> = ({ store, sales, menus, setMenus, categories, initialDate, onSave, onCancel }) => {
+  type SalesReportField = 'date' | 'revenue' | 'items' | 'receipt' | 'closedReason';
+  type SalesReportFieldErrors = Partial<Record<SalesReportField, string>>;
+
   const [date, setDate] = useState(initialDate || formatDate(new Date()));
-  const [items, setItems] = useState<SaleItem[]>([]); // Store category name in menuId
+  const [items, setItems] = useState<SaleItem[]>([]); // Legacy/unassigned direct category quantity; new reports derive category totals from menu quantities.
+  const [directMenuItems, setDirectMenuItems] = useState<SaleItem[]>([]);
   const [setMenuItems, setSetMenuItems] = useState<SaleSetItem[]>([]);
+  const [menuFilter, setMenuFilter] = useState('');
   const [isClosed, setIsClosed] = useState(false);
   const [receiptImage, setReceiptImage] = useState<string | null>(null);
   const [manualRevenue, setManualRevenue] = useState<string>('');
   const [comment, setComment] = useState<string>('');
   const [closedReason, setClosedReason] = useState<string>('');
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<SalesReportFieldErrors>({});
   const [submitting, setSubmitting] = useState(false);
+  const [closeStatus, setCloseStatus] = useState<'draft' | 'submitted' | 'approved' | 'reopened'>('draft');
+  const [checkingMonthLock, setCheckingMonthLock] = useState(false);
+  const monthLocked = closeStatus === 'submitted' || closeStatus === 'approved';
 
   useEffect(() => {
     if (initialDate) {
@@ -3973,6 +4127,7 @@ const SalesReporter: React.FC<{
       setDate(formatDate(new Date()));
     }
     setSubmitError(null);
+    setFieldErrors({});
   }, [initialDate]);
 
   const existingSaleForDate = useMemo(() => {
@@ -3983,12 +4138,82 @@ const SalesReporter: React.FC<{
   }, [sales, store.id, date]);
 
   useEffect(() => {
+    let active = true;
+    if (!date || isLocalOwnerPreviewMode()) {
+      setCloseStatus('draft');
+      setCheckingMonthLock(false);
+      return () => {
+        active = false;
+      };
+    }
+
+    setCheckingMonthLock(true);
+    const monthStart = `${date.slice(0, 7)}-01`;
+    void (async () => {
+      try {
+        const { data, error } = await supabase
+          .from('monthly_close_periods')
+          .select('status')
+          .eq('store_id', store.id)
+          .eq('month_start', monthStart)
+          .maybeSingle();
+        if (!active) return;
+        if (error) {
+          console.error('Failed to check monthly close lock', error);
+          setSubmitError('Could not verify whether this month is open. Please try again.');
+          setCloseStatus('submitted');
+          return;
+        }
+        setCloseStatus((data?.status as 'draft' | 'submitted' | 'approved' | 'reopened' | undefined) ?? 'draft');
+      } finally {
+        if (active) setCheckingMonthLock(false);
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [date, store.id]);
+  const menuByIdForReport = useMemo(
+    () => new Map<string, Menu>(menus.map((menu) => [menu.id, menu])),
+    [menus],
+  );
+  const setMenuByIdForReport = useMemo(
+    () => new Map<string, SetMenu>(setMenus.map((setMenu) => [setMenu.id, setMenu])),
+    [setMenus],
+  );
+
+  useEffect(() => {
     if (existingSaleForDate) {
+      const existingSetItems = (existingSaleForDate.setItems ?? []).map((item) => ({ ...item }));
+      const existingDirectMenuItems = (existingSaleForDate.menuItems ?? []).map((item) => ({ ...item }));
+      const directCategoryTotals = new Map<string, number>(
+        (existingSaleForDate.items ?? []).map((item) => [item.menuId, Number(item.quantity || 0)]),
+      );
+      existingSetItems.forEach((setEntry) => {
+        const setMenu = setMenuByIdForReport.get(setEntry.setMenuId);
+        setMenu?.items.forEach((component) => {
+          const componentMenu = menuByIdForReport.get(component.menuId);
+          if (!componentMenu) return;
+          const includedUnits = Number(setEntry.quantity) * Number(component.quantity);
+          const storedTotal = directCategoryTotals.get(componentMenu.category) ?? 0;
+          directCategoryTotals.set(componentMenu.category, Math.max(0, storedTotal - includedUnits));
+        });
+      });
+      existingDirectMenuItems.forEach((item) => {
+        const menu = menuByIdForReport.get(item.menuId);
+        if (!menu) return;
+        const remaining = directCategoryTotals.get(menu.category) ?? 0;
+        directCategoryTotals.set(menu.category, Math.max(0, remaining - Number(item.quantity || 0)));
+      });
       setIsClosed(Boolean(existingSaleForDate.isClosed));
       setReceiptImage(null);
       setManualRevenue(existingSaleForDate.isClosed ? '' : formatDecimalForInput(existingSaleForDate.totalAmount || 0));
-      setItems((existingSaleForDate.items ?? []).map((item) => ({ ...item })));
-      setSetMenuItems((existingSaleForDate.setItems ?? []).map((item) => ({ ...item })));
+      setItems(Array.from(directCategoryTotals.entries())
+        .filter(([, quantity]) => quantity > 0)
+        .map(([menuId, quantity]) => ({ menuId, quantity })));
+      setDirectMenuItems(existingDirectMenuItems);
+      setSetMenuItems(existingSetItems);
       setClosedReason(existingSaleForDate.closedReason ?? '');
       setComment(existingSaleForDate.comment ?? '');
       return;
@@ -3997,18 +4222,22 @@ const SalesReporter: React.FC<{
     setReceiptImage(null);
     setManualRevenue('');
     setItems([]);
+    setDirectMenuItems([]);
     setSetMenuItems([]);
     setClosedReason('');
     setComment('');
-  }, [existingSaleForDate]);
+  }, [existingSaleForDate, menuByIdForReport, setMenuByIdForReport]);
 
   useEffect(() => {
     if (isClosed) {
       setReceiptImage(null);
       setManualRevenue('');
       setItems([]);
+      setDirectMenuItems([]);
       setSetMenuItems([]);
     }
+    setFieldErrors({});
+    setSubmitError(null);
   }, [isClosed]);
 
   const normalizeNumberInput = (value: string) => {
@@ -4033,20 +4262,8 @@ const SalesReporter: React.FC<{
             return prev;
         }
     });
-  };
-
-  const handleQuantityChange = (categoryName: string, delta: number) => {
-    setItems(prev => {
-      const existing = prev.find(i => i.menuId === categoryName);
-      if (existing) {
-        const newQty = Math.max(0, existing.quantity + delta);
-        if (newQty === 0) return prev.filter(i => i.menuId !== categoryName);
-        return prev.map(i => i.menuId === categoryName ? { ...i, quantity: newQty } : i);
-      } else {
-        if (delta > 0) return [...prev, { menuId: categoryName, quantity: delta }];
-        return prev;
-      }
-    });
+    setFieldErrors((current) => ({ ...current, items: undefined }));
+    setSubmitError(null);
   };
 
   const handleSetQuantityInput = (setMenuId: string, val: string) => {
@@ -4063,6 +4280,42 @@ const SalesReporter: React.FC<{
       if (newQty > 0) return [...prev, { setMenuId, quantity: newQty }];
       return prev;
     });
+    setFieldErrors((current) => ({ ...current, items: undefined }));
+    setSubmitError(null);
+  };
+
+  const handleDirectMenuQuantityInput = (menuId: string, val: string) => {
+    const clean = normalizeNumberInput(val);
+    const newQty = clean === '' ? 0 : parseInt(clean, 10);
+    if (newQty < 0) return;
+    const currentQty = directMenuItems.find((item) => item.menuId === menuId)?.quantity ?? 0;
+    const menu = menuByIdForReport.get(menuId);
+    const addedQty = Math.max(0, newQty - currentQty);
+    if (menu && addedQty > 0) {
+      setItems((current) => {
+        const unassigned = current.find((item) => item.menuId === menu.category);
+        if (!unassigned) return current;
+        const nextQuantity = Math.max(0, Number(unassigned.quantity || 0) - addedQty);
+        return nextQuantity > 0
+          ? current.map((item) => item.menuId === menu.category ? { ...item, quantity: nextQuantity } : item)
+          : current.filter((item) => item.menuId !== menu.category);
+      });
+    }
+    setDirectMenuItems((current) => {
+      const existing = current.find((item) => item.menuId === menuId);
+      if (existing) {
+        if (newQty === 0) return current.filter((item) => item.menuId !== menuId);
+        return current.map((item) => item.menuId === menuId ? { ...item, quantity: newQty } : item);
+      }
+      return newQty > 0 ? [...current, { menuId, quantity: newQty }] : current;
+    });
+    setFieldErrors((current) => ({ ...current, items: undefined }));
+    setSubmitError(null);
+  };
+
+  const handleDirectMenuQuantityChange = (menuId: string, delta: number) => {
+    const current = directMenuItems.find((item) => item.menuId === menuId)?.quantity ?? 0;
+    handleDirectMenuQuantityInput(menuId, String(Math.max(0, current + delta)));
   };
 
   const handleSetQuantityChange = (setMenuId: string, delta: number) => {
@@ -4076,6 +4329,8 @@ const SalesReporter: React.FC<{
       if (delta > 0) return [...prev, { setMenuId, quantity: delta }];
       return prev;
     });
+    setFieldErrors((current) => ({ ...current, items: undefined }));
+    setSubmitError(null);
   };
 
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -4088,6 +4343,7 @@ const SalesReporter: React.FC<{
         fallbackToOriginal: false,
       });
       setReceiptImage(resized);
+      setFieldErrors((current) => ({ ...current, receipt: undefined }));
     } catch (error) {
       console.error('Failed to process receipt image', error);
       setReceiptImage(null);
@@ -4097,14 +4353,55 @@ const SalesReporter: React.FC<{
   };
 
   const handleSave = async () => {
-    const hasAnyReceipt = Boolean(receiptImage || existingSaleForDate?.hasReceipt);
-    if (!isClosed && !hasAnyReceipt) {
-      setSubmitError('Receipt image is required for open days.');
+    if (monthLocked || checkingMonthLock) {
+      setSubmitError(
+        monthLocked
+          ? 'This month is locked. Ask HQ to reopen it before changing a sales report.'
+          : 'Please wait while the month status is checked.',
+      );
       return;
     }
+
+    const hasAnyReceipt = Boolean(receiptImage || existingSaleForDate?.hasReceipt);
+    const totalAmount = Number(manualRevenue);
+    const soldItemQuantity = directMenuItems.reduce((sum, item) => sum + Number(item.quantity || 0), 0)
+      + setMenuItems.reduce((sum, item) => sum + Number(item.quantity || 0), 0)
+      + items.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+    const hasConfiguredSalesItems = menus.length > 0 || setMenus.length > 0;
+    const nextFieldErrors: SalesReportFieldErrors = {};
+
+    if (!date) {
+      nextFieldErrors.date = 'Select the report date.';
+    }
+    if (isClosed) {
+      if (!closedReason.trim()) {
+        nextFieldErrors.closedReason = 'Enter the reason for closure.';
+      }
+    } else {
+      if (manualRevenue.trim() === '' || !Number.isFinite(totalAmount) || totalAmount < 0) {
+        nextFieldErrors.revenue = 'Enter the confirmed daily revenue. Enter 0 only when sales were actually zero.';
+      }
+      if (totalAmount > 0 && hasConfiguredSalesItems && soldItemQuantity <= 0) {
+        nextFieldErrors.items = 'Enter at least one single item or course/set quantity.';
+      }
+      if (!hasAnyReceipt) {
+        nextFieldErrors.receipt = 'Upload the receipt or daily sales report image.';
+      }
+    }
+
+    if (Object.keys(nextFieldErrors).length > 0) {
+      setFieldErrors(nextFieldErrors);
+      setSubmitError('The report was not submitted. Complete the required fields marked below.');
+      const firstField = (['date', 'closedReason', 'revenue', 'items', 'receipt'] as SalesReportField[])
+        .find((field) => nextFieldErrors[field]);
+      if (firstField) {
+        document.getElementById(`sales-report-${firstField}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+      return;
+    }
+
     const reason = closedReason.trim();
-    if (isClosed && !reason) return;
-    const totalAmount = isClosed ? 0 : (parseFloat(manualRevenue) || 0);
+    const submittedTotalAmount = isClosed ? 0 : totalAmount;
     const normalizedSetItems = isClosed
       ? []
       : setMenuItems
@@ -4113,6 +4410,14 @@ const SalesReporter: React.FC<{
 
     const categoryTotals = new Map<string, number>();
     if (!isClosed) {
+      directMenuItems
+        .filter((item) => item.menuId && Number(item.quantity) > 0)
+        .forEach((item) => {
+          const menu = menuByIdForReport.get(item.menuId);
+          if (!menu) return;
+          categoryTotals.set(menu.category, (categoryTotals.get(menu.category) ?? 0) + Number(item.quantity));
+        });
+
       items
         .filter((item) => item.menuId && Number(item.quantity) > 0)
         .forEach((item) => {
@@ -4120,8 +4425,8 @@ const SalesReporter: React.FC<{
         });
 
       if (normalizedSetItems.length > 0) {
-        const setMenuById = new Map(setMenus.map((setMenu) => [setMenu.id, setMenu]));
-        const menuById = new Map(menus.map((menu) => [menu.id, menu]));
+        const setMenuById = new Map<string, SetMenu>(setMenus.map((setMenu) => [setMenu.id, setMenu]));
+        const menuById = new Map<string, Menu>(menus.map((menu) => [menu.id, menu]));
         normalizedSetItems.forEach((setEntry) => {
           const setMenu = setMenuById.get(setEntry.setMenuId);
           if (!setMenu) return;
@@ -4145,8 +4450,13 @@ const SalesReporter: React.FC<{
       id: `SALE_${Date.now()}`,
       storeId: store.id,
       date,
-      totalAmount,
+      totalAmount: submittedTotalAmount,
       items: isClosed ? [] : expandedCategoryItems,
+      menuItems: isClosed
+        ? []
+        : directMenuItems
+          .filter((item) => item.menuId && Number(item.quantity) > 0)
+          .map((item) => ({ menuId: item.menuId, quantity: Number(item.quantity) })),
       setItems: isClosed ? [] : normalizedSetItems,
       isClosed,
       receiptImage: isClosed ? undefined : receiptImage || undefined,
@@ -4155,6 +4465,7 @@ const SalesReporter: React.FC<{
       comment: comment.trim() || undefined,
     };
     setSubmitError(null);
+    setFieldErrors({});
     setSubmitting(true);
     try {
       await Promise.resolve(onSave(newSale));
@@ -4167,9 +4478,39 @@ const SalesReporter: React.FC<{
     }
   };
 
-  const canSubmit = isClosed
-    ? closedReason.trim().length > 0
-    : Boolean(receiptImage || existingSaleForDate?.hasReceipt);
+  const directMenuTotalsByCategory = useMemo(() => {
+    const totals = new Map<string, number>();
+    directMenuItems.forEach((item) => {
+      const menu = menuByIdForReport.get(item.menuId);
+      if (!menu) return;
+      totals.set(menu.category, (totals.get(menu.category) ?? 0) + Number(item.quantity || 0));
+    });
+    return totals;
+  }, [directMenuItems, menuByIdForReport]);
+  const directMenuQuantityById = useMemo(
+    () => new Map(directMenuItems.map((item) => [item.menuId, item.quantity])),
+    [directMenuItems],
+  );
+  const categoryBreakdownRows = useMemo(() => categories.map((category) => {
+    const menuTotal = directMenuTotalsByCategory.get(category) ?? 0;
+    const unassignedTotal = items.find((item) => item.menuId === category)?.quantity ?? 0;
+    return {
+      category,
+      categoryTotal: menuTotal + unassignedTotal,
+      menuTotal,
+      unassignedTotal,
+      matches: unassignedTotal === 0,
+    };
+  }), [categories, directMenuTotalsByCategory, items]);
+  const categoryBreakdownReady = categoryBreakdownRows.every((row) => row.matches);
+  const visibleMenus = useMemo(() => {
+    const query = menuFilter.trim().toLowerCase();
+    return menus
+      .filter((menu) => !query
+        || menu.name.toLowerCase().includes(query)
+        || menu.category.toLowerCase().includes(query))
+      .sort((left, right) => left.category.localeCompare(right.category) || left.name.localeCompare(right.name));
+  }, [menuFilter, menus]);
 
   return (
     <div className="max-w-2xl mx-auto">
@@ -4183,16 +4524,40 @@ const SalesReporter: React.FC<{
             Existing report found for {date}. Submitting will update this report.
           </div>
         )}
-        <div>
-          <label className="block text-sm font-bold text-gray-700 mb-2">Report Date</label>
+        <div id="sales-report-date" className="scroll-mt-24">
+          <label className="mb-2 flex items-center gap-2 text-sm font-bold text-gray-700">
+            Report Date
+            <span className="rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-extrabold text-red-700">Required</span>
+          </label>
           <input
             type="date"
             value={date}
-            onChange={e => setDate(e.target.value)}
-            className="w-full p-3 bg-gray-50 rounded-xl border-none font-medium"
+            onChange={(event) => {
+              setDate(event.target.value);
+              setFieldErrors((current) => ({ ...current, date: undefined }));
+              setSubmitError(null);
+            }}
+            aria-invalid={Boolean(fieldErrors.date)}
+            className={`w-full rounded-xl border p-3 font-medium outline-none ${
+              fieldErrors.date ? 'border-red-400 bg-red-50' : 'border-transparent bg-gray-50'
+            }`}
           />
+          {fieldErrors.date && <div className="mt-2 text-xs font-bold text-red-600">{fieldErrors.date}</div>}
         </div>
 
+        {monthLocked && (
+          <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950">
+            <div className="font-extrabold">
+              {closeStatus === 'approved' ? 'Approved month — report editing is locked' : 'Submitted month — report editing is locked'}
+            </div>
+            <p className="mt-1 text-xs text-amber-800">Ask HQ to reopen this month before correcting the report.</p>
+          </div>
+        )}
+
+        <fieldset
+          disabled={monthLocked || checkingMonthLock}
+          className="min-w-0 space-y-6 border-0 p-0 disabled:cursor-not-allowed disabled:opacity-60"
+        >
         <div className="flex items-center gap-3 p-4 bg-gray-50 rounded-xl">
             <input
                 type="checkbox"
@@ -4205,41 +4570,63 @@ const SalesReporter: React.FC<{
         </div>
 
         {isClosed && (
-            <div>
-              <label className="block text-sm font-bold text-gray-700 mb-2">Reason for closure</label>
+            <div id="sales-report-closedReason" className="scroll-mt-24">
+              <label className="mb-2 flex items-center gap-2 text-sm font-bold text-gray-700">
+                Reason for closure
+                <span className="rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-extrabold text-red-700">Required</span>
+              </label>
               <textarea
                 value={closedReason}
-                onChange={e => setClosedReason(e.target.value)}
+                onChange={(event) => {
+                  setClosedReason(event.target.value);
+                  setFieldErrors((current) => ({ ...current, closedReason: undefined }));
+                  setSubmitError(null);
+                }}
                 placeholder="Reason for closure (e.g. maintenance)"
                 rows={3}
-                className="w-full p-4 bg-gray-50 rounded-xl border border-gray-200 focus:border-black outline-none resize-none"
+                aria-invalid={Boolean(fieldErrors.closedReason)}
+                className={`w-full resize-none rounded-xl border p-4 outline-none focus:border-black ${
+                  fieldErrors.closedReason ? 'border-red-400 bg-red-50' : 'border-gray-200 bg-gray-50'
+                }`}
               />
-              {closedReason.trim() === '' && (
-                <div className="mt-2 text-xs text-red-600">Reason is required to submit.</div>
-              )}
+              {fieldErrors.closedReason && <div className="mt-2 text-xs font-bold text-red-600">{fieldErrors.closedReason}</div>}
             </div>
         )}
 
         {!isClosed && (
             <div>
-              <div className="mb-8">
-                <label className="block text-sm font-bold text-gray-700 mb-2">Total Daily Revenue ({store.currency})</label>
+              <div id="sales-report-revenue" className="mb-8 scroll-mt-24">
+                <label className="mb-2 flex items-center gap-2 text-sm font-bold text-gray-700">
+                  Total Daily Revenue ({store.currency})
+                  <span className="rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-extrabold text-red-700">Required</span>
+                </label>
                 <input
                   type="text"
                   inputMode="decimal"
                   pattern="[0-9]*[.]?[0-9]*"
                   value={manualRevenue}
-                  onChange={e => setManualRevenue(normalizeDecimalInput(e.target.value, 2))}
+                  onChange={(event) => {
+                    setManualRevenue(normalizeDecimalInput(event.target.value, 2));
+                    setFieldErrors((current) => ({ ...current, revenue: undefined }));
+                    setSubmitError(null);
+                  }}
                   placeholder="Enter total sales amount"
-                  className="w-full p-4 bg-gray-50 rounded-xl font-bold text-2xl border border-gray-200 focus:border-black outline-none"
+                  aria-invalid={Boolean(fieldErrors.revenue)}
+                  className={`w-full rounded-xl border p-4 text-2xl font-bold outline-none focus:border-black ${
+                    fieldErrors.revenue ? 'border-red-400 bg-red-50' : 'border-gray-200 bg-gray-50'
+                  }`}
                 />
+                {fieldErrors.revenue && <div className="mt-2 text-xs font-bold text-red-600">{fieldErrors.revenue}</div>}
                 {!receiptImage && existingSaleForDate?.hasReceipt && (
                   <div className="mt-2 text-xs text-gray-500">Current receipt image will be kept.</div>
                 )}
               </div>
 
               <div className="mb-8">
-                <label className="block text-sm font-bold text-gray-700 mb-2">Comments (Optional)</label>
+                <label className="mb-2 flex items-center gap-2 text-sm font-bold text-gray-700">
+                  Comments
+                  <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-extrabold text-gray-500">Optional</span>
+                </label>
                 <textarea
                   value={comment}
                   onChange={e => setComment(e.target.value)}
@@ -4249,44 +4636,145 @@ const SalesReporter: React.FC<{
                 />
               </div>
 
-            <h3 className="font-bold text-lg mb-2">Single Item Quantity by Category</h3>
-            <div className="text-xs text-gray-500 mb-4">
-              Enter only direct item sales here. Set menu sales should be entered in the Set Menu section below.
-            </div>
-            <div className="space-y-3">
-                {categories.map(category => {
-                const qty = items.find(i => i.menuId === category)?.quantity || 0;
-                return (
-                    <div key={category} className="flex items-center justify-between p-3 border rounded-xl hover:border-black transition group">
-                        <div className="flex items-center gap-3">
-                            <div className="w-10 h-10 bg-gray-100 rounded-lg flex items-center justify-center text-gray-500">
-                                <Grid className="w-5 h-5" />
-                            </div>
-                            <div>
-                                <div className="font-bold">{category}</div>
-                            </div>
-                        </div>
-                        <div className="flex items-center gap-2">
-                            <button onClick={() => handleQuantityChange(category, -1)} className="w-8 h-8 flex items-center justify-center bg-gray-100 rounded-full hover:bg-gray-200 font-bold">-</button>
-                            <input
-                              type="text"
-                              inputMode="numeric"
-                              pattern="[0-9]*"
-                              className="w-16 p-2 text-center border border-gray-200 rounded-lg font-bold text-lg focus:ring-2 focus:ring-black outline-none"
-                              value={String(qty)}
-                              onChange={(e) => handleQuantityInput(category, e.target.value)}
-                            />
+            <div
+              id="sales-report-items"
+              className={`scroll-mt-24 rounded-2xl border p-4 ${
+                fieldErrors.items ? 'border-red-400 bg-red-50' : 'border-gray-200 bg-gray-50'
+              }`}
+            >
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <h3 className="flex flex-wrap items-center gap-2 text-lg font-bold">
+                    1. Single Item Quantities
+                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-extrabold ${
+                      menus.length > 0 || setMenus.length > 0
+                        ? 'bg-red-50 text-red-700'
+                        : 'bg-gray-200 text-gray-600'
+                    }`}>
+                      {menus.length > 0 || setMenus.length > 0
+                        ? 'Single or course quantity required when revenue is above 0'
+                        : 'Quantity entry starts after menus are registered'}
+                    </span>
+                  </h3>
+                  <div className="mt-1 text-xs text-gray-500">
+                    Enter each directly sold menu once. Category totals are calculated automatically.
+                  </div>
+                </div>
+                <div className={`self-start rounded-full px-3 py-1 text-xs font-bold ${
+                  categoryBreakdownReady
+                    ? 'bg-emerald-100 text-emerald-700'
+                    : 'bg-amber-100 text-amber-800'
+                }`}>
+                  {categoryBreakdownReady ? 'Category totals automatic' : 'Legacy quantities remain'}
+                </div>
+              </div>
+              {fieldErrors.items && <div className="mt-3 text-xs font-bold text-red-600">{fieldErrors.items}</div>}
 
-                            <button onClick={() => handleQuantityChange(category, 1)} className="w-8 h-8 flex items-center justify-center bg-black text-white rounded-full hover:bg-gray-800 font-bold">+</button>
-                        </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {categoryBreakdownRows
+                  .filter((row) => row.categoryTotal > 0 || row.menuTotal > 0)
+                  .map((row) => (
+                    <div
+                      key={row.category}
+                      className={`rounded-lg border px-2.5 py-1 text-[11px] font-bold ${
+                        row.matches
+                          ? 'border-emerald-200 bg-white text-emerald-700'
+                          : 'border-amber-200 bg-amber-50 text-amber-800'
+                      }`}
+                    >
+                      {row.category}: {row.categoryTotal}
                     </div>
-                );
+                  ))}
+              </div>
+
+              {!categoryBreakdownReady && (
+                <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3">
+                  <div className="text-xs font-bold text-amber-900">
+                    This older report contains category quantities that are not assigned to a menu.
+                  </div>
+                  <div className="mt-1 text-[11px] text-amber-800">
+                    Adding the matching menu quantity below automatically reduces the unassigned amount.
+                  </div>
+                  <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    {categoryBreakdownRows
+                      .filter((row) => row.unassignedTotal > 0)
+                      .map((row) => (
+                        <label key={row.category} className="flex items-center justify-between gap-3 rounded-lg bg-white px-3 py-2 text-xs font-bold text-gray-700">
+                          <span>{row.category} unassigned</span>
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            pattern="[0-9]*"
+                            value={String(row.unassignedTotal)}
+                            onChange={(event) => handleQuantityInput(row.category, event.target.value)}
+                            className="w-16 rounded-lg border border-amber-200 p-1.5 text-right font-bold outline-none focus:border-black"
+                          />
+                        </label>
+                      ))}
+                  </div>
+                </div>
+              )}
+
+              <label className="relative mt-4 block">
+                <span className="sr-only">Search direct menus</span>
+                <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
+                <input
+                  type="search"
+                  value={menuFilter}
+                  onChange={(event) => setMenuFilter(event.target.value)}
+                  placeholder="Search menu or category"
+                  className="w-full rounded-xl border border-gray-200 bg-white py-2 pl-9 pr-3 text-sm outline-none focus:border-black"
+                />
+              </label>
+
+              <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                {visibleMenus.map((menu) => {
+                  const quantity = directMenuQuantityById.get(menu.id) ?? 0;
+                  return (
+                    <div key={menu.id} className="flex items-center justify-between gap-2 rounded-xl border border-gray-200 bg-white p-3">
+                      <div className="min-w-0">
+                        <div className="text-xs font-bold leading-4 sm:text-sm">{menu.name}</div>
+                        <div className="truncate text-[10px] text-gray-400">{menu.category}</div>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-1">
+                        <button
+                          type="button"
+                          aria-label={`Decrease ${menu.name}`}
+                          onClick={() => handleDirectMenuQuantityChange(menu.id, -1)}
+                          className="flex h-11 w-11 items-center justify-center rounded-full bg-gray-100 text-lg font-bold hover:bg-gray-200"
+                        >
+                          -
+                        </button>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          pattern="[0-9]*"
+                          aria-label={`${menu.name} direct quantity`}
+                          value={String(quantity)}
+                          onChange={(event) => handleDirectMenuQuantityInput(menu.id, event.target.value)}
+                          className="h-11 w-14 rounded-lg border border-gray-200 px-2 text-center text-base font-bold outline-none focus:border-black"
+                        />
+                        <button
+                          type="button"
+                          aria-label={`Increase ${menu.name}`}
+                          onClick={() => handleDirectMenuQuantityChange(menu.id, 1)}
+                          className="flex h-11 w-11 items-center justify-center rounded-full bg-black text-lg font-bold text-white hover:bg-gray-800"
+                        >
+                          +
+                        </button>
+                      </div>
+                    </div>
+                  );
                 })}
+              </div>
+              {visibleMenus.length === 0 && (
+                <div className="py-6 text-center text-sm text-gray-400">No menus match this search.</div>
+              )}
             </div>
 
             {setMenus.length > 0 && (
               <>
-                <h3 className="font-bold text-lg mt-8 mb-2">Set Menu Quantity</h3>
+                <h3 className="font-bold text-lg mt-8 mb-2">2. Course & Set Quantities</h3>
                 <div className="text-xs text-gray-500 mb-4">
                   Inventory usage is auto-calculated from each set menu's components.
                 </div>
@@ -4294,7 +4782,7 @@ const SalesReporter: React.FC<{
                   {setMenus.map((setMenu) => {
                     const qty = setMenuItems.find((item) => item.setMenuId === setMenu.id)?.quantity || 0;
                     return (
-                      <div key={setMenu.id} className="flex items-center justify-between p-3 border rounded-xl hover:border-black transition">
+                      <div key={setMenu.id} className="flex flex-col gap-3 border p-3 rounded-xl transition hover:border-black sm:flex-row sm:items-center sm:justify-between">
                         <div className="flex items-center gap-3">
                           <div className="w-10 h-10 bg-gray-100 rounded-lg flex items-center justify-center text-gray-500">
                             <Layers className="w-5 h-5" />
@@ -4304,17 +4792,17 @@ const SalesReporter: React.FC<{
                             <div className="text-xs text-gray-500">{setMenu.items.length} menu item(s)</div>
                           </div>
                         </div>
-                        <div className="flex items-center gap-2">
-                          <button onClick={() => handleSetQuantityChange(setMenu.id, -1)} className="w-8 h-8 flex items-center justify-center bg-gray-100 rounded-full hover:bg-gray-200 font-bold">-</button>
+                        <div className="flex items-center gap-2 self-end sm:self-auto">
+                          <button type="button" aria-label={`Decrease ${setMenu.name}`} onClick={() => handleSetQuantityChange(setMenu.id, -1)} className="flex h-11 w-11 items-center justify-center rounded-full bg-gray-100 text-lg font-bold hover:bg-gray-200">-</button>
                           <input
                             type="text"
                             inputMode="numeric"
                             pattern="[0-9]*"
-                            className="w-16 p-2 text-center border border-gray-200 rounded-lg font-bold text-lg focus:ring-2 focus:ring-black outline-none"
+                            className="h-11 w-16 rounded-lg border border-gray-200 px-2 text-center text-lg font-bold outline-none focus:ring-2 focus:ring-black"
                             value={String(qty)}
                             onChange={(e) => handleSetQuantityInput(setMenu.id, e.target.value)}
                           />
-                          <button onClick={() => handleSetQuantityChange(setMenu.id, 1)} className="w-8 h-8 flex items-center justify-center bg-black text-white rounded-full hover:bg-gray-800 font-bold">+</button>
+                          <button type="button" aria-label={`Increase ${setMenu.name}`} onClick={() => handleSetQuantityChange(setMenu.id, 1)} className="flex h-11 w-11 items-center justify-center rounded-full bg-black text-lg font-bold text-white hover:bg-gray-800">+</button>
                         </div>
                       </div>
                     );
@@ -4327,14 +4815,22 @@ const SalesReporter: React.FC<{
         )}
 
         {!isClosed && (
-          <div className="border-2 border-dashed border-gray-300 rounded-xl p-6 text-center">
+          <div
+            id="sales-report-receipt"
+            className={`scroll-mt-24 rounded-xl border-2 border-dashed p-6 text-center ${
+              fieldErrors.receipt ? 'border-red-400 bg-red-50' : 'border-gray-300'
+            }`}
+          >
               <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" id="receipt-upload" />
               <label htmlFor="receipt-upload" className="cursor-pointer flex flex-col items-center gap-2 hover:opacity-70 transition">
                   <div className="w-12 h-12 bg-gray-100 rounded-full flex items-center justify-center">
                       <Camera className="w-6 h-6 text-gray-500" />
                   </div>
                   <div>
-                      <div className="text-sm font-bold text-gray-700">Upload Receipt / Daily Report</div>
+                      <div className="flex flex-wrap items-center justify-center gap-2 text-sm font-bold text-gray-700">
+                        Upload Receipt / Daily Report
+                        <span className="rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-extrabold text-red-700">Required</span>
+                      </div>
                       <div className="text-xs text-gray-400">Click to browse (JPG, PNG)</div>
                   </div>
               </label>
@@ -4344,22 +4840,26 @@ const SalesReporter: React.FC<{
                       <button onClick={() => setReceiptImage(null)} className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-1 shadow-md hover:bg-red-600 transition"><X className="w-4 h-4" /></button>
                   </div>
               )}
+              {fieldErrors.receipt && <div className="mt-3 text-xs font-bold text-red-600">{fieldErrors.receipt}</div>}
           </div>
         )}
+        </fieldset>
 
+        {submitError && (
+          <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-semibold text-red-700">
+            {submitError}
+          </div>
+        )}
         <div className="flex gap-4 pt-4">
             <button onClick={onCancel} className="flex-1 py-3 font-bold text-gray-500 hover:bg-gray-50 rounded-xl">Cancel</button>
             <button
               onClick={handleSave}
-              disabled={!canSubmit || submitting}
-              className={`flex-1 py-3 bg-black text-white font-bold rounded-xl shadow-lg ${(canSubmit && !submitting) ? 'hover:bg-gray-800' : 'opacity-50 cursor-not-allowed'}`}
+              disabled={submitting || checkingMonthLock || monthLocked}
+              className="flex-1 rounded-xl bg-black py-3 font-bold text-white shadow-lg hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {submitting ? 'Submitting...' : 'Submit Report'}
             </button>
         </div>
-        {submitError && (
-          <div className="text-sm text-red-600 font-semibold">{submitError}</div>
-        )}
       </div>
     </div>
   );
@@ -4376,23 +4876,27 @@ const MenuManager: React.FC<{
 
   return (
     <div>
-      <div className="flex justify-between items-center mb-6">
-        <h2 className="text-2xl font-bold">Menu Management</h2>
+      <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h2 className="text-2xl font-bold">Single Items & Recipes</h2>
+          <p className="text-sm text-gray-500 mt-1">Register each individually sold menu item and the ingredients used in one serving.</p>
+        </div>
         <button
+          type="button"
           onClick={() => onCreate({
             id: createLocalEntityId('M'),
             storeId: store.id,
-            category: 'Main', // Default will be overwritten by editor
+            category: '',
             name: 'New Item',
             price: 0,
             recipe: []
           })}
-          className="flex items-center gap-2 bg-black text-white px-4 py-2 rounded-xl font-bold text-sm hover:bg-gray-800"
+          className="flex w-full items-center justify-center gap-2 rounded-xl bg-black px-4 py-2 text-sm font-bold text-white hover:bg-gray-800 sm:w-auto"
         >
           <Plus className="w-4 h-4" /> Add Item
         </button>
       </div>
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 2xl:grid-cols-3">
         {menus.map(menu => (
           <div key={menu.id} className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 hover:shadow-md transition group">
              <div className="aspect-video bg-gray-100 rounded-lg mb-4 overflow-hidden relative">
@@ -4408,9 +4912,9 @@ const MenuManager: React.FC<{
                 ) : (
                     <div className="flex items-center justify-center h-full text-gray-300"><ImageIcon className="w-8 h-8"/></div>
                 )}
-                <div className="absolute top-2 right-2 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <button onClick={() => onEdit(menu)} className="p-2 bg-white rounded-full shadow-sm hover:bg-gray-100"><Settings className="w-4 h-4"/></button>
-                    <button onClick={() => onDelete(menu.id)} className="p-2 bg-white text-red-500 rounded-full shadow-sm hover:bg-red-50"><Trash2 className="w-4 h-4"/></button>
+                <div className="absolute right-2 top-2 flex gap-2">
+                    <button type="button" aria-label={`Edit ${menu.name}`} onClick={() => onEdit(menu)} className="flex h-11 w-11 items-center justify-center rounded-full bg-white shadow-sm hover:bg-gray-100"><Settings className="w-4 h-4"/></button>
+                    <button type="button" aria-label={`Delete ${menu.name}`} onClick={() => onDelete(menu.id)} className="flex h-11 w-11 items-center justify-center rounded-full bg-white text-red-500 shadow-sm hover:bg-red-50"><Trash2 className="w-4 h-4"/></button>
                 </div>
              </div>
              <div className="flex justify-between items-start">
@@ -4514,15 +5018,18 @@ const SetMenuEditor: React.FC<{
 
     return (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200">
-            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden" onClick={(e) => e.stopPropagation()}>
-                <div className="p-6 border-b flex justify-between items-center bg-gray-50">
-                    <h2 className="text-2xl font-bold">Edit Set Menu: {setMenu.name || 'New Set Menu'}</h2>
-                    <button onClick={onBack} className="p-2 hover:bg-gray-200 rounded-full transition"><X className="w-6 h-6" /></button>
+            <div className="flex max-h-[calc(100dvh-2rem)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl" onClick={(e) => e.stopPropagation()}>
+                <div className="flex items-center justify-between gap-3 border-b bg-gray-50 p-4 sm:p-6">
+                    <h2 className="min-w-0 text-lg font-bold sm:text-2xl">Edit Set Menu: {setMenu.name || 'New Set Menu'}</h2>
+                    <button type="button" aria-label="Close set menu editor" onClick={onBack} className="shrink-0 rounded-full p-2 transition hover:bg-gray-200"><X className="w-6 h-6" /></button>
                 </div>
                 <div className="p-6 overflow-y-auto space-y-6">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div>
-                            <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Set Name</label>
+                            <label className="mb-1 flex items-center gap-2 text-xs font-bold uppercase text-gray-500">
+                                Set Name
+                                <span className="rounded-full bg-red-50 px-2 py-0.5 text-[9px] text-red-700">Required</span>
+                            </label>
                             <input
                                 value={editedSet.name}
                                 onChange={(e) => setEditedSet({ ...editedSet, name: e.target.value })}
@@ -4531,7 +5038,10 @@ const SetMenuEditor: React.FC<{
                             />
                         </div>
                         <div>
-                            <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Set Price</label>
+                            <label className="mb-1 flex items-center gap-2 text-xs font-bold uppercase text-gray-500">
+                                Set Price
+                                <span className="rounded-full bg-red-50 px-2 py-0.5 text-[9px] text-red-700">Required</span>
+                            </label>
                             <input
                                 type="number"
                                 value={Number.isFinite(editedSet.price) ? editedSet.price : 0}
@@ -4543,7 +5053,10 @@ const SetMenuEditor: React.FC<{
 
                     <div className="pt-2 border-t">
                         <div className="flex items-center justify-between mb-3">
-                            <h3 className="font-bold text-lg">Set Components</h3>
+                            <h3 className="flex items-center gap-2 text-lg font-bold">
+                                Set Components
+                                <span className="rounded-full bg-red-50 px-2 py-0.5 text-[9px] font-extrabold text-red-700">At least 1 required</span>
+                            </h3>
                             <button
                                 type="button"
                                 onClick={addSetItemRow}
@@ -4555,8 +5068,8 @@ const SetMenuEditor: React.FC<{
                         </div>
                         <div className="space-y-3">
                             {editedSet.items.map((item, idx) => (
-                                <div key={`${item.menuId}-${idx}`} className="grid grid-cols-12 gap-2 items-center">
-                                    <div className="col-span-8">
+                                <div key={`${item.menuId}-${idx}`} className="grid grid-cols-[minmax(0,1fr)_72px_40px] items-center gap-2">
+                                    <div>
                                         <select
                                             value={item.menuId}
                                             onChange={(e) => updateSetItem(idx, { menuId: e.target.value })}
@@ -4570,7 +5083,7 @@ const SetMenuEditor: React.FC<{
                                             ))}
                                         </select>
                                     </div>
-                                    <div className="col-span-3">
+                                    <div>
                                         <input
                                             type="number"
                                             min={1}
@@ -4579,7 +5092,7 @@ const SetMenuEditor: React.FC<{
                                             className="w-full p-2 rounded-lg border border-gray-300 text-sm bg-white focus:border-black outline-none text-center font-semibold"
                                         />
                                     </div>
-                                    <div className="col-span-1">
+                                    <div>
                                         <button
                                             type="button"
                                             onClick={() => removeSetItemRow(idx)}
@@ -4598,14 +5111,15 @@ const SetMenuEditor: React.FC<{
                             </div>
                         )}
                     </div>
-                    {error && <div className="text-sm text-red-600 font-semibold">{error}</div>}
+                    {error && <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-semibold text-red-700">{error}</div>}
                 </div>
-                <div className="p-4 border-t bg-gray-50 flex justify-end gap-3">
-                    <button onClick={onBack} className="px-6 py-3 font-bold text-gray-500 hover:bg-gray-100 rounded-xl transition">Cancel</button>
+                <div className="flex gap-3 border-t bg-gray-50 p-4 sm:justify-end">
+                    <button type="button" onClick={onBack} className="flex-1 rounded-xl px-4 py-3 font-bold text-gray-500 transition hover:bg-gray-100 sm:flex-none sm:px-6">Cancel</button>
                     <button
+                        type="button"
                         onClick={handleSave}
                         disabled={saving}
-                        className={`px-6 py-3 bg-black text-white font-bold rounded-xl transition ${saving ? 'opacity-60 cursor-not-allowed' : 'hover:bg-gray-800'}`}
+                        className={`flex-1 rounded-xl bg-black px-4 py-3 font-bold text-white transition sm:flex-none sm:px-6 ${saving ? 'opacity-60 cursor-not-allowed' : 'hover:bg-gray-800'}`}
                     >
                         {saving ? 'Saving...' : 'Save Set Menu'}
                     </button>
@@ -4626,10 +5140,14 @@ const SetMenuManager: React.FC<{
     const menuById = useMemo(() => new Map(menus.map((menu) => [menu.id, menu])), [menus]);
 
     return (
-        <div className="mt-10">
-            <div className="flex justify-between items-center mb-6">
-                <h2 className="text-2xl font-bold">Set Menu Management</h2>
+        <div>
+            <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                    <h2 className="text-2xl font-bold">Courses & Set Menus</h2>
+                    <p className="text-sm text-gray-500 mt-1">Build a course or set from registered single items and specify the quantity of each component.</p>
+                </div>
                 <button
+                    type="button"
                     onClick={() => onCreate({
                         id: createLocalEntityId('SM'),
                         storeId: store.id,
@@ -4637,12 +5155,12 @@ const SetMenuManager: React.FC<{
                         price: 0,
                         items: [],
                     })}
-                    className="flex items-center gap-2 bg-black text-white px-4 py-2 rounded-xl font-bold text-sm hover:bg-gray-800"
+                    className="flex w-full items-center justify-center gap-2 rounded-xl bg-black px-4 py-2 text-sm font-bold text-white hover:bg-gray-800 sm:w-auto"
                 >
                     <Plus className="w-4 h-4" /> Add Set Menu
                 </button>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
                 {setMenus.map((setMenu) => (
                     <div key={setMenu.id} className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 hover:shadow-md transition group">
                         <div className="flex justify-between items-start gap-3">
@@ -4665,9 +5183,9 @@ const SetMenuManager: React.FC<{
                                 <span className="text-xs text-gray-400">No components configured.</span>
                             )}
                         </div>
-                        <div className="mt-4 pt-4 border-t flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <button onClick={() => onEdit(setMenu)} className="p-2 bg-white rounded-full shadow-sm hover:bg-gray-100"><Settings className="w-4 h-4" /></button>
-                            <button onClick={() => onDelete(setMenu.id)} className="p-2 bg-white text-red-500 rounded-full shadow-sm hover:bg-red-50"><Trash2 className="w-4 h-4" /></button>
+                        <div className="mt-4 flex justify-end gap-2 border-t pt-4">
+                            <button type="button" onClick={() => onEdit(setMenu)} className="inline-flex min-h-11 items-center gap-1 rounded-lg border border-gray-200 bg-white px-4 py-2 text-xs font-bold hover:bg-gray-100"><Settings className="w-4 h-4" /> Edit</button>
+                            <button type="button" onClick={() => onDelete(setMenu.id)} className="inline-flex min-h-11 items-center gap-1 rounded-lg border border-red-100 bg-white px-4 py-2 text-xs font-bold text-red-600 hover:bg-red-50"><Trash2 className="w-4 h-4" /> Delete</button>
                         </div>
                     </div>
                 ))}
@@ -4738,9 +5256,15 @@ const RecipeEditor: React.FC<{
     const handleAddIngredientToRecipe = async () => {
         const name = newIngName.trim();
         const unit = newIngUnit.trim();
-        if (!name || !unit || !newIngQty) return;
+        if (!name || !unit || !newIngQty) {
+            setRecipeError('Enter the ingredient name, quantity, and unit before adding it.');
+            return;
+        }
         const qty = parseFloat(newIngQty);
-        if (qty <= 0) return;
+        if (!Number.isFinite(qty) || qty <= 0) {
+            setRecipeError('Ingredient quantity must be greater than 0.');
+            return;
+        }
         setRecipeError(null);
 
         const ingredientPool = [...localIngredients, ...ingredients];
@@ -4812,7 +5336,10 @@ const RecipeEditor: React.FC<{
                 <div className="p-6 overflow-y-auto space-y-6">
                     {/* Image Upload */}
                     <div className="mb-6">
-                        <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Item Image</label>
+                        <label className="mb-2 flex items-center gap-2 text-xs font-bold uppercase text-gray-500">
+                            Item Image
+                            <span className="rounded-full bg-gray-200 px-2 py-0.5 text-[9px] text-gray-500">Optional</span>
+                        </label>
                         <div className="border-2 border-dashed border-gray-300 rounded-xl p-6 text-center relative bg-gray-50 hover:bg-gray-100 transition group">
                             <input ref={imageInputRef} type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
                             {editedMenu.imageUrl ? (
@@ -4851,11 +5378,17 @@ const RecipeEditor: React.FC<{
 
                     <div className="grid grid-cols-2 gap-4">
                         <div>
-                            <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Name</label>
+                            <label className="mb-1 flex items-center gap-2 text-xs font-bold uppercase text-gray-500">
+                                Name
+                                <span className="rounded-full bg-red-50 px-2 py-0.5 text-[9px] text-red-700">Required</span>
+                            </label>
                             <input value={editedMenu.name} onChange={e => setEditedMenu({...editedMenu, name: e.target.value})} className="w-full p-3 bg-gray-50 rounded-xl font-bold border border-gray-200 focus:border-black outline-none" />
                         </div>
                         <div>
-                            <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Category</label>
+                            <label className="mb-1 flex items-center gap-2 text-xs font-bold uppercase text-gray-500">
+                                Category
+                                <span className="rounded-full bg-red-50 px-2 py-0.5 text-[9px] text-red-700">Required</span>
+                            </label>
                             <select
                                 value={editedMenu.category}
                                 onChange={e => setEditedMenu({...editedMenu, category: e.target.value})}
@@ -4868,7 +5401,10 @@ const RecipeEditor: React.FC<{
                             </select>
                         </div>
                         <div className="col-span-2">
-                            <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Price</label>
+                            <label className="mb-1 flex items-center gap-2 text-xs font-bold uppercase text-gray-500">
+                                Price
+                                <span className="rounded-full bg-red-50 px-2 py-0.5 text-[9px] text-red-700">Required</span>
+                            </label>
                             <input
                                 type="number"
                                 value={editedMenu.price.toString()}
@@ -4885,6 +5421,7 @@ const RecipeEditor: React.FC<{
                     <div className="pt-6 border-t">
                         <h3 className="font-bold text-lg mb-4 flex items-center gap-2">
                             <UtensilsCrossed className="w-5 h-5"/> Recipe Configuration
+                            <span className="rounded-full bg-red-50 px-2 py-0.5 text-[9px] font-extrabold text-red-700">At least 1 ingredient required</span>
                         </h3>
 
                         {/* Add Ingredient Form */}
@@ -4932,8 +5469,8 @@ const RecipeEditor: React.FC<{
                                 />
                                 <button
                                     onClick={handleAddIngredientToRecipe}
-                                    className="bg-black text-white px-4 rounded-lg font-bold text-sm hover:bg-gray-800 disabled:opacity-50"
-                                    disabled={!newIngName || !newIngQty || !newIngUnit}
+                                    className="bg-black text-white px-4 rounded-lg font-bold text-sm hover:bg-gray-800"
+                                    aria-label="Add ingredient to recipe"
                                 >
                                     <Plus className="w-4 h-4"/>
                                 </button>
@@ -4971,7 +5508,7 @@ const RecipeEditor: React.FC<{
                                 <div className="text-center py-8 text-gray-400 text-sm italic">No ingredients configured for this item.</div>
                             )}
                             {recipeError && (
-                                <div className="text-sm text-red-600 font-semibold">{recipeError}</div>
+                                <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-semibold text-red-700">{recipeError}</div>
                             )}
                         </div>
                     </div>
@@ -4982,6 +5519,23 @@ const RecipeEditor: React.FC<{
                     <button
                         onClick={async () => {
                             if (savingItem) return;
+                            const name = editedMenu.name.trim();
+                            if (!name) {
+                                setRecipeError('Item name is required.');
+                                return;
+                            }
+                            if (!editedMenu.category.trim() || !categories.includes(editedMenu.category)) {
+                                setRecipeError('Select a valid category.');
+                                return;
+                            }
+                            if (!Number.isFinite(editedMenu.price) || editedMenu.price < 0) {
+                                setRecipeError('Price must be 0 or greater.');
+                                return;
+                            }
+                            if (editedMenu.recipe.length === 0) {
+                                setRecipeError('Add at least one ingredient to the recipe.');
+                                return;
+                            }
                             const missing = editedMenu.recipe.filter(r => !localIngredients.find(i => i.id === r.ingredientId));
                             if (missing.length > 0) {
                                 setRecipeError('Some ingredients are missing. Remove and re-add them.');
@@ -4995,7 +5549,7 @@ const RecipeEditor: React.FC<{
                             setRecipeError(null);
                             setSavingItem(true);
                             try {
-                                await Promise.resolve(onSave(editedMenu));
+                                await Promise.resolve(onSave({ ...editedMenu, name }));
                             } catch (e) {
                                 console.error('Failed to save menu item', e);
                                 const message = e instanceof Error ? e.message : 'Failed to save item.';
@@ -5028,6 +5582,7 @@ const StaffEditor: React.FC<{
 }> = ({ employee, positions, onSave, onBack }) => {
     const [editedEmp, setEditedEmp] = useState(employee);
     const [imageError, setImageError] = useState<string | null>(null);
+    const [formError, setFormError] = useState<string | null>(null);
 
     const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
@@ -5067,23 +5622,36 @@ const StaffEditor: React.FC<{
                             </div>
                         </div>
                     </div>
+                    <div className="text-center text-[10px] font-extrabold uppercase text-gray-400">Photo · Optional</div>
                     {imageError && <div className="text-sm text-red-600 font-semibold text-center">{imageError}</div>}
 
                     <div>
-                        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Full Name</label>
+                        <label className="mb-1 flex items-center gap-2 text-xs font-bold uppercase text-gray-500">
+                            Full Name
+                            <span className="rounded-full bg-red-50 px-2 py-0.5 text-[9px] text-red-700">Required</span>
+                        </label>
                         <input
                             value={editedEmp.name}
-                            onChange={e => setEditedEmp({...editedEmp, name: e.target.value})}
+                            onChange={(event) => {
+                                setEditedEmp({...editedEmp, name: event.target.value});
+                                setFormError(null);
+                            }}
                             className="w-full p-3 bg-gray-50 rounded-xl font-bold border border-gray-200 focus:border-black outline-none"
                             placeholder="e.g. John Doe"
                         />
                     </div>
 
                     <div>
-                         <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Position</label>
+                         <label className="mb-1 flex items-center gap-2 text-xs font-bold uppercase text-gray-500">
+                            Position
+                            <span className="rounded-full bg-red-50 px-2 py-0.5 text-[9px] text-red-700">Required</span>
+                         </label>
                          <select
                             value={editedEmp.position}
-                            onChange={e => setEditedEmp({...editedEmp, position: e.target.value})}
+                            onChange={(event) => {
+                                setEditedEmp({...editedEmp, position: event.target.value});
+                                setFormError(null);
+                            }}
                             className="w-full p-3 bg-gray-50 rounded-xl font-bold border border-gray-200 focus:border-black outline-none"
                          >
                             <option value="">Select Position</option>
@@ -5092,13 +5660,28 @@ const StaffEditor: React.FC<{
                             ))}
                          </select>
                     </div>
+                    {formError && (
+                        <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-bold text-red-700">
+                            {formError}
+                        </div>
+                    )}
                 </div>
                 <div className="p-4 border-t bg-gray-50 flex justify-end gap-3">
                     <button onClick={onBack} className="px-6 py-3 font-bold text-gray-500 hover:bg-gray-100 rounded-xl transition">Cancel</button>
                     <button
-                        onClick={() => onSave(editedEmp)}
-                        disabled={!editedEmp.name || !editedEmp.position}
-                        className="bg-black text-white px-8 py-3 rounded-xl font-bold hover:bg-gray-800 shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                        onClick={() => {
+                            const missing = [
+                                ...(!editedEmp.name.trim() ? ['full name'] : []),
+                                ...(!editedEmp.position.trim() ? ['position'] : []),
+                            ];
+                            if (missing.length > 0) {
+                                setFormError(`Staff was not saved. Enter: ${missing.join(', ')}.`);
+                                return;
+                            }
+                            setFormError(null);
+                            onSave({ ...editedEmp, name: editedEmp.name.trim() });
+                        }}
+                        className="bg-black text-white px-8 py-3 rounded-xl font-bold hover:bg-gray-800 shadow-lg"
                     >
                         Save Staff
                     </button>
@@ -5164,9 +5747,10 @@ const EmployeeManager: React.FC<{
                     onBack={() => setEditingEmp(null)}
                 />
             )}
-            <div className="flex justify-between items-center mb-6">
+            <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <h2 className="text-2xl font-bold">Staff Management</h2>
                 <button
+                    type="button"
                     onClick={() => setEditingEmp({
                         id: createLocalEntityId('E'),
                         storeId: store.id,
@@ -5174,12 +5758,12 @@ const EmployeeManager: React.FC<{
                         position: positions[0] || '',
                         imageUrl: ''
                     })}
-                    className="flex items-center gap-2 bg-black text-white px-4 py-2 rounded-xl font-bold text-sm hover:bg-gray-800"
+                    className="flex w-full items-center justify-center gap-2 rounded-xl bg-black px-4 py-2 text-sm font-bold text-white hover:bg-gray-800 sm:w-auto"
                 >
                     <Plus className="w-4 h-4" /> Add Staff
                 </button>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 2xl:grid-cols-3">
                 {employees.map(emp => (
                     <div key={emp.id} className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 flex items-center justify-between group">
                         <div className="flex items-center gap-4">
@@ -5206,9 +5790,9 @@ const EmployeeManager: React.FC<{
                                 </div>
                             </div>
                         </div>
-                        <div className="opacity-0 group-hover:opacity-100 transition-opacity flex gap-2">
-                             <button onClick={() => setEditingEmp(emp)} className="p-2 hover:bg-gray-100 rounded-full text-gray-500"><Settings className="w-4 h-4"/></button>
-                             <button onClick={() => handleDelete(emp.id)} className="p-2 hover:bg-red-50 rounded-full text-red-500"><Trash2 className="w-4 h-4"/></button>
+                        <div className="flex shrink-0 gap-2">
+                             <button type="button" aria-label={`Edit ${emp.name}`} onClick={() => setEditingEmp(emp)} className="flex h-11 w-11 items-center justify-center rounded-full text-gray-500 hover:bg-gray-100"><Settings className="w-4 h-4"/></button>
+                             <button type="button" aria-label={`Delete ${emp.name}`} onClick={() => handleDelete(emp.id)} className="flex h-11 w-11 items-center justify-center rounded-full text-red-500 hover:bg-red-50"><Trash2 className="w-4 h-4"/></button>
                         </div>
                     </div>
                 ))}
@@ -5225,6 +5809,7 @@ const EmployeeManager: React.FC<{
 
 const HQStoreDetail: React.FC<{
     store: Store;
+    initialMonthKey: string;
     sales: Sale[];
     menus: Menu[];
     setMenus: SetMenu[];
@@ -5255,10 +5840,14 @@ const HQStoreDetail: React.FC<{
     onDeleteSetMenu: (id: string) => void;
     onUpdateEmployees: (storeId: string, employees: Employee[]) => void;
     onAddIngredient: (ing: Ingredient) => Promise<void> | void;
-}> = ({ store, sales, menus, setMenus, employees, ingredients, storeStocks, allStores, categories, standardIngredients, currencies, positions, fxRates, fxStatus, fxSourceText, onRefreshFx, salesLookbackLabel, onLoadMoreSales, onBack, onUpdateStore, onSaveStoreStocks, onMergeStores, onDeleteStore, onUpdateMenu, onCreateMenu, onDeleteMenu, onUpdateSetMenu, onCreateSetMenu, onDeleteSetMenu, onUpdateEmployees, onAddIngredient }) => {
+}> = ({ store, initialMonthKey, sales, menus, setMenus, employees, ingredients, storeStocks, allStores, categories, standardIngredients, currencies, positions, fxRates, fxStatus, fxSourceText, onRefreshFx, salesLookbackLabel, onLoadMoreSales, onBack, onUpdateStore, onSaveStoreStocks, onMergeStores, onDeleteStore, onUpdateMenu, onCreateMenu, onDeleteMenu, onUpdateSetMenu, onCreateSetMenu, onDeleteSetMenu, onUpdateEmployees, onAddIngredient }) => {
     const storeMenus = menus.filter(m => m.storeId === store.id);
     const storeSetMenus = setMenus.filter(sm => sm.storeId === store.id);
     const storeEmployees = employees.filter(e => e.storeId === store.id);
+    const currencyOptions = useMemo(
+        () => Array.from(new Set([store.currency, ...currencies].filter(Boolean))).sort(),
+        [currencies, store.currency],
+    );
     const storeSales = useMemo(() => sales.filter(s => s.storeId === store.id), [sales, store.id]);
     const canonicalStoreSales = useMemo(
         () => dedupeSalesByStoreDate(storeSales),
@@ -5268,20 +5857,34 @@ const HQStoreDetail: React.FC<{
         () => [...canonicalStoreSales].sort((a, b) => b.date.localeCompare(a.date) || String(b.id).localeCompare(String(a.id))),
         [canonicalStoreSales]
     );
-    const defaultSalesMonthKey = 'all';
+    const isTestStore = store.country.trim().toUpperCase() === 'TEST' || store.id.startsWith('TEST_');
+    const testDataMonthKey = isTestStore && sortedStoreSales.length > 0
+        ? extractMonthKey(sortedStoreSales[0].date)
+        : null;
+    const defaultSalesMonthKey = testDataMonthKey || initialMonthKey || formatMonthKey(new Date());
     const salesMonthOptions = useMemo(() => {
-        const keys = new Set<string>();
+        const keys = new Set<string>([defaultSalesMonthKey]);
         sortedStoreSales.forEach((sale) => {
             const key = extractMonthKey(sale.date);
             if (key) keys.add(key);
         });
         return Array.from(keys).sort((a, b) => b.localeCompare(a));
-    }, [sortedStoreSales]);
+    }, [sortedStoreSales, defaultSalesMonthKey]);
     const [salesMonthFilter, setSalesMonthFilter] = useState<string>(defaultSalesMonthKey);
     const visibleStoreSales = useMemo(() => {
         if (salesMonthFilter === 'all') return sortedStoreSales;
         return sortedStoreSales.filter((sale) => extractMonthKey(sale.date) === salesMonthFilter);
     }, [sortedStoreSales, salesMonthFilter]);
+    const testMonthSales = useMemo(
+        () => isTestStore
+            ? canonicalStoreSales.filter((sale) => extractMonthKey(sale.date) === defaultSalesMonthKey)
+            : [],
+        [canonicalStoreSales, defaultSalesMonthKey, isTestStore],
+    );
+    const testMonthSalesTotal = useMemo(
+        () => testMonthSales.reduce((sum, sale) => sum + Number(sale.totalAmount || 0), 0),
+        [testMonthSales],
+    );
     const [editingMenu, setEditingMenu] = useState<Menu | null>(null);
     const [editingSetMenu, setEditingSetMenu] = useState<SetMenu | null>(null);
     const [viewingReceipt, setViewingReceipt] = useState<string | null>(null);
@@ -5356,7 +5959,7 @@ const HQStoreDetail: React.FC<{
     const [invoiceError, setInvoiceError] = useState<string | null>(null);
     const [invoiceGenerating, setInvoiceGenerating] = useState(false);
     const [invoiceManualFxDraft, setInvoiceManualFxDraft] = useState<string>('');
-    const [detailSection, setDetailSection] = useState<'sales' | 'inventory' | 'invoice' | 'menu' | 'staff' | 'accounts'>('sales');
+    const [detailSection, setDetailSection] = useState<'sales' | 'close' | 'inventory' | 'invoice' | 'menu' | 'staff' | 'accounts'>('sales');
     const [menuSection, setMenuSection] = useState<'items' | 'sets'>('items');
     const hqNavReadyRef = useRef(false);
     const hqPopLockRef = useRef(false);
@@ -5391,6 +5994,7 @@ const HQStoreDetail: React.FC<{
         const queryMenuSection = url.searchParams.get('hm');
         const fromQuerySection = (
             querySection === 'sales' ||
+            querySection === 'close' ||
             querySection === 'inventory' ||
             querySection === 'invoice' ||
             querySection === 'menu' ||
@@ -5404,6 +6008,7 @@ const HQStoreDetail: React.FC<{
             ? {
                 section: (
                     state.section === 'sales' ||
+                    state.section === 'close' ||
                     state.section === 'inventory' ||
                     state.section === 'invoice' ||
                     state.section === 'menu' ||
@@ -5469,6 +6074,7 @@ const HQStoreDetail: React.FC<{
             hqPopLockRef.current = true;
             setDetailSection(
                 state.section === 'sales' ||
+                state.section === 'close' ||
                 state.section === 'inventory' ||
                 state.section === 'invoice' ||
                 state.section === 'menu' ||
@@ -6159,6 +6765,16 @@ const HQStoreDetail: React.FC<{
     useEffect(() => {
         let cancelled = false;
         const loadOwners = async () => {
+            if (isLocalHqPreviewMode()) {
+                setOwnersError(null);
+                setOwners(store.ownerEmail ? [{
+                    email: store.ownerEmail,
+                    name: 'Preview Owner',
+                    userId: `PREVIEW_${store.id}`,
+                    storeId: store.id,
+                }] : []);
+                return;
+            }
             try {
                 setOwnersError(null);
                 const rows = await loadStoreAccounts(store.id);
@@ -6172,7 +6788,7 @@ const HQStoreDetail: React.FC<{
         };
         loadOwners();
         return () => { cancelled = true; };
-    }, [store.id]);
+    }, [store.id, store.ownerEmail]);
 
     const refreshOwners = async () => {
         try {
@@ -6359,7 +6975,7 @@ const HQStoreDetail: React.FC<{
     }, [standardIngredients, categoryUsageMap, canonicalStoreSales, storeStockMap, inventoryMetricsEnabled]);
 
     return (
-        <div className="p-8 max-w-7xl mx-auto w-full relative">
+        <div className="relative mx-auto w-full min-w-0 max-w-7xl overflow-x-hidden p-4 sm:p-6 lg:p-8">
             {showReminderComposer && reminderDate && (
                 <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
                     <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl">
@@ -6373,7 +6989,7 @@ const HQStoreDetail: React.FC<{
                             <button
                                 type="button"
                                 onClick={closeReminderComposer}
-                                className="p-2 rounded-full hover:bg-gray-100 transition"
+                                className="flex h-11 w-11 items-center justify-center rounded-full transition hover:bg-gray-100"
                             >
                                 <X className="w-5 h-5 text-gray-500" />
                             </button>
@@ -6390,14 +7006,14 @@ const HQStoreDetail: React.FC<{
                                             setSelectedReminderEmails(reminderRecipients.map((recipient) => recipient.email));
                                             setReminderError(null);
                                         }}
-                                        className="px-3 py-1 rounded-lg border border-gray-200 text-xs font-semibold hover:bg-gray-50"
+                                        className="min-h-11 rounded-lg border border-gray-200 px-3 py-2 text-xs font-semibold hover:bg-gray-50"
                                     >
                                         Select All
                                     </button>
                                     <button
                                         type="button"
                                         onClick={() => setSelectedReminderEmails([])}
-                                        className="px-3 py-1 rounded-lg border border-gray-200 text-xs font-semibold hover:bg-gray-50"
+                                        className="min-h-11 rounded-lg border border-gray-200 px-3 py-2 text-xs font-semibold hover:bg-gray-50"
                                     >
                                         Clear
                                     </button>
@@ -6437,7 +7053,7 @@ const HQStoreDetail: React.FC<{
                             <button
                                 type="button"
                                 onClick={copyReminderEmails}
-                                className="px-4 py-2 rounded-xl border border-gray-200 text-sm font-semibold hover:bg-gray-50"
+                                className="min-h-11 rounded-xl border border-gray-200 px-4 py-2 text-sm font-semibold hover:bg-gray-50"
                             >
                                 Copy Recipient List
                             </button>
@@ -6445,21 +7061,21 @@ const HQStoreDetail: React.FC<{
                                 <button
                                     type="button"
                                     onClick={closeReminderComposer}
-                                    className="px-4 py-2 rounded-xl border border-gray-200 text-sm font-semibold hover:bg-gray-50"
+                                    className="min-h-11 rounded-xl border border-gray-200 px-4 py-2 text-sm font-semibold hover:bg-gray-50"
                                 >
                                     Cancel
                                 </button>
                                 <button
                                     type="button"
                                     onClick={() => openReminderDraft('mailto')}
-                                    className="px-4 py-2 rounded-xl border border-gray-200 text-sm font-semibold hover:bg-gray-50"
+                                    className="min-h-11 rounded-xl border border-gray-200 px-4 py-2 text-sm font-semibold hover:bg-gray-50"
                                 >
                                     Open Mail App
                                 </button>
                                 <button
                                     type="button"
                                     onClick={() => openReminderDraft('gmail')}
-                                    className="px-4 py-2 rounded-xl bg-black text-white text-sm font-bold hover:bg-gray-800"
+                                    className="min-h-11 rounded-xl bg-black px-4 py-2 text-sm font-bold text-white hover:bg-gray-800"
                                 >
                                     Open Gmail Draft
                                 </button>
@@ -6476,7 +7092,7 @@ const HQStoreDetail: React.FC<{
                             <button
                                 type="button"
                                 onClick={() => setShowMissingCalendar(false)}
-                                className="p-2 rounded-full hover:bg-gray-100 transition"
+                                className="flex h-11 w-11 items-center justify-center rounded-full transition hover:bg-gray-100"
                             >
                                 <X className="w-5 h-5 text-gray-500" />
                             </button>
@@ -6486,7 +7102,7 @@ const HQStoreDetail: React.FC<{
                                 <button
                                     type="button"
                                     onClick={goPrevMonth}
-                                    className="px-3 py-1 rounded-lg border border-gray-200 text-sm font-semibold hover:bg-gray-50 transition"
+                                    className="min-h-11 rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold transition hover:bg-gray-50"
                                 >
                                     Prev
                                 </button>
@@ -6497,7 +7113,7 @@ const HQStoreDetail: React.FC<{
                                     type="button"
                                     onClick={goNextMonth}
                                     disabled={!canGoNextMonth}
-                                    className="px-3 py-1 rounded-lg border border-gray-200 text-sm font-semibold disabled:opacity-50 hover:bg-gray-50 transition"
+                                    className="min-h-11 rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold transition hover:bg-gray-50 disabled:opacity-50"
                                 >
                                     Next
                                 </button>
@@ -6530,7 +7146,7 @@ const HQStoreDetail: React.FC<{
                                                 if (!isMissing) return;
                                                 openEmailReminder(dateStr);
                                             }}
-                                            className={`h-9 rounded-lg text-xs font-semibold border transition ${
+                                            className={`h-11 rounded-lg border text-xs font-semibold transition ${
                                                 isMissing
                                                     ? 'bg-red-100 border-red-300 text-red-700 hover:bg-red-200'
                                                     : isSubmitted
@@ -6567,7 +7183,7 @@ const HQStoreDetail: React.FC<{
                             <button
                                 type="button"
                                 onClick={() => setShowStockEditor(false)}
-                                className="p-2 rounded-full hover:bg-gray-100 transition"
+                                className="flex h-11 w-11 items-center justify-center rounded-full transition hover:bg-gray-100"
                             >
                                 <X className="w-5 h-5 text-gray-500" />
                             </button>
@@ -6578,11 +7194,11 @@ const HQStoreDetail: React.FC<{
                             </div>
                             <div className="space-y-2 max-h-[50vh] overflow-y-auto">
                                 {stockDrafts.map((row, idx) => (
-                                    <div key={`${row.ingredientName}-${idx}`} className="grid grid-cols-12 gap-2 items-center">
-                                        <div className="col-span-5 text-sm font-semibold text-gray-800">{row.ingredientName}</div>
-                                        <div className="col-span-2 text-xs text-gray-500">{row.unit}</div>
+                                    <div key={`${row.ingredientName}-${idx}`} className="grid grid-cols-1 items-center gap-2 rounded-xl border border-gray-100 p-3 sm:grid-cols-12 sm:border-0 sm:p-0">
+                                        <div className="text-sm font-semibold text-gray-800 sm:col-span-5">{row.ingredientName}</div>
+                                        <div className="text-xs text-gray-500 sm:col-span-2">{row.unit}</div>
                                         <input
-                                            className="col-span-2 border border-gray-200 rounded-lg p-2 text-sm text-right"
+                                            className="min-h-11 rounded-lg border border-gray-200 p-2 text-right text-sm sm:col-span-2"
                                             value={String(row.par ?? 0)}
                                             onChange={(e) => {
                                                 const val = e.target.value.replace(/[^\d.]/g, '');
@@ -6591,7 +7207,7 @@ const HQStoreDetail: React.FC<{
                                             placeholder="Stock"
                                         />
                                         <input
-                                            className="col-span-2 border border-gray-200 rounded-lg p-2 text-sm text-right"
+                                            className="min-h-11 rounded-lg border border-gray-200 p-2 text-right text-sm sm:col-span-2"
                                             value={String(row.reorder ?? 0)}
                                             onChange={(e) => {
                                                 const val = e.target.value.replace(/[^\d.]/g, '');
@@ -6608,7 +7224,7 @@ const HQStoreDetail: React.FC<{
                             <button
                                 type="button"
                                 onClick={() => setShowStockEditor(false)}
-                                className="px-4 py-2 rounded-xl border border-gray-200 text-sm font-semibold hover:bg-gray-50"
+                                className="min-h-11 rounded-xl border border-gray-200 px-4 py-2 text-sm font-semibold hover:bg-gray-50"
                             >
                                 Cancel
                             </button>
@@ -6616,7 +7232,7 @@ const HQStoreDetail: React.FC<{
                                 type="button"
                                 onClick={saveStockSettings}
                                 disabled={stockSaving}
-                                className="px-4 py-2 rounded-xl bg-black text-white text-sm font-bold disabled:opacity-50"
+                                className="min-h-11 rounded-xl bg-black px-4 py-2 text-sm font-bold text-white disabled:opacity-50"
                             >
                                 {stockSaving ? 'Saving...' : 'Save'}
                             </button>
@@ -6650,17 +7266,17 @@ const HQStoreDetail: React.FC<{
                 />
             )}
 
-            <button onClick={onBack} className="flex items-center gap-2 text-gray-500 hover:text-black mb-6 font-bold">
+            <button onClick={onBack} className="mb-5 flex min-h-11 items-center gap-2 rounded-xl px-1 font-bold text-gray-500 hover:text-black">
                 <ArrowLeft className="w-5 h-5"/> Back to Dashboard
             </button>
 
-            <div className="flex items-start justify-between mb-8">
-                <div>
-                    <h1 className="text-3xl font-extrabold">{store.name}</h1>
-                    <div className="flex items-center gap-2 text-gray-500 mt-2">
+            <div className="mb-6 flex min-w-0 flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+                <div className="min-w-0">
+                    <h1 className="break-words text-2xl font-extrabold sm:text-3xl">{store.name}</h1>
+                    <div className="mt-2 flex min-w-0 items-start gap-2 text-sm text-gray-500 sm:text-base">
                         <MapPin className="w-4 h-4"/> {store.city}, {store.country} • Owner: {store.ownerEmail}
                     </div>
-                    <div className="mt-2 text-xs text-gray-500">
+                    <div className="mt-2 break-all text-xs text-gray-500">
                         {owners.length > 0 ? (
                             <span>
                                 Linked Accounts: {owners.map(o => {
@@ -6673,16 +7289,17 @@ const HQStoreDetail: React.FC<{
                         )}
                     </div>
                 </div>
-                <div className="text-right">
+                <div className="grid w-full shrink-0 grid-cols-1 gap-3 sm:grid-cols-2 lg:w-auto lg:min-w-[320px]">
+                  <div className="rounded-xl border border-gray-200 bg-white p-3 text-left lg:text-right">
                     <div className="text-sm font-bold text-gray-500">Currency</div>
-                    <div className="mt-1 flex items-center gap-2 justify-end">
+                    <div className="mt-2 flex min-w-0 items-center gap-2 lg:justify-end">
                         <select
                             value={currencyDraft}
                             onChange={(e) => setCurrencyDraft(e.target.value)}
-                            className="px-2 py-1 rounded-lg border border-gray-200 text-right font-bold bg-white"
+                            className="min-h-11 min-w-0 flex-1 rounded-lg border border-gray-200 bg-white px-3 py-2 text-right font-bold"
                         >
                             <option value="">Select</option>
-                            {currencies.map(cur => (
+                            {currencyOptions.map(cur => (
                                 <option key={cur} value={cur}>{cur}</option>
                             ))}
                         </select>
@@ -6690,43 +7307,108 @@ const HQStoreDetail: React.FC<{
                             type="button"
                             onClick={saveCurrency}
                             disabled={currencySaving || !currencyDraft}
-                            className="px-3 py-1 rounded-lg bg-black text-white text-xs font-bold disabled:opacity-50"
+                            className="min-h-11 shrink-0 rounded-lg bg-black px-4 py-2 text-xs font-bold text-white disabled:opacity-50"
                         >
                             {currencySaving ? 'Saving...' : 'Save'}
                         </button>
                     </div>
                     {currencyError && (
-                        <div className="mt-2 text-xs text-red-600 text-right">{currencyError}</div>
+                        <div className="mt-2 text-xs text-red-600 lg:text-right">{currencyError}</div>
                     )}
-                    <div className="mt-4 text-sm font-bold text-gray-500">Royalty Rate (%)</div>
-                    <div className="mt-1 flex items-center gap-2 justify-end">
+                  </div>
+                  <div className="rounded-xl border border-gray-200 bg-white p-3 text-left lg:text-right">
+                    <div className="text-sm font-bold text-gray-500">Royalty Rate (%)</div>
+                    <div className="mt-2 flex items-center gap-2 lg:justify-end">
                         <input
                             type="text"
                             inputMode="decimal"
                             value={royaltyDraft}
                             onChange={(e) => setRoyaltyDraft(normalizePercentInput(e.target.value))}
-                            className="w-24 px-2 py-1 rounded-lg border border-gray-200 text-right font-bold"
+                            className="min-h-11 min-w-0 flex-1 rounded-lg border border-gray-200 px-3 py-2 text-right font-bold"
                         />
                         <button
                             type="button"
                             onClick={saveRoyaltyRate}
                             disabled={royaltySaving || Number.isNaN(parseFloat(royaltyDraft))}
-                            className="px-3 py-1 rounded-lg bg-black text-white text-xs font-bold disabled:opacity-50"
+                            className="min-h-11 shrink-0 rounded-lg bg-black px-4 py-2 text-xs font-bold text-white disabled:opacity-50"
                         >
                             {royaltySaving ? 'Saving...' : 'Save'}
                         </button>
                     </div>
                     {royaltyError && (
-                        <div className="mt-2 text-xs text-red-600 text-right">{royaltyError}</div>
+                        <div className="mt-2 text-xs text-red-600 lg:text-right">{royaltyError}</div>
                     )}
+                  </div>
                 </div>
             </div>
 
-            <div className="sticky top-0 z-20 bg-gray-50/95 backdrop-blur supports-[backdrop-filter]:bg-gray-50/80 py-2 mb-6 overflow-x-auto">
-                <div className="inline-flex items-center gap-2 rounded-2xl border border-gray-200 bg-white p-1 min-w-max">
+            {isTestStore && (
+                <section
+                    data-testid="test-cost-lab-banner"
+                    className="mb-6 rounded-2xl border-2 border-amber-300 bg-amber-50 p-5 shadow-sm"
+                >
+                    <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+                        <div>
+                            <div className="inline-flex items-center rounded-full bg-amber-200 px-3 py-1 text-[11px] font-black uppercase tracking-[0.16em] text-amber-900">
+                                Test workspace
+                            </div>
+                            <h2 className="mt-2 text-xl font-extrabold text-gray-950">
+                                Cost-analysis sample data is ready
+                            </h2>
+                            <p className="mt-1 text-sm text-amber-950/75">
+                                Open Cost &amp; Inventory to review actual cost, theoretical recipe cost, stock counts, and ingredient variances together.
+                            </p>
+                            <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                                <div className="rounded-xl border border-amber-200 bg-white/80 p-3">
+                                    <div className="text-[10px] font-bold uppercase text-gray-500">Sample month</div>
+                                    <div className="mt-1 font-extrabold">{formatMonthKeyLabel(defaultSalesMonthKey)}</div>
+                                </div>
+                                <div className="rounded-xl border border-amber-200 bg-white/80 p-3">
+                                    <div className="text-[10px] font-bold uppercase text-gray-500">Sales</div>
+                                    <div className="mt-1 font-extrabold">{store.currency} {Math.round(testMonthSalesTotal).toLocaleString()}</div>
+                                </div>
+                                <div className="rounded-xl border border-amber-200 bg-white/80 p-3">
+                                    <div className="text-[10px] font-bold uppercase text-gray-500">Daily reports</div>
+                                    <div className="mt-1 font-extrabold">{testMonthSales.length} days</div>
+                                </div>
+                                <div className="rounded-xl border border-amber-200 bg-white/80 p-3">
+                                    <div className="text-[10px] font-bold uppercase text-gray-500">Menu setup</div>
+                                    <div className="mt-1 font-extrabold">{storeMenus.length} items · {storeSetMenus.length} course</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div className="flex shrink-0 flex-col gap-2 sm:flex-row lg:flex-col">
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setSalesMonthFilter(defaultSalesMonthKey);
+                                    setDetailSection('inventory');
+                                }}
+                                className="rounded-xl bg-black px-5 py-3 text-sm font-extrabold text-white hover:bg-gray-800"
+                            >
+                                Open Cost &amp; Inventory
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setMenuSection('items');
+                                    setDetailSection('menu');
+                                }}
+                                className="rounded-xl border border-amber-300 bg-white px-5 py-3 text-sm font-extrabold text-gray-900 hover:bg-amber-100"
+                            >
+                                Open Menu &amp; Recipes
+                            </button>
+                        </div>
+                    </div>
+                </section>
+            )}
+
+            <div className="sticky top-0 z-20 mb-6 bg-gray-50/95 py-2 backdrop-blur supports-[backdrop-filter]:bg-gray-50/80">
+                <div className="grid w-full grid-cols-2 gap-1 rounded-2xl border border-gray-200 bg-white p-1 sm:flex sm:flex-wrap sm:items-center">
                     {[
                         { key: 'sales', label: 'Sales' },
-                        { key: 'inventory', label: 'Inventory' },
+                        { key: 'close', label: 'Month Close' },
+                        { key: 'inventory', label: 'Cost & Inventory' },
                         { key: 'invoice', label: 'Invoice' },
                         { key: 'menu', label: 'Menu' },
                         { key: 'staff', label: 'Staff' },
@@ -6735,8 +7417,8 @@ const HQStoreDetail: React.FC<{
                         <button
                             key={tab.key}
                             type="button"
-                            onClick={() => setDetailSection(tab.key as 'sales' | 'inventory' | 'invoice' | 'menu' | 'staff' | 'accounts')}
-                            className={`px-4 py-2 rounded-xl text-sm font-bold transition ${
+                            onClick={() => setDetailSection(tab.key as 'sales' | 'close' | 'inventory' | 'invoice' | 'menu' | 'staff' | 'accounts')}
+                            className={`min-h-11 rounded-xl px-3 py-2 text-sm font-bold transition sm:px-4 ${
                                 detailSection === tab.key
                                     ? 'bg-black text-white'
                                     : 'text-gray-600 hover:bg-gray-100'
@@ -6747,6 +7429,17 @@ const HQStoreDetail: React.FC<{
                     ))}
                 </div>
             </div>
+
+            {detailSection === 'close' && (
+                <div className="mb-8">
+                    <MonthlyCloseWorkspace
+                        store={store}
+                        sales={sales}
+                        initialMonthKey={salesMonthFilter === 'all' ? defaultSalesMonthKey : salesMonthFilter}
+                        mode="hq"
+                    />
+                </div>
+            )}
 
             {detailSection === 'invoice' && (
             <div className="bg-white p-5 rounded-2xl shadow-sm border mb-8">
@@ -6985,7 +7678,7 @@ const HQStoreDetail: React.FC<{
                                                         onClick={() => {
                                                             openEmailReminder(d);
                                                         }}
-                                                        className="bg-white border border-red-200 px-2 py-1 rounded text-xs font-bold text-red-600 shadow-sm hover:bg-red-50 transition"
+                                                        className="min-h-11 rounded border border-red-200 bg-white px-3 py-2 text-xs font-bold text-red-600 shadow-sm transition hover:bg-red-50"
                                                         title="Send email reminder"
                                                     >
                                                         {d}
@@ -6997,7 +7690,7 @@ const HQStoreDetail: React.FC<{
                                                         setCalendarMonth(new Date(new Date().getFullYear(), new Date().getMonth(), 1));
                                                         setShowMissingCalendar(true);
                                                     }}
-                                                    className="bg-white border border-red-200 px-2 py-1 rounded text-xs font-bold text-red-700 shadow-sm hover:bg-red-50 transition"
+                                                    className="min-h-11 rounded border border-red-200 bg-white px-3 py-2 text-xs font-bold text-red-700 shadow-sm transition hover:bg-red-50"
                                                 >
                                                     View Older Dates
                                                 </button>
@@ -7081,85 +7774,30 @@ const HQStoreDetail: React.FC<{
             )}
 
             {detailSection === 'inventory' && (
-                <div className="bg-white p-6 rounded-2xl shadow-sm border border-black/10 mb-8">
-                    <div className="flex justify-between items-center mb-6">
-                        <h2 className="text-xl font-bold flex items-center gap-2">
-                            <Package className="w-5 h-5"/> Real-time Inventory (Est.)
-                        </h2>
-                        <div className="flex items-center gap-2">
-                            <span className="text-xs font-bold bg-gray-100 px-2 py-1 rounded text-gray-500">Auto-Calculated</span>
-                            <button
-                                type="button"
-                                onClick={() => setShowStockEditor(true)}
-                                className="text-xs font-bold bg-white border border-gray-200 px-2 py-1 rounded hover:bg-gray-50"
-                            >
-                                Edit Stock
-                            </button>
-                        </div>
-                    </div>
-                    <div className="space-y-4">
-                        {Object.entries(inventoryStats).map(([name, data]) => {
-                            const hasConfiguredStock = data.configured;
-                            const remaining = data.remaining;
-                            const percentUsed = hasConfiguredStock
-                                ? (data.par > 0 ? Math.min(100, (data.used / data.par) * 100) : (data.used > 0 ? 100 : 0))
-                                : 0;
-                            const isLow = hasConfiguredStock
-                                ? (data.reorder > 0 ? (remaining !== null && remaining <= data.reorder) : percentUsed > 80)
-                                : false;
-
-                            return (
-                                <div key={name} className="p-4 border rounded-xl hover:border-black transition">
-                                    <div className="flex justify-between items-end mb-2">
-                                        <div>
-                                            <div className="font-bold text-gray-800">{name}</div>
-                                            <div className="text-xs text-gray-500">Standard Ingredient</div>
-                                        </div>
-                                        <div className="text-right">
-                                            <div className="text-lg font-extrabold">
-                                                {data.used.toLocaleString()}
-                                                <span className="text-xs font-medium text-gray-400"> {data.unit} used</span>
-                                            </div>
-                                            <div className="text-xs text-gray-500">
-                                                {hasConfiguredStock ? (
-                                                    <>Remaining: {(remaining ?? 0).toLocaleString()} {data.unit}</>
-                                                ) : (
-                                                    <>Set stock in Store Settings</>
-                                                )}
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <div className="h-3 w-full bg-gray-100 rounded-full overflow-hidden relative">
-                                        <div
-                                            className={`h-full rounded-full ${isLow ? 'bg-red-500' : 'bg-black'}`}
-                                            style={{ width: `${percentUsed}%` }}
-                                        />
-                                    </div>
-                                    <div className="flex justify-between mt-2 text-[10px] font-bold text-gray-400 uppercase">
-                                        <span>Current Consumption</span>
-                                        {isLow && <span className="text-red-500 flex items-center gap-1"><AlertCircle className="w-3 h-3"/> Reorder Recommended</span>}
-                                    </div>
-                                </div>
-                            );
-                        })}
-                        {Object.keys(inventoryStats).length === 0 && (
-                            <div className="text-center py-8 text-gray-400 italic">No standard ingredients configured.</div>
-                        )}
-                    </div>
+                <div className="mb-8">
+                    <CostInventoryWorkspace
+                        store={store}
+                        ingredients={ingredients}
+                        menus={storeMenus}
+                        setMenus={storeSetMenus}
+                        sales={canonicalStoreSales}
+                        initialMonthKey={salesMonthFilter === 'all' ? defaultSalesMonthKey : salesMonthFilter}
+                        mode="hq"
+                    />
                 </div>
             )}
 
             {detailSection === 'sales' && (
             <div className="bg-white p-6 rounded-2xl shadow-sm border mb-8">
-                <div className="flex items-center justify-between mb-6">
+                <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                     <h2 className="text-xl font-bold flex items-center gap-2">
                         <ClipboardList className="w-5 h-5"/> Sales History
                     </h2>
-                    <div className="flex items-center gap-3">
+                    <div className="flex flex-wrap items-center gap-3">
                         <select
                             value={salesMonthFilter}
                             onChange={(e) => setSalesMonthFilter(e.target.value)}
-                            className="text-xs font-semibold border border-gray-200 rounded-lg px-2 py-1 bg-white"
+                            className="min-h-11 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-semibold"
                         >
                             <option value="all">All Months</option>
                             {salesMonthOptions.map((monthKey) => (
@@ -7172,7 +7810,7 @@ const HQStoreDetail: React.FC<{
                         <button
                             type="button"
                             onClick={onLoadMoreSales}
-                            className="text-xs font-bold px-3 py-1 rounded-full border border-gray-200 hover:bg-gray-50 transition"
+                            className="min-h-11 rounded-full border border-gray-200 px-3 py-2 text-xs font-bold transition hover:bg-gray-50"
                         >
                             Load more
                         </button>
@@ -7204,13 +7842,13 @@ const HQStoreDetail: React.FC<{
                                                         inputMode="decimal"
                                                         value={editingSaleAmountDraft}
                                                         onChange={(e) => setEditingSaleAmountDraft(normalizeDecimalInput(e.target.value, 2))}
-                                                        className="w-32 border border-gray-200 rounded-lg px-2 py-1 text-right text-sm bg-white"
+                                                        className="min-h-11 w-32 rounded-lg border border-gray-200 bg-white px-2 py-2 text-right text-sm"
                                                     />
                                                     <button
                                                         type="button"
                                                         onClick={() => void saveSaleAmount(sale)}
                                                         disabled={saleAmountSaving}
-                                                        className="text-[11px] font-bold px-2 py-1 rounded-md bg-black text-white disabled:opacity-50"
+                                                        className="min-h-11 rounded-md bg-black px-3 py-2 text-[11px] font-bold text-white disabled:opacity-50"
                                                     >
                                                         Save
                                                     </button>
@@ -7218,7 +7856,7 @@ const HQStoreDetail: React.FC<{
                                                         type="button"
                                                         onClick={cancelEditSaleAmount}
                                                         disabled={saleAmountSaving}
-                                                        className="text-[11px] font-bold px-2 py-1 rounded-md border border-gray-200"
+                                                        className="min-h-11 rounded-md border border-gray-200 px-3 py-2 text-[11px] font-bold"
                                                     >
                                                         Cancel
                                                     </button>
@@ -7251,7 +7889,7 @@ const HQStoreDetail: React.FC<{
                                                 <button
                                                     type="button"
                                                     onClick={() => toggleSaleDetails(sale.id)}
-                                                    className="text-xs font-bold text-gray-700 px-3 py-1 rounded-full border border-gray-200 hover:bg-gray-50 transition"
+                                                    className="min-h-11 rounded-full border border-gray-200 px-3 py-2 text-xs font-bold text-gray-700 transition hover:bg-gray-50"
                                                 >
                                                     {expandedSales.has(sale.id) ? 'Hide' : 'View'}
                                                 </button>
@@ -7259,7 +7897,7 @@ const HQStoreDetail: React.FC<{
                                                     <button
                                                         type="button"
                                                         onClick={() => startEditSaleAmount(sale)}
-                                                        className="text-xs font-bold text-blue-700 px-3 py-1 rounded-full border border-blue-200 hover:bg-blue-50 transition"
+                                                        className="min-h-11 rounded-full border border-blue-200 px-3 py-2 text-xs font-bold text-blue-700 transition hover:bg-blue-50"
                                                     >
                                                         Edit
                                                     </button>
@@ -7273,7 +7911,7 @@ const HQStoreDetail: React.FC<{
                                                 <button
                                                     onClick={() => openReceipt(sale.id)}
                                                     disabled={receiptLoadingId === sale.id}
-                                                    className="inline-flex items-center gap-1 text-xs font-bold text-blue-600 hover:bg-blue-50 px-3 py-1 rounded-full transition disabled:opacity-60"
+                                                    className="inline-flex min-h-11 items-center gap-1 rounded-full px-3 py-2 text-xs font-bold text-blue-600 transition hover:bg-blue-50 disabled:opacity-60"
                                                 >
                                                     <ImageIcon className="w-3 h-3"/> {receiptLoadingId === sale.id ? 'Loading...' : 'View Receipt'}
                                                 </button>
@@ -7292,6 +7930,21 @@ const HQStoreDetail: React.FC<{
                                                     <div className="mb-3 text-xs font-semibold text-gray-700">
                                                         Comment: <span className="font-medium text-gray-600">{sale.comment}</span>
                                                     </div>
+                                                )}
+                                                <div className="text-xs font-bold text-gray-500 uppercase mb-2">Direct Menu Quantities</div>
+                                                {sale.menuItems?.length ? (
+                                                    <div className="mb-4 flex flex-wrap gap-2">
+                                                        {sale.menuItems.map((item, idx) => {
+                                                            const menu = storeMenus.find((row) => row.id === item.menuId);
+                                                            return (
+                                                                <div key={`${item.menuId}-${idx}`} className="bg-white border border-gray-200 px-2 py-1 rounded text-xs font-bold text-gray-700">
+                                                                    {menu?.name ?? 'Unknown Menu'} • {item.quantity}
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                ) : (
+                                                    <div className="text-xs text-amber-600 mb-4">No direct-menu breakdown for this report.</div>
                                                 )}
                                                 <div className="text-xs font-bold text-gray-500 uppercase mb-2">Set Menu Quantities</div>
                                                 {sale.setItems?.length ? (
@@ -7454,9 +8107,9 @@ const HQStoreDetail: React.FC<{
                     )}
 
                     <div className="bg-white p-6 rounded-2xl shadow-sm border">
-                        <h2 className="text-xl font-bold mb-2">Link Account to This Store</h2>
+                        <h2 className="text-xl font-bold mb-2">Approve Account for This Store</h2>
                         <p className="text-xs text-gray-500 mb-4">
-                            Use this when a manager created the wrong store. This links their account to this store without touching existing data.
+                            Enter the email after the owner signs in and submits an access request. Only HQ can connect an account to an approved store.
                         </p>
                         <div className="flex flex-col md:flex-row gap-3">
                             <input
@@ -7471,13 +8124,13 @@ const HQStoreDetail: React.FC<{
                                 disabled={linkBusy}
                                 className="px-4 py-2 rounded-xl bg-black text-white text-sm font-bold disabled:opacity-50"
                             >
-                                {linkBusy ? 'Linking...' : 'Link Account'}
+                                {linkBusy ? 'Approving...' : 'Approve Account'}
                             </button>
                         </div>
                         {linkError && <div className="mt-3 text-xs text-red-600">{linkError}</div>}
                         {linkSuccess && <div className="mt-3 text-xs text-emerald-600">{linkSuccess}</div>}
                         <div className="mt-3 text-[10px] text-gray-400">
-                            Note: The user must sign in at least once so their account exists.
+                            The user must sign in once and submit an access request before approval.
                         </div>
                         {owners.length > 0 && (
                             <div className="mt-5 space-y-2">
@@ -7707,6 +8360,7 @@ const HQDashboard: React.FC<{
   onUpdateGlobalConfig: (key: string, values: any) => void;
   onUpdateStore: (store: Store) => void;
   onSaveStoreStocks: (storeId: string, rows: { ingredientName: string; unit: string; par: number; reorder: number }[]) => void;
+  onMergeStores: (sourceId: string, targetId: string) => Promise<void>;
   onDeleteStore: (storeId: string) => Promise<void>;
   onUpdateMenu: (menu: Menu) => void;
   onCreateMenu: (menu: Menu) => void;
@@ -7716,27 +8370,133 @@ const HQDashboard: React.FC<{
   onDeleteSetMenu: (id: string) => void;
   onUpdateEmployees: (storeId: string, employees: Employee[]) => void;
     onAddIngredient: (ing: Ingredient) => Promise<void> | void;
-}> = ({ user, onLogout, stores, sales, menus, setMenus, employees, ingredients, storeStocks, globalConfig, salesLookbackLabel, onLoadMoreSales, onUpdateGlobalConfig, onUpdateStore, onSaveStoreStocks, onDeleteStore, onUpdateMenu, onCreateMenu, onDeleteMenu, onUpdateSetMenu, onCreateSetMenu, onDeleteSetMenu, onUpdateEmployees, onAddIngredient }) => {
+}> = ({ user, onLogout, stores, sales, menus, setMenus, employees, ingredients, storeStocks, globalConfig, salesLookbackLabel, onLoadMoreSales, onUpdateGlobalConfig, onUpdateStore, onSaveStoreStocks, onMergeStores, onDeleteStore, onUpdateMenu, onCreateMenu, onDeleteMenu, onUpdateSetMenu, onCreateSetMenu, onDeleteSetMenu, onUpdateEmployees, onAddIngredient }) => {
   const [selectedStore, setSelectedStore] = useState<Store | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isSalesAnalyticsOpen, setIsSalesAnalyticsOpen] = useState(false);
-  const navReadyRef = useRef(false);
+  const reportingStores = useMemo(
+    () => stores.filter((store) => (
+      (store.reportingStatus ?? 'active') === 'active'
+      && store.country.trim().toUpperCase() !== 'TEST'
+      && !store.id.startsWith('TEST_')
+    )),
+    [stores],
+  );
+  const hqMonthOptions = useMemo(() => {
+    const keys = new Set<string>([formatMonthKey(new Date())]);
+    const reportingStoreIds = new Set(reportingStores.map((store) => store.id));
+    dedupeSalesByStoreDate(sales).forEach((sale) => {
+      if (!reportingStoreIds.has(sale.storeId)) return;
+      const key = extractMonthKey(sale.date);
+      if (key) keys.add(key);
+    });
+    return Array.from(keys).sort((a, b) => b.localeCompare(a));
+  }, [reportingStores, sales]);
+  const [selectedMonthKey, setSelectedMonthKey] = useState(() => formatMonthKey(new Date()));
+  const hqCountries = useMemo<string[]>(
+    () => Array.from(new Set<string>(reportingStores.map((store) => store.country))).sort((a, b) => a.localeCompare(b)),
+    [reportingStores],
+  );
+  const [selectedCountry, setSelectedCountry] = useState<string>('all');
+  const testStores = useMemo(
+    () => stores.filter((store) => (
+      store.reportingStatus === 'test'
+      || store.country.trim().toUpperCase() === 'TEST'
+      || store.id.startsWith('TEST_')
+    )),
+    [stores],
+  );
+  const quarantinedStores = useMemo(
+    () => stores.filter((store) => store.reportingStatus === 'quarantined'),
+    [stores],
+  );
+  const testStoreSummaries = useMemo(() => testStores.map((store) => {
+    const storeSales = dedupeSalesByStoreDate(sales)
+      .filter((sale) => sale.storeId === store.id)
+      .sort((left, right) => right.date.localeCompare(left.date));
+    const monthKey = storeSales.length > 0
+      ? extractMonthKey(storeSales[0].date)
+      : formatMonthKey(new Date());
+    const monthSales = storeSales.filter((sale) => extractMonthKey(sale.date) === monthKey);
+    return {
+      store,
+      monthKey,
+      salesDays: monthSales.length,
+      salesTotal: monthSales.reduce((sum, sale) => sum + Number(sale.totalAmount || 0), 0),
+      menuCount: menus.filter((menu) => menu.storeId === store.id).length,
+      courseCount: setMenus.filter((setMenu) => setMenu.storeId === store.id).length,
+    };
+  }), [menus, sales, setMenus, testStores]);
+  const filteredStores = useMemo(
+    () => selectedCountry === 'all'
+      ? reportingStores
+      : reportingStores.filter((store) => store.country === selectedCountry),
+    [reportingStores, selectedCountry],
+  );
   const navRestoreRef = useRef(false);
-  const popLockRef = useRef(false);
   const { rates: fxRates, status: fxStatus, sourceText: fxSourceText, refreshNow: refreshFxNow } = useFxRates();
+  const convertHqAmountToJpy = useCallback(
+    (amount: number, currency: string) => convertToJPY(amount, currency, fxRates),
+    [fxRates],
+  );
 
   // Tabs for Settings
   const [settingsTab, setSettingsTab] = useState<'general' | 'locations' | 'finance' | 'ops' | 'menu'>('general');
 
+  useEffect(() => {
+    if (!hqMonthOptions.includes(selectedMonthKey)) {
+      setSelectedMonthKey(hqMonthOptions[0] ?? formatMonthKey(new Date()));
+    }
+  }, [hqMonthOptions, selectedMonthKey]);
+
+  useEffect(() => {
+    if (selectedCountry !== 'all' && !hqCountries.includes(selectedCountry)) {
+      setSelectedCountry('all');
+    }
+  }, [hqCountries, selectedCountry]);
+
+  const countryPerformance = useMemo(() => hqCountries.map((country) => {
+    const countryStores = reportingStores.filter((store) => store.country === country);
+    const storeIds = new Set(countryStores.map((store) => store.id));
+    const localTotals: Record<string, number> = {};
+    let totalJPY = 0;
+    let missingReports = 0;
+
+    dedupeSalesByStoreDate(sales).forEach((sale) => {
+      if (!storeIds.has(sale.storeId) || extractMonthKey(sale.date) !== selectedMonthKey) return;
+      const store = countryStores.find((row) => row.id === sale.storeId);
+      if (!store) return;
+      localTotals[store.currency] = (localTotals[store.currency] ?? 0) + Number(sale.totalAmount || 0);
+      totalJPY += convertToJPY(sale.totalAmount, store.currency, fxRates) ?? 0;
+    });
+    countryStores.forEach((store) => {
+      missingReports += getStoreMonthReportStatus(sales, store.id, selectedMonthKey).missingDates.length;
+    });
+
+    return {
+      country,
+      stores: countryStores.length,
+      localTotals,
+      totalJPY,
+      missingReports,
+    };
+  }), [hqCountries, reportingStores, sales, selectedMonthKey, fxRates]);
+
+  const formatCountryLocalTotals = (totals: Record<string, number>) => {
+    const entries = Object.entries(totals).sort(([a], [b]) => a.localeCompare(b));
+    if (entries.length === 0) return 'No sales reported';
+    return entries
+      .map(([currency, amount]) => `${currency} ${Math.round(amount).toLocaleString()}`)
+      .join(' / ');
+  };
+
   // --- Real-time Metrics Calculation ---
   const metrics = useMemo(() => {
-      const today = new Date();
-      const currentMonthKey = today.toISOString().slice(0, 7); // e.g. "2023-10"
-      const currentMonthName = today.toLocaleString('default', { month: 'long' });
-
-      const prevDate = new Date(today);
-      prevDate.setMonth(today.getMonth() - 1);
-      const prevMonthKey = prevDate.toISOString().slice(0, 7);
+      const [selectedYear, selectedMonth] = selectedMonthKey.split('-').map(Number);
+      const prevDate = new Date(selectedYear, selectedMonth - 2, 1);
+      const prevMonthKey = formatMonthKey(prevDate);
+      const currentMonthName = formatMonthKeyLabel(selectedMonthKey);
+      const selectedStoreIds = new Set(filteredStores.map((store) => store.id));
 
       let totalSalesCurrentMonth = 0;
       let totalRoyaltyCurrentMonth = 0;
@@ -7744,12 +8504,12 @@ const HQDashboard: React.FC<{
 
       sales.forEach(sale => {
           const store = stores.find(s => s.id === sale.storeId);
-          if (!store) return;
+          if (!store || !selectedStoreIds.has(store.id)) return;
 
           const amountJPY = convertToJPY(sale.totalAmount, store.currency, fxRates) ?? 0;
           const monthKey = sale.date.slice(0, 7);
 
-          if (monthKey === currentMonthKey) {
+          if (monthKey === selectedMonthKey) {
               totalSalesCurrentMonth += amountJPY;
               totalRoyaltyCurrentMonth += amountJPY * (store.royaltyPercentage / 100);
           } else if (monthKey === prevMonthKey) {
@@ -7757,44 +8517,166 @@ const HQDashboard: React.FC<{
           }
       });
 
-      const growthRate = totalSalesLastMonth > 0
+      const growthRate: number | null = totalSalesLastMonth > 0
           ? ((totalSalesCurrentMonth - totalSalesLastMonth) / totalSalesLastMonth) * 100
-          : 0;
+          : null;
 
       return {
           totalSalesCurrentMonth,
           totalRoyaltyCurrentMonth,
           growthRate,
           currentMonthName,
-          activeStores: stores.length,
-          inventoryAlerts: storeStocks.filter(row => row.reorder > 0 && row.par <= row.reorder).length
+          activeStores: filteredStores.length,
+          inventorySetupGaps: filteredStores.reduce((gapCount, store) => (
+              gapCount + globalConfig.standardIngredients.filter((ingredient) => {
+                  const stock = storeStocks.find((row) => (
+                      row.storeId === store.id
+                      && row.ingredientName.trim().toLowerCase() === ingredient.name.trim().toLowerCase()
+                  ));
+                  return !stock || stock.par <= 0 || stock.reorder <= 0;
+              }).length
+          ), 0)
       };
-  }, [sales, stores, fxRates, storeStocks]);
+  }, [sales, stores, filteredStores, selectedMonthKey, fxRates, storeStocks, globalConfig.standardIngredients]);
 
   const handleExportSalesProgress = useCallback(async () => {
     try {
-      await exportGlobalSalesProgressWorkbook(stores, sales, fxRates, fxStatus, fxSourceText);
+      await exportGlobalSalesProgressWorkbook(reportingStores, sales, fxRates, fxStatus, fxSourceText);
     } catch (error) {
       console.error('Failed to export HD sales workbook', error);
       alert(`Excel export failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
-  }, [stores, sales, fxRates, fxStatus, fxSourceText]);
+  }, [reportingStores, sales, fxRates, fxStatus, fxSourceText]);
+
+  const openHqDashboardOverlay = useCallback((overlay: 'settings' | 'sales-analytics') => {
+    if (typeof window === 'undefined') return;
+    setIsSettingsOpen(overlay === 'settings');
+    setIsSalesAnalyticsOpen(overlay === 'sales-analytics');
+    window.history.pushState(
+      {
+        screen: 'hq',
+        selectedStoreId: null,
+        overlay,
+        settingsTab,
+      },
+      ''
+    );
+  }, [settingsTab]);
+
+  const closeHqDashboardOverlay = useCallback((overlay: 'settings' | 'sales-analytics') => {
+    if (typeof window !== 'undefined') {
+      const state = window.history.state as { screen?: string; overlay?: string } | null;
+      if (state?.screen === 'hq' && state.overlay === overlay) {
+        window.history.back();
+        return;
+      }
+    }
+    if (overlay === 'settings') setIsSettingsOpen(false);
+    if (overlay === 'sales-analytics') setIsSalesAnalyticsOpen(false);
+  }, []);
+
+  const selectSettingsTab = useCallback((tab: 'general' | 'locations' | 'finance' | 'ops' | 'menu') => {
+    setSettingsTab(tab);
+    if (typeof window === 'undefined') return;
+    const state = window.history.state as { screen?: string; overlay?: string } | null;
+    if (state?.screen === 'hq' && state.overlay === 'settings') {
+      window.history.replaceState({ ...state, settingsTab: tab }, '');
+    }
+  }, []);
+
+  const openHqStore = useCallback((
+    store: Store,
+    section: 'sales' | 'close' | 'inventory' | 'invoice' | 'menu' | 'staff' | 'accounts' = 'sales',
+    monthKey: string = selectedMonthKey,
+  ) => {
+    setSelectedMonthKey(monthKey);
+    if (typeof window !== 'undefined') {
+      const url = new URL(window.location.href);
+      url.searchParams.set('hs', section);
+      if (section !== 'menu') url.searchParams.delete('hm');
+      window.history.pushState(
+        {
+          screen: 'hq-detail',
+          storeId: store.id,
+          section,
+          menuSection: 'items',
+        },
+        '',
+        `${url.pathname}${url.search}${url.hash}`
+      );
+    }
+    setSelectedStore(store);
+  }, [selectedMonthKey]);
+
+  const closeHqStore = useCallback(() => {
+    if (typeof window !== 'undefined') {
+      const state = window.history.state as { screen?: string; storeId?: string } | null;
+      if (state?.screen === 'hq-detail') {
+        window.history.back();
+        return;
+      }
+    }
+    setSelectedStore(null);
+  }, []);
 
   useEffect(() => {
     if (typeof window === 'undefined' || navRestoreRef.current) return;
-    const historyState = window.history.state;
-    const historyStoreId = historyState?.screen === 'hq'
-      ? (historyState.selectedStoreId as string | null | undefined) ?? null
-      : null;
-    const persistedStoreId = historyStoreId ?? window.localStorage.getItem(HQ_SELECTED_STORE_STORAGE_KEY);
+    const historyState = window.history.state as {
+      screen?: string;
+      selectedStoreId?: string | null;
+      storeId?: string | null;
+      section?: string;
+      menuSection?: string;
+      overlay?: string;
+      settingsTab?: string;
+    } | null;
+    const hasAppHistory = historyState?.screen === 'hq' || historyState?.screen === 'hq-detail';
+    const historyStoreId = historyState?.screen === 'hq-detail'
+      ? historyState.storeId ?? null
+      : historyState?.screen === 'hq'
+        ? historyState.selectedStoreId ?? null
+        : null;
+    const persistedStoreId = isLocalHqPreviewMode()
+      ? null
+      : hasAppHistory
+        ? historyStoreId
+        : window.localStorage.getItem(HQ_SELECTED_STORE_STORAGE_KEY);
     if (persistedStoreId && stores.length === 0) return;
 
     const restoredStore = persistedStoreId
       ? stores.find(s => s.id === persistedStoreId) ?? null
       : null;
     setSelectedStore(restoredStore);
-    window.history.replaceState({ screen: 'hq', selectedStoreId: restoredStore?.id ?? null }, '');
-    navReadyRef.current = true;
+    const restoredOverlay = !restoredStore && historyState?.screen === 'hq'
+      ? historyState.overlay
+      : null;
+    setIsSettingsOpen(restoredOverlay === 'settings');
+    setIsSalesAnalyticsOpen(restoredOverlay === 'sales-analytics');
+    if (
+      historyState?.settingsTab === 'general'
+      || historyState?.settingsTab === 'locations'
+      || historyState?.settingsTab === 'finance'
+      || historyState?.settingsTab === 'ops'
+      || historyState?.settingsTab === 'menu'
+    ) {
+      setSettingsTab(historyState.settingsTab);
+    }
+    window.history.replaceState(
+      restoredStore
+        ? {
+            screen: 'hq-detail',
+            storeId: restoredStore.id,
+            section: historyState?.screen === 'hq-detail' ? historyState.section ?? 'sales' : 'sales',
+            menuSection: historyState?.screen === 'hq-detail' ? historyState.menuSection ?? 'items' : 'items',
+          }
+        : {
+            screen: 'hq',
+            selectedStoreId: null,
+            overlay: restoredOverlay ?? null,
+            settingsTab: historyState?.settingsTab ?? 'general',
+          },
+      ''
+    );
     navRestoreRef.current = true;
   }, [stores]);
 
@@ -7809,34 +8691,39 @@ const HQDashboard: React.FC<{
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    if (!navReadyRef.current) return;
-    if (popLockRef.current) {
-      popLockRef.current = false;
-      return;
-    }
-    window.history.pushState({ screen: 'hq', selectedStoreId: selectedStore?.id ?? null }, '');
-  }, [selectedStore]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
     const onPopState = (e: PopStateEvent) => {
-      const state = e.state;
-      if (!state || state.screen !== 'hq') {
-        // keep user inside app while session is valid
-        window.history.pushState({ screen: 'hq', selectedStoreId: selectedStore?.id ?? null }, '');
+      const state = e.state as {
+        screen?: string;
+        selectedStoreId?: string | null;
+        storeId?: string | null;
+        overlay?: string;
+        settingsTab?: string;
+      } | null;
+      if (!state || (state.screen !== 'hq' && state.screen !== 'hq-detail')) {
         return;
       }
-      popLockRef.current = true;
-      if (!state.selectedStoreId) {
-        setSelectedStore(null);
-        return;
+      setIsSettingsOpen(state.screen === 'hq' && state.overlay === 'settings');
+      setIsSalesAnalyticsOpen(state.screen === 'hq' && state.overlay === 'sales-analytics');
+      if (
+        state.settingsTab === 'general'
+        || state.settingsTab === 'locations'
+        || state.settingsTab === 'finance'
+        || state.settingsTab === 'ops'
+        || state.settingsTab === 'menu'
+      ) {
+        setSettingsTab(state.settingsTab);
       }
-      const store = stores.find(s => s.id === state.selectedStoreId) ?? null;
+      const storeId = state.screen === 'hq-detail'
+        ? state.storeId
+        : state.selectedStoreId;
+      const store = storeId
+        ? stores.find(s => s.id === storeId) ?? null
+        : null;
       setSelectedStore(store);
     };
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
-  }, [stores, selectedStore]);
+  }, [stores]);
 
   useEffect(() => {
     if (!selectedStore) return;
@@ -7850,6 +8737,7 @@ const HQDashboard: React.FC<{
     return (
       <HQStoreDetail
         store={selectedStore}
+        initialMonthKey={selectedMonthKey}
         sales={sales}
         menus={menus}
         setMenus={setMenus}
@@ -7867,10 +8755,10 @@ const HQDashboard: React.FC<{
         onRefreshFx={refreshFxNow}
         salesLookbackLabel={salesLookbackLabel}
         onLoadMoreSales={onLoadMoreSales}
-        onBack={() => setSelectedStore(null)}
+        onBack={closeHqStore}
         onUpdateStore={onUpdateStore}
         onSaveStoreStocks={onSaveStoreStocks}
-        onMergeStores={async (sourceId, targetId) => { await supabase.rpc('merge_stores', { p_source_id: sourceId, p_target_id: targetId }); await refreshAll(); }}
+        onMergeStores={onMergeStores}
         onDeleteStore={onDeleteStore}
         onUpdateMenu={onUpdateMenu}
         onCreateMenu={onCreateMenu}
@@ -7887,7 +8775,7 @@ const HQDashboard: React.FC<{
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
        {/* Header */}
-       <div className="bg-white border-b px-8 py-4 flex justify-between items-center sticky top-0 z-40">
+       <div className="sticky top-0 z-40 flex items-center justify-between border-b bg-white px-4 py-3 sm:px-8 sm:py-4">
           <div className="flex items-center gap-4">
              <div className="w-10 h-10 bg-black text-white rounded-full flex items-center justify-center text-lg font-bold">HQ</div>
              <div>
@@ -7896,7 +8784,7 @@ const HQDashboard: React.FC<{
              </div>
           </div>
           <div className="flex items-center gap-4">
-             <button onClick={() => setIsSettingsOpen(true)} className="p-2 hover:bg-gray-100 rounded-full transition text-gray-600 flex items-center gap-2">
+             <button aria-label="Open global settings" onClick={() => openHqDashboardOverlay('settings')} className="flex min-h-11 min-w-11 items-center justify-center gap-2 rounded-full p-2 text-gray-600 transition hover:bg-gray-100">
                  <Settings className="w-5 h-5" />
                  <span className="text-sm font-bold hidden md:inline">Global Settings</span>
              </button>
@@ -7904,24 +8792,30 @@ const HQDashboard: React.FC<{
                 <div className="font-bold text-sm">{user.name}</div>
                 <div className="text-xs text-gray-500">{user.email}</div>
              </div>
-             <button onClick={onLogout} className="p-2 hover:bg-gray-100 rounded-full transition"><LogOut className="w-5 h-5 text-gray-600" /></button>
+             <button aria-label="Sign out" onClick={onLogout} className="flex h-11 w-11 items-center justify-center rounded-full transition hover:bg-gray-100"><LogOut className="w-5 h-5 text-gray-600" /></button>
           </div>
        </div>
+
+       {isLocalHqPreviewMode() && (
+         <div className="border-b border-amber-300 bg-amber-100 px-4 py-2 text-center text-xs font-black text-amber-950">
+           DEMO PREVIEW · Sample numbers only · Never use this screen to verify operating data
+         </div>
+       )}
 
        {isSettingsOpen && (
            <div className="fixed inset-0 bg-black/60 z-[100] flex items-center justify-center p-4 backdrop-blur-sm">
                <div className="bg-white rounded-2xl shadow-xl max-w-2xl w-full flex flex-col max-h-[90vh]" onClick={e => e.stopPropagation()}>
                    <div className="p-6 border-b flex justify-between items-center bg-gray-50 rounded-t-2xl">
                        <h2 className="text-xl font-bold">Global Configuration</h2>
-                       <button onClick={() => setIsSettingsOpen(false)}><XCircle className="w-6 h-6 text-gray-400 hover:text-black"/></button>
+                       <button aria-label="Close global settings" onClick={() => closeHqDashboardOverlay('settings')} className="flex h-11 w-11 items-center justify-center rounded-full hover:bg-gray-200"><XCircle className="w-6 h-6 text-gray-400 hover:text-black"/></button>
                    </div>
 
-                   <div className="flex border-b">
-                       <button onClick={() => setSettingsTab('general')} className={`flex-1 py-3 text-sm font-bold border-b-2 ${settingsTab === 'general' ? 'border-black text-black' : 'border-transparent text-gray-500 hover:bg-gray-50'}`}>Store Setup</button>
-                       <button onClick={() => setSettingsTab('locations')} className={`flex-1 py-3 text-sm font-bold border-b-2 ${settingsTab === 'locations' ? 'border-black text-black' : 'border-transparent text-gray-500 hover:bg-gray-50'}`}>Locations</button>
-                       <button onClick={() => setSettingsTab('finance')} className={`flex-1 py-3 text-sm font-bold border-b-2 ${settingsTab === 'finance' ? 'border-black text-black' : 'border-transparent text-gray-500 hover:bg-gray-50'}`}>Finance</button>
-                       <button onClick={() => setSettingsTab('ops')} className={`flex-1 py-3 text-sm font-bold border-b-2 ${settingsTab === 'ops' ? 'border-black text-black' : 'border-transparent text-gray-500 hover:bg-gray-50'}`}>Operations</button>
-                       <button onClick={() => setSettingsTab('menu')} className={`flex-1 py-3 text-sm font-bold border-b-2 ${settingsTab === 'menu' ? 'border-black text-black' : 'border-transparent text-gray-500 hover:bg-gray-50'}`}>Menu Config</button>
+                   <div className="flex overflow-x-auto border-b">
+                       <button onClick={() => selectSettingsTab('general')} className={`min-h-12 min-w-[120px] flex-1 border-b-2 px-3 py-3 text-sm font-bold ${settingsTab === 'general' ? 'border-black text-black' : 'border-transparent text-gray-500 hover:bg-gray-50'}`}>Store Setup</button>
+                       <button onClick={() => selectSettingsTab('locations')} className={`min-h-12 min-w-[120px] flex-1 border-b-2 px-3 py-3 text-sm font-bold ${settingsTab === 'locations' ? 'border-black text-black' : 'border-transparent text-gray-500 hover:bg-gray-50'}`}>Locations</button>
+                       <button onClick={() => selectSettingsTab('finance')} className={`min-h-12 min-w-[120px] flex-1 border-b-2 px-3 py-3 text-sm font-bold ${settingsTab === 'finance' ? 'border-black text-black' : 'border-transparent text-gray-500 hover:bg-gray-50'}`}>Finance</button>
+                       <button onClick={() => selectSettingsTab('ops')} className={`min-h-12 min-w-[120px] flex-1 border-b-2 px-3 py-3 text-sm font-bold ${settingsTab === 'ops' ? 'border-black text-black' : 'border-transparent text-gray-500 hover:bg-gray-50'}`}>Operations</button>
+                       <button onClick={() => selectSettingsTab('menu')} className={`min-h-12 min-w-[120px] flex-1 border-b-2 px-3 py-3 text-sm font-bold ${settingsTab === 'menu' ? 'border-black text-black' : 'border-transparent text-gray-500 hover:bg-gray-50'}`}>Menu Config</button>
                    </div>
 
                    <div className="p-6 overflow-y-auto">
@@ -7994,7 +8888,7 @@ const HQDashboard: React.FC<{
                    </div>
 
                    <div className="p-4 border-t bg-gray-50 rounded-b-2xl text-right">
-                       <button onClick={() => setIsSettingsOpen(false)} className="bg-black text-white px-6 py-2 rounded-xl font-bold text-sm hover:bg-gray-800">Done</button>
+                       <button onClick={() => closeHqDashboardOverlay('settings')} className="bg-black text-white px-6 py-2 rounded-xl font-bold text-sm hover:bg-gray-800">Done</button>
                    </div>
                </div>
            </div>
@@ -8002,27 +8896,186 @@ const HQDashboard: React.FC<{
 
        <SalesAnalyticsModal
             isOpen={isSalesAnalyticsOpen}
-            onClose={() => setIsSalesAnalyticsOpen(false)}
+            onClose={() => closeHqDashboardOverlay('sales-analytics')}
             sales={sales}
-            stores={stores}
+            stores={reportingStores}
             fxRates={fxRates}
             fxStatus={fxStatus}
             fxSourceText={fxSourceText}
        />
 
-       <div className="flex-1 p-8 overflow-y-auto space-y-8 max-w-7xl mx-auto w-full">
+       <div className="mx-auto w-full max-w-7xl flex-1 space-y-6 overflow-y-auto p-4 sm:p-6 lg:space-y-8 lg:p-8">
+           {testStoreSummaries.length > 0 && (
+             <section className="rounded-2xl border-2 border-amber-300 bg-amber-50 p-5 shadow-sm">
+               <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+                 <div>
+                   <div className="text-xs font-black uppercase tracking-[0.18em] text-amber-700">QA / sample data</div>
+                   <h2 className="mt-1 text-2xl font-extrabold">Test Cost Workspace</h2>
+                   <p className="mt-1 text-sm text-amber-950/70">
+                     Use this entry point to open the prepared cost-analysis data without finding the test month manually.
+                   </p>
+                 </div>
+                 <div className="rounded-full bg-amber-200 px-3 py-1 text-xs font-black text-amber-900">
+                   Excluded from current-month sales
+                 </div>
+               </div>
+               <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                 {testStoreSummaries.map((summary) => (
+                   <div key={summary.store.id} className="rounded-xl border border-amber-200 bg-white p-4">
+                     <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                       <div>
+                         <div className="font-extrabold">{summary.store.name}</div>
+                         <div className="mt-1 text-xs text-gray-500">
+                           {formatMonthKeyLabel(summary.monthKey)} · {summary.salesDays} reports · {summary.menuCount} menus · {summary.courseCount} course
+                         </div>
+                         <div className="mt-2 text-lg font-extrabold">
+                           {summary.store.currency} {Math.round(summary.salesTotal).toLocaleString()}
+                         </div>
+                       </div>
+                       <button
+                         type="button"
+                         onClick={() => openHqStore(summary.store, 'inventory', summary.monthKey)}
+                         className="rounded-xl bg-black px-5 py-3 text-sm font-extrabold text-white hover:bg-gray-800"
+                       >
+                         Open Cost Analysis
+                       </button>
+                     </div>
+                   </div>
+                 ))}
+               </div>
+             </section>
+           )}
+
+           {quarantinedStores.length > 0 && (
+             <section className="rounded-2xl border border-red-200 bg-red-50 p-5 shadow-sm">
+               <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+                 <div>
+                   <div className="text-xs font-black uppercase tracking-[0.18em] text-red-700">Data quality hold</div>
+                   <h2 className="mt-1 text-xl font-extrabold">Excluded from HQ totals</h2>
+                   <p className="mt-1 text-sm text-red-950/70">
+                     These records are preserved for review but cannot affect sales, FX, royalty or profitability totals.
+                   </p>
+                 </div>
+                 <div className="rounded-full bg-red-100 px-3 py-1 text-xs font-black text-red-800">
+                   {quarantinedStores.length} store{quarantinedStores.length === 1 ? '' : 's'}
+                 </div>
+               </div>
+               <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                 {quarantinedStores.map((store) => (
+                   <button
+                     key={store.id}
+                     type="button"
+                     onClick={() => openHqStore(store)}
+                     className="rounded-xl border border-red-200 bg-white p-4 text-left hover:border-red-400"
+                   >
+                     <div className="font-extrabold">{store.name}</div>
+                     <div className="mt-1 text-xs text-gray-500">{store.city}, {store.country} · {store.currency}</div>
+                     <div className="mt-2 text-sm text-red-800">{store.dataQualityNote ?? 'HQ review required.'}</div>
+                   </button>
+                 ))}
+               </div>
+             </section>
+           )}
+
+           <section className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+              <div className="p-6 border-b bg-gray-50">
+                  <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
+                      <div>
+                          <div className="text-xs font-black uppercase tracking-[0.18em] text-gray-400">Management path</div>
+                          <h2 className="text-2xl font-extrabold mt-1">Country → Store → Month</h2>
+                          <p className="text-sm text-gray-500 mt-1">Choose a country and reporting month before opening a store.</p>
+                      </div>
+                      <label className="block min-w-[220px]">
+                          <span className="text-xs font-bold uppercase text-gray-500">Reporting month</span>
+                          <select
+                              value={selectedMonthKey}
+                              onChange={(event) => setSelectedMonthKey(event.target.value)}
+                              className="mt-1 w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm font-bold"
+                          >
+                              {hqMonthOptions.map((monthKey) => (
+                                  <option key={monthKey} value={monthKey}>{formatMonthKeyLabel(monthKey)}</option>
+                              ))}
+                          </select>
+                      </label>
+                  </div>
+              </div>
+              <div className="p-4 sm:p-6">
+                  <div className="mb-2 text-right text-[11px] font-bold text-gray-400">
+                      Scroll sideways to view every country →
+                  </div>
+                  <div className="flex gap-3 overflow-x-auto pb-2">
+                      <button
+                          type="button"
+                          onClick={() => setSelectedCountry('all')}
+                          className={`min-w-[180px] rounded-xl border p-4 text-left transition ${
+                              selectedCountry === 'all'
+                                  ? 'border-black bg-black text-white shadow-lg'
+                                  : 'border-gray-200 bg-white hover:border-gray-400'
+                          }`}
+                      >
+                          <div className="text-xs font-bold opacity-60 uppercase">All countries</div>
+                          <div className="text-2xl font-extrabold mt-1">{stores.length} stores</div>
+                          <div className="text-xs mt-2 opacity-70">Network overview</div>
+                      </button>
+                      {countryPerformance.map((row) => (
+                          <button
+                              key={row.country}
+                              type="button"
+                              onClick={() => setSelectedCountry(row.country)}
+                              className={`min-w-[220px] rounded-xl border p-4 text-left transition ${
+                                  selectedCountry === row.country
+                                      ? 'border-black bg-black text-white shadow-lg'
+                                      : 'border-gray-200 bg-white hover:border-gray-400'
+                              }`}
+                          >
+                              <div className="flex items-start justify-between gap-3">
+                                  <div>
+                                      <div className="font-extrabold">{row.country}</div>
+                                      <div className="text-xs mt-0.5 opacity-60">{row.stores} store{row.stores === 1 ? '' : 's'}</div>
+                                  </div>
+                                  <span className={`text-[10px] font-black px-2 py-1 rounded-full ${
+                                      selectedCountry === row.country
+                                          ? 'bg-white/15 text-white'
+                                          : row.missingReports > 0
+                                              ? 'bg-red-100 text-red-700'
+                                              : 'bg-emerald-100 text-emerald-700'
+                                  }`}>
+                                      {row.missingReports > 0 ? `${row.missingReports} report days missing` : 'Reports complete'}
+                                  </span>
+                              </div>
+                              <div className="text-sm font-bold mt-3">{formatCountryLocalTotals(row.localTotals)}</div>
+                              <div className="text-xs mt-1 opacity-60">JPY {Math.round(row.totalJPY).toLocaleString()}</div>
+                          </button>
+                      ))}
+                  </div>
+              </div>
+           </section>
+
+           <details className="group overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
+             <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-4 p-5 [&::-webkit-details-marker]:hidden">
+               <div className="min-w-0">
+                 <div className="text-[11px] font-black uppercase tracking-[0.16em] text-gray-400">Network summary</div>
+                 <div className="mt-1 flex flex-wrap items-baseline gap-x-4 gap-y-1">
+                   <span className="text-lg font-extrabold text-gray-950">JPY {Math.round(metrics.totalSalesCurrentMonth).toLocaleString()}</span>
+                   <span className="text-xs font-bold text-gray-500">{metrics.activeStores} stores · {formatMonthKeyLabel(selectedMonthKey)}</span>
+                 </div>
+                 <div className="mt-1 text-xs text-gray-500">Open only when you need sales, royalty and setup totals.</div>
+               </div>
+               <ChevronRight className="h-5 w-5 shrink-0 text-gray-400 transition group-open:rotate-90" />
+             </summary>
+             <div className="border-t border-gray-100 p-5">
            {/* KPI Cards */}
-           <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+           <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
               {/* Sales Card */}
               <button
                 type="button"
-                onClick={() => setIsSalesAnalyticsOpen(true)}
+                onClick={() => openHqDashboardOverlay('sales-analytics')}
                 className="bg-black text-white p-6 rounded-2xl shadow-lg cursor-pointer hover:scale-105 active:scale-95 hover:shadow-2xl transition-all duration-300 group text-left relative overflow-hidden focus:ring-4 focus:ring-black/20 outline-none"
               >
                   <div className="absolute inset-0 bg-white/10 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
                   <div className="flex justify-between items-start relative z-10">
                       <h3 className="text-sm font-bold opacity-70 flex items-center gap-2">
-                          Total Network Sales
+                          Selected Sales
                           <ChevronRight className="w-4 h-4 opacity-50 group-hover:opacity-100 group-hover:translate-x-1 transition-all" />
                       </h3>
                       <div className="group/tooltip relative">
@@ -8036,22 +9089,30 @@ const HQDashboard: React.FC<{
                       JPY {metrics.totalSalesCurrentMonth.toLocaleString(undefined, {maximumFractionDigits: 0})}
                   </div>
                   <div className="flex items-center gap-2 mt-2 relative z-10">
-                      <span className={`text-xs font-bold ${metrics.growthRate >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                          {metrics.growthRate >= 0 ? '↑' : '↓'} {Math.abs(metrics.growthRate).toFixed(1)}%
+                      <span className={`text-xs font-bold ${
+                          metrics.growthRate === null
+                              ? 'text-gray-400'
+                              : metrics.growthRate >= 0
+                                  ? 'text-emerald-400'
+                                  : 'text-red-400'
+                      }`}>
+                          {metrics.growthRate === null
+                              ? '—'
+                              : `${metrics.growthRate >= 0 ? '↑' : '↓'} ${Math.abs(metrics.growthRate).toFixed(1)}%`}
                       </span>
                       <span className="text-[10px] text-gray-400 font-medium uppercase tracking-wide">
-                          vs Last Month
+                          {metrics.growthRate === null ? 'No prior-month baseline' : 'vs Last Month'}
                       </span>
                   </div>
                   <div className="mt-4 text-[10px] text-gray-400 font-bold border-t border-white/10 pt-2">
-                      Basis: Current Month ({metrics.currentMonthName}) • {formatFxSourceLabel(fxStatus, fxSourceText)}
+                      Basis: {metrics.currentMonthName} • {selectedCountry === 'all' ? 'All countries' : selectedCountry} • {formatFxSourceLabel(fxStatus, fxSourceText)}
                   </div>
               </button>
 
               {/* Active Franchises Card */}
               <div className="bg-white p-6 rounded-2xl shadow-sm border relative group">
                   <div className="flex justify-between items-start">
-                      <h3 className="text-sm font-bold text-gray-500">Active Franchises</h3>
+                      <h3 className="text-sm font-bold text-gray-500">Stores in View</h3>
                       <div className="group/tooltip relative">
                           <Info className="w-4 h-4 text-gray-300 hover:text-gray-600 cursor-help"/>
                           <div className="absolute right-0 top-6 w-48 bg-black text-white text-xs p-2 rounded shadow-lg opacity-0 group-hover/tooltip:opacity-100 transition-opacity pointer-events-none z-50">
@@ -8061,7 +9122,7 @@ const HQDashboard: React.FC<{
                   </div>
                   <div className="text-3xl font-extrabold mt-2 text-gray-900">{metrics.activeStores}</div>
                   <div className="mt-8 text-[10px] text-gray-400 font-bold border-t border-gray-100 pt-2">
-                      Basis: Real-time Database
+                      Basis: {selectedCountry === 'all' ? 'All countries' : selectedCountry}
                   </div>
               </div>
 
@@ -8087,62 +9148,131 @@ const HQDashboard: React.FC<{
                {/* Inventory Card */}
                <div className="bg-white p-6 rounded-2xl shadow-sm border">
                   <div className="flex justify-between items-start">
-                      <h3 className="text-sm font-bold text-gray-500">Inventory Alerts</h3>
+                      <h3 className="text-sm font-bold text-gray-500">PB Stock Setup Gaps</h3>
                       <div className="group/tooltip relative">
                           <Info className="w-4 h-4 text-gray-300 hover:text-gray-600 cursor-help"/>
                           <div className="absolute right-0 top-6 w-48 bg-black text-white text-xs p-2 rounded shadow-lg opacity-0 group-hover/tooltip:opacity-100 transition-opacity pointer-events-none z-50">
-                              Number of ingredients across all stores predicted to run out within 3 days.
+                              Standard PB ingredients without both a stock level and reorder point. This is separate from monthly profitability readiness.
                           </div>
                       </div>
                   </div>
-                  <div className="text-3xl font-extrabold mt-2 text-red-500">{metrics.inventoryAlerts}</div>
+                  <div className={`text-3xl font-extrabold mt-2 ${metrics.inventorySetupGaps > 0 ? 'text-amber-600' : 'text-emerald-600'}`}>
+                      {metrics.inventorySetupGaps}
+                  </div>
                   <div className="mt-8 text-[10px] text-gray-400 font-bold border-t border-gray-100 pt-2">
-                      Basis: Global Stock Analysis
+                      Basis: Required setup fields only
                   </div>
               </div>
            </div>
+             </div>
+           </details>
 
-           {/* Financials Table */}
-           <FinancialsTable
-             stores={stores}
-             sales={sales}
-             fxRates={fxRates}
-             fxStatus={fxStatus}
-             fxSourceText={fxSourceText}
-             onExportExcel={handleExportSalesProgress}
+           <HQProfitabilityAnalysis
+             stores={filteredStores}
+             monthKey={selectedMonthKey}
+             monthLabel={formatMonthKeyLabel(selectedMonthKey)}
+             fxLabel={formatFxSourceLabel(fxStatus, fxSourceText)}
+             preview={isLocalHqPreviewMode()}
+             previewSales={sales}
+             convertToJpy={convertHqAmountToJpy}
+             onOpenStore={(store, section) => openHqStore(store, section, selectedMonthKey)}
            />
+
+           <details className="group overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
+             <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-3 p-5 [&::-webkit-details-marker]:hidden">
+               <div>
+                 <div className="font-extrabold">Sales reporting detail & Excel</div>
+                 <div className="mt-1 text-xs text-gray-500">Open the store-by-store local currency, JPY and royalty table when needed.</div>
+               </div>
+               <ChevronRight className="h-5 w-5 shrink-0 text-gray-400 transition group-open:rotate-90" />
+             </summary>
+             <div className="border-t border-gray-100">
+               <FinancialsTable
+                 stores={filteredStores}
+                 sales={sales}
+                 fxRates={fxRates}
+                 fxStatus={fxStatus}
+                 fxSourceText={fxSourceText}
+                 monthKey={selectedMonthKey}
+                 onExportExcel={handleExportSalesProgress}
+               />
+             </div>
+           </details>
 
            {/* Store Grid (Clickable) */}
            <div>
-              <h3 className="font-bold text-xl mb-4">Franchise Network</h3>
+              <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-2 mb-4">
+                  <div>
+                      <div className="text-xs font-black uppercase tracking-[0.18em] text-gray-400">Next: choose a store</div>
+                      <h3 className="font-bold text-xl mt-1">
+                          {selectedCountry === 'all' ? 'All Stores' : `${selectedCountry} Stores`}
+                      </h3>
+                  </div>
+                  <div className="text-sm text-gray-500">{formatMonthKeyLabel(selectedMonthKey)}</div>
+              </div>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                  {stores.map(store => (
-                      <div
+                  {filteredStores.map(store => {
+                      const monthSales = dedupeSalesByStoreDate(sales)
+                          .filter((sale) => sale.storeId === store.id && extractMonthKey(sale.date) === selectedMonthKey);
+                      const localSales = monthSales.reduce((sum, sale) => sum + Number(sale.totalAmount || 0), 0);
+                      const salesJPY = convertToJPY(localSales, store.currency, fxRates);
+                      const reportStatus = getStoreMonthReportStatus(sales, store.id, selectedMonthKey);
+                      return (
+                      <button
+                        type="button"
                         key={store.id}
-                        onClick={() => setSelectedStore(store)}
-                        className="bg-white p-5 rounded-xl shadow-sm border border-gray-100 hover:border-black cursor-pointer transition group"
+                        onClick={() => openHqStore(store)}
+                        className="bg-white p-5 rounded-xl shadow-sm border border-gray-100 hover:border-black cursor-pointer transition group text-left"
                       >
                           <div className="flex justify-between items-start mb-2">
                              <div className="w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center font-bold text-gray-600 group-hover:bg-black group-hover:text-white transition-colors">
                                 {store.country.substring(0, 2).toUpperCase()}
                              </div>
-                             {store.royaltyPercentage < 5 && <AlertTriangle className="w-4 h-4 text-orange-500" />}
+                             {reportStatus.missingDates.length > 0 ? (
+                                 <span className="whitespace-nowrap rounded-full bg-red-100 px-2 py-1 text-[10px] font-black text-red-700">
+                                     {reportStatus.missingDates.length} report days missing
+                                 </span>
+                             ) : (
+                                 <span className="whitespace-nowrap rounded-full bg-emerald-100 px-2 py-1 text-[10px] font-black text-emerald-700">
+                                     Reports complete
+                                 </span>
+                             )}
                           </div>
                           <h4 className="font-bold text-lg">{store.name}</h4>
                           <div className="flex items-center gap-2 text-sm text-gray-500 mt-1">
                              <MapPin className="w-3 h-3" /> {store.city}, {store.country}
                           </div>
+                          <div className="mt-4 rounded-xl bg-gray-50 px-3 py-2">
+                              <div className="text-xs text-gray-500">{formatMonthKeyLabel(selectedMonthKey)} sales</div>
+                              <div className="font-extrabold mt-0.5">{store.currency} {Math.round(localSales).toLocaleString()}</div>
+                              {store.currency !== 'JPY' && (
+                                  <div className="text-xs text-gray-500 mt-0.5">
+                                      {salesJPY === null ? 'JPY rate unavailable' : `JPY ${Math.round(salesJPY).toLocaleString()}`}
+                                  </div>
+                              )}
+                          </div>
                           <div className="mt-4 pt-4 border-t flex justify-between items-center text-sm font-medium">
-                              <span>View Details</span>
+                              <span>Open monthly detail</span>
                               <ChevronRight className="w-4 h-4 text-gray-400 group-hover:text-black" />
                           </div>
-                      </div>
-                  ))}
+                      </button>
+                      );
+                  })}
               </div>
            </div>
 
-           {/* Global Supply Chain Overview */}
-           <SupplyChainIntelligence stores={stores} sales={sales} menus={menus} storeStocks={storeStocks} />
+           <details className="group overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
+             <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-3 p-5 [&::-webkit-details-marker]:hidden">
+               <div>
+                 <div className="font-extrabold">Supply chain setup</div>
+                 <div className="mt-1 text-xs text-gray-500">Open PB item stock coverage and setup gaps.</div>
+               </div>
+               <ChevronRight className="h-5 w-5 shrink-0 text-gray-400 transition group-open:rotate-90" />
+             </summary>
+             <div className="border-t border-gray-100">
+               <SupplyChainIntelligence stores={reportingStores} sales={sales} menus={menus} storeStocks={storeStocks} />
+             </div>
+           </details>
        </div>
     </div>
   );
@@ -8172,14 +9302,16 @@ const StoreDashboard: React.FC<{
   onUpdateEmployees: (employees: Employee[]) => void;
   onAddIngredient: (ing: Ingredient) => Promise<void> | void;
 }> = ({ user, store, onLogout, sales, menus, setMenus, employees, ingredients, globalConfig, onAddSale, onUpdateMenu, onCreateMenu, onDeleteMenu, onUpdateSetMenu, onCreateSetMenu, onDeleteSetMenu, onUpdateEmployees, onAddIngredient }) => {
-    const [view, setView] = useState<'dashboard' | 'report' | 'menu' | 'staff'>('dashboard');
+    const [view, setView] = useState<'dashboard' | 'report' | 'month' | 'menu' | 'staff'>('dashboard');
     const [menuSection, setMenuSection] = useState<'items' | 'sets'>('items');
+    const [ownerCostSection, setOwnerCostSection] = useState<'cost' | 'recipes'>('cost');
     const [reportDate, setReportDate] = useState<string | null>(null);
     const [editingMenu, setEditingMenu] = useState<Menu | null>(null);
     const [editingSetMenu, setEditingSetMenu] = useState<SetMenu | null>(null);
     const navReadyRef = useRef(false);
     const navRestoreRef = useRef(false);
     const popLockRef = useRef(false);
+    const mainContentRef = useRef<HTMLDivElement>(null);
     const ownerViewStorageKey = `${OWNER_VIEW_STORAGE_PREFIX}${store.id}`;
     const storeMenus = menus.filter(m => m.storeId === store.id);
     const storeSetMenus = setMenus.filter(sm => sm.storeId === store.id);
@@ -8220,6 +9352,13 @@ const StoreDashboard: React.FC<{
     useEffect(() => {
         setMenuSection('items');
     }, [store.id]);
+
+    useEffect(() => {
+        mainContentRef.current?.scrollTo({ top: 0, behavior: 'auto' });
+        if (typeof window !== 'undefined') {
+            window.scrollTo({ top: 0, behavior: 'auto' });
+        }
+    }, [store.id, view]);
     const missingDates = useMemo(() => getMissingDates(sales, store.id, 7), [sales, store.id]);
     const missingDatesAll = useMemo(() => getMissingDates(sales, store.id, 120), [sales, store.id]);
     const missingDateSet = useMemo(() => new Set(missingDatesAll), [missingDatesAll]);
@@ -8248,6 +9387,24 @@ const StoreDashboard: React.FC<{
             hasStaff: storeEmployees.length > 0,
         };
     }, [submittedDateSet, storeMenus.length, storeEmployees.length]);
+    const todayDate = formatDate(new Date());
+    const todayReport = canonicalStoreSales.find((sale) => sale.date === todayDate) ?? null;
+    const currentMonthReportStatus = useMemo(
+        () => getStoreMonthReportStatus(sales, store.id, dashboardMonthKey),
+        [sales, store.id, dashboardMonthKey],
+    );
+    const currentMonthSales = useMemo(
+        () => canonicalStoreSales
+            .filter((sale) => extractMonthKey(sale.date) === dashboardMonthKey)
+            .reduce((sum, sale) => sum + Number(sale.totalAmount || 0), 0),
+        [canonicalStoreSales, dashboardMonthKey],
+    );
+    const recipeReadyCount = storeMenus.filter((menu) => (menu.recipe?.length ?? 0) > 0).length;
+    const menusMissingRecipes = storeMenus.filter((menu) => (menu.recipe?.length ?? 0) === 0);
+    const menuIds = new Set(storeMenus.map((menu) => menu.id));
+    const setsNeedingAttention = storeSetMenus.filter(
+        (setMenu) => setMenu.items.length === 0 || setMenu.items.some((item) => !menuIds.has(item.menuId) || Number(item.quantity) <= 0),
+    );
     const [showMissingCalendar, setShowMissingCalendar] = useState(false);
     const [calendarMonth, setCalendarMonth] = useState(() => {
         const d = new Date();
@@ -8315,7 +9472,7 @@ const StoreDashboard: React.FC<{
     // Comparison Logic (Current Month vs Previous Month)
     const metricComparison = useMemo(() => {
         if (!dashboardMetricsEnabled) {
-            return { currentMonthSales: 0, growth: 0 };
+            return { currentMonthSales: 0, growth: null as number | null, weeklyGrowth: null as number | null };
         }
         const today = new Date();
         const currentMonthKey = formatMonthKey(today);
@@ -8330,11 +9487,30 @@ const StoreDashboard: React.FC<{
             .filter(s => extractMonthKey(s.date) === prevMonthKey)
             .reduce((acc, curr) => acc + curr.totalAmount, 0);
 
-        const growth = prevMonthSales > 0
+        const growth: number | null = prevMonthSales > 0
             ? ((currentMonthSales - prevMonthSales) / prevMonthSales) * 100
-            : 0;
+            : null;
 
-        return { currentMonthSales, growth };
+        const currentWeekStart = new Date(today);
+        currentWeekStart.setDate(today.getDate() - 6);
+        const previousWeekStart = new Date(today);
+        previousWeekStart.setDate(today.getDate() - 13);
+        const previousWeekEnd = new Date(today);
+        previousWeekEnd.setDate(today.getDate() - 7);
+        const currentWeekStartKey = formatDate(currentWeekStart);
+        const previousWeekStartKey = formatDate(previousWeekStart);
+        const previousWeekEndKey = formatDate(previousWeekEnd);
+        const currentWeekSales = canonicalStoreSales
+            .filter((sale) => sale.date >= currentWeekStartKey && sale.date <= formatDate(today))
+            .reduce((sum, sale) => sum + Number(sale.totalAmount || 0), 0);
+        const previousWeekSales = canonicalStoreSales
+            .filter((sale) => sale.date >= previousWeekStartKey && sale.date <= previousWeekEndKey)
+            .reduce((sum, sale) => sum + Number(sale.totalAmount || 0), 0);
+        const weeklyGrowth: number | null = previousWeekSales > 0
+            ? ((currentWeekSales - previousWeekSales) / previousWeekSales) * 100
+            : null;
+
+        return { currentMonthSales, growth, weeklyGrowth };
     }, [canonicalStoreSales, dashboardMetricsEnabled]);
 
     const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -8369,25 +9545,82 @@ const StoreDashboard: React.FC<{
         setCalendarMonth(prev => new Date(prev.getFullYear(), prev.getMonth() + 1, 1));
     };
 
+    const pushOwnerLayer = useCallback((
+        layer: 'menu-editor' | 'set-menu-editor' | 'missing-calendar',
+        entityId?: string
+    ) => {
+        if (typeof window === 'undefined') return;
+        window.history.pushState(
+            {
+                screen: 'owner',
+                view,
+                reportDate,
+                menuSection,
+                layer,
+                entityId: entityId ?? null,
+            },
+            ''
+        );
+    }, [view, reportDate, menuSection]);
+
+    const openOwnerMenuEditor = useCallback((menu: Menu) => {
+        setEditingMenu(menu);
+        setEditingSetMenu(null);
+        pushOwnerLayer('menu-editor', menu.id);
+    }, [pushOwnerLayer]);
+
+    const openOwnerSetMenuEditor = useCallback((setMenu: SetMenu) => {
+        setEditingSetMenu(setMenu);
+        setEditingMenu(null);
+        pushOwnerLayer('set-menu-editor', setMenu.id);
+    }, [pushOwnerLayer]);
+
+    const openOwnerMissingCalendar = useCallback(() => {
+        setCalendarMonth(new Date(new Date().getFullYear(), new Date().getMonth(), 1));
+        setShowMissingCalendar(true);
+        pushOwnerLayer('missing-calendar');
+    }, [pushOwnerLayer]);
+
+    const closeOwnerLayer = useCallback((
+        layer: 'menu-editor' | 'set-menu-editor' | 'missing-calendar',
+        fallback: () => void
+    ) => {
+        if (typeof window !== 'undefined') {
+            const state = window.history.state as { screen?: string; layer?: string } | null;
+            if (state?.screen === 'owner' && state.layer === layer) {
+                window.history.back();
+                return;
+            }
+        }
+        fallback();
+    }, []);
+
     useEffect(() => {
         if (typeof window === 'undefined' || navRestoreRef.current) return;
         const url = new URL(window.location.href);
         const urlView = url.searchParams.get('ov');
         const urlReportDate = url.searchParams.get('od');
         const urlMenuSection = url.searchParams.get('om');
-        const historyState = window.history.state;
+        const historyState = window.history.state as {
+            screen?: string;
+            view?: string;
+            reportDate?: string | null;
+            menuSection?: string;
+            layer?: string;
+            entityId?: string | null;
+        } | null;
         const fromHistory = historyState?.screen === 'owner'
             ? {
-                view: (historyState.view as 'dashboard' | 'report' | 'menu' | 'staff' | undefined) ?? 'dashboard',
+                view: (historyState.view as 'dashboard' | 'report' | 'month' | 'menu' | 'staff' | undefined) ?? 'dashboard',
                 reportDate: (historyState.reportDate as string | null | undefined) ?? null,
                 menuSection: (historyState.menuSection as 'items' | 'sets' | undefined) ?? 'items',
             }
             : null;
-        const fromStorage = safeParseJson<{ view?: 'dashboard' | 'report' | 'menu' | 'staff'; reportDate?: string | null; menuSection?: 'items' | 'sets' }>(
+        const fromStorage = safeParseJson<{ view?: 'dashboard' | 'report' | 'month' | 'menu' | 'staff'; reportDate?: string | null; menuSection?: 'items' | 'sets' }>(
             window.localStorage.getItem(ownerViewStorageKey)
         );
 
-        const normalizedUrlView = urlView === 'dashboard' || urlView === 'report' || urlView === 'menu' || urlView === 'staff'
+        const normalizedUrlView = urlView === 'dashboard' || urlView === 'report' || urlView === 'month' || urlView === 'menu' || urlView === 'staff'
             ? urlView
             : null;
         const normalizedUrlMenuSection = urlMenuSection === 'sets' ? 'sets' : (urlMenuSection === 'items' ? 'items' : null);
@@ -8399,10 +9632,32 @@ const StoreDashboard: React.FC<{
         setView(restoredView);
         setReportDate(restoredReportDate);
         setMenuSection(restoredMenuSection);
-        window.history.replaceState({ screen: 'owner', view: restoredView, reportDate: restoredReportDate, menuSection: restoredMenuSection }, '');
+        const restoredLayer = fromHistory ? historyState?.layer ?? null : null;
+        setShowMissingCalendar(restoredLayer === 'missing-calendar');
+        setEditingMenu(
+            restoredLayer === 'menu-editor'
+                ? storeMenus.find(menu => menu.id === historyState?.entityId) ?? null
+                : null
+        );
+        setEditingSetMenu(
+            restoredLayer === 'set-menu-editor'
+                ? storeSetMenus.find(setMenu => setMenu.id === historyState?.entityId) ?? null
+                : null
+        );
+        window.history.replaceState(
+            {
+                screen: 'owner',
+                view: restoredView,
+                reportDate: restoredReportDate,
+                menuSection: restoredMenuSection,
+                layer: restoredLayer,
+                entityId: historyState?.entityId ?? null,
+            },
+            ''
+        );
         navReadyRef.current = true;
         navRestoreRef.current = true;
-    }, [ownerViewStorageKey]);
+    }, [ownerViewStorageKey, storeMenus, storeSetMenus]);
 
     useEffect(() => {
         if (typeof window === 'undefined') return;
@@ -8416,7 +9671,7 @@ const StoreDashboard: React.FC<{
             popLockRef.current = false;
             return;
         }
-        window.history.pushState({ screen: 'owner', view, reportDate, menuSection }, '');
+        window.history.pushState({ screen: 'owner', view, reportDate, menuSection, layer: null, entityId: null }, '');
     }, [view, reportDate, menuSection]);
 
     useEffect(() => {
@@ -8443,21 +9698,36 @@ const StoreDashboard: React.FC<{
     useEffect(() => {
         if (typeof window === 'undefined') return;
         const onPopState = (e: PopStateEvent) => {
-            const state = e.state;
+            const state = e.state as {
+                screen?: string;
+                view?: 'dashboard' | 'report' | 'month' | 'menu' | 'staff';
+                reportDate?: string | null;
+                menuSection?: 'items' | 'sets';
+                layer?: string;
+                entityId?: string | null;
+            } | null;
             if (!state || state.screen !== 'owner') {
-                window.history.pushState({ screen: 'owner', view, reportDate, menuSection }, '');
                 return;
             }
             popLockRef.current = true;
             setReportDate(state.reportDate ?? null);
             setView(state.view ?? 'dashboard');
             setMenuSection(state.menuSection === 'sets' ? 'sets' : 'items');
-            setEditingMenu(null);
-            setEditingSetMenu(null);
+            setShowMissingCalendar(state.layer === 'missing-calendar');
+            setEditingMenu(
+                state.layer === 'menu-editor'
+                    ? storeMenus.find(menu => menu.id === state.entityId) ?? null
+                    : null
+            );
+            setEditingSetMenu(
+                state.layer === 'set-menu-editor'
+                    ? storeSetMenus.find(setMenu => setMenu.id === state.entityId) ?? null
+                    : null
+            );
         };
         window.addEventListener('popstate', onPopState);
         return () => window.removeEventListener('popstate', onPopState);
-    }, [view, reportDate, menuSection]);
+    }, [storeMenus, storeSetMenus]);
 
     return (
         <div className="min-h-screen bg-gray-50 flex flex-col">
@@ -8470,9 +9740,9 @@ const StoreDashboard: React.FC<{
                     onAddIngredient={onAddIngredient}
                     onSave={async (updatedMenu) => {
                         await Promise.resolve(onUpdateMenu(updatedMenu));
-                        setEditingMenu(null);
+                        closeOwnerLayer('menu-editor', () => setEditingMenu(null));
                     }}
-                    onBack={() => setEditingMenu(null)}
+                    onBack={() => closeOwnerLayer('menu-editor', () => setEditingMenu(null))}
                 />
             )}
             {editingSetMenu && (
@@ -8481,9 +9751,9 @@ const StoreDashboard: React.FC<{
                     menus={storeMenus}
                     onSave={async (nextSetMenu) => {
                         await Promise.resolve(onUpdateSetMenu(nextSetMenu));
-                        setEditingSetMenu(null);
+                        closeOwnerLayer('set-menu-editor', () => setEditingSetMenu(null));
                     }}
-                    onBack={() => setEditingSetMenu(null)}
+                    onBack={() => closeOwnerLayer('set-menu-editor', () => setEditingSetMenu(null))}
                 />
             )}
 
@@ -8494,7 +9764,7 @@ const StoreDashboard: React.FC<{
                             <div className="font-extrabold text-lg">Missing Reports Calendar</div>
                             <button
                                 type="button"
-                                onClick={() => setShowMissingCalendar(false)}
+                                onClick={() => closeOwnerLayer('missing-calendar', () => setShowMissingCalendar(false))}
                                 className="p-2 rounded-full hover:bg-gray-100 transition"
                             >
                                 <X className="w-5 h-5 text-gray-500" />
@@ -8596,18 +9866,31 @@ const StoreDashboard: React.FC<{
                         <div className="font-bold text-sm">{user.name}</div>
                         <div className="text-xs text-gray-500">Store Manager</div>
                      </div>
-                    <button onClick={onLogout} className="p-2 hover:bg-gray-100 rounded-full transition"><LogOut className="w-5 h-5 text-gray-600" /></button>
+                    <button aria-label="Sign out" onClick={onLogout} className="flex h-11 w-11 items-center justify-center rounded-full transition hover:bg-gray-100"><LogOut className="w-5 h-5 text-gray-600" /></button>
                 </div>
             </div>
 
             <div className="flex flex-1 overflow-hidden">
                 {/* Sidebar */}
-                <div className="w-64 bg-white border-r hidden md:flex flex-col p-4">
+                <div className="hidden w-64 flex-col border-r bg-white p-4 xl:flex">
+                    <button
+                        type="button"
+                        onClick={() => setView('dashboard')}
+                        className={`mb-5 flex items-center gap-3 rounded-xl px-4 py-3 text-left transition ${
+                            view === 'dashboard'
+                                ? 'bg-gray-100 text-black'
+                                : 'text-gray-500 hover:bg-gray-50 hover:text-black'
+                        }`}
+                    >
+                        <LayoutDashboard className="w-5 h-5" />
+                        <span className="font-bold text-sm">Store Overview</span>
+                    </button>
+                    <div className="text-[10px] font-black uppercase tracking-[0.18em] text-gray-400 px-4 mb-2">Core tasks</div>
                     <div className="space-y-1">
-                        <NavButton active={view === 'dashboard'} onClick={() => setView('dashboard')} icon={LayoutDashboard} label="Overview" />
-                        <NavButton active={view === 'report'} onClick={() => { setReportDate(null); setView('report'); }} icon={FileText} label="Daily Report" />
-                        <NavButton active={view === 'menu'} onClick={() => setView('menu')} icon={UtensilsCrossed} label="Menu" />
-                        <NavButton active={view === 'staff'} onClick={() => setView('staff')} icon={Users} label="Staff" />
+                        <NavButton active={view === 'report'} onClick={() => { setReportDate(todayDate); setView('report'); }} icon={FileText} label="Today's Sales Report" />
+                        <NavButton active={view === 'month'} onClick={() => setView('month')} icon={ClipboardList} label="Month Close" />
+                        <NavButton active={view === 'menu'} onClick={() => setView('menu')} icon={Package} label="Cost & Inventory" />
+                        <NavButton active={view === 'staff'} onClick={() => setView('staff')} icon={Users} label="Staff & Labor" />
                     </div>
                     <div className="mt-auto p-4 bg-gray-50 rounded-xl">
                         <div className="text-xs font-bold text-gray-500 mb-2 uppercase">Your Performance</div>
@@ -8624,26 +9907,156 @@ const StoreDashboard: React.FC<{
                 </div>
 
                 {/* Mobile Nav */}
-                <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t p-2 flex justify-around z-50">
-                    <button onClick={() => setView('dashboard')} className={`p-3 rounded-xl ${view === 'dashboard' ? 'text-black bg-gray-100' : 'text-gray-400'}`}><LayoutDashboard className="w-6 h-6"/></button>
-                    <button onClick={() => { setReportDate(null); setView('report'); }} className={`p-3 rounded-xl ${view === 'report' ? 'text-black bg-gray-100' : 'text-gray-400'}`}><FileText className="w-6 h-6"/></button>
-                    <button onClick={() => setView('menu')} className={`p-3 rounded-xl ${view === 'menu' ? 'text-black bg-gray-100' : 'text-gray-400'}`}><UtensilsCrossed className="w-6 h-6"/></button>
-                    <button onClick={() => setView('staff')} className={`p-3 rounded-xl ${view === 'staff' ? 'text-black bg-gray-100' : 'text-gray-400'}`}><Users className="w-6 h-6"/></button>
+                <div className="fixed bottom-0 left-0 right-0 z-50 flex justify-around border-t bg-white px-1.5 py-1.5 xl:hidden">
+                    {[
+                        { key: 'dashboard', label: 'Home', aria: 'Store overview', icon: LayoutDashboard, action: () => setView('dashboard') },
+                        { key: 'report', label: 'Sales', aria: "Today's sales report", icon: FileText, action: () => { setReportDate(todayDate); setView('report'); } },
+                        { key: 'month', label: 'Month', aria: 'Month close', icon: ClipboardList, action: () => setView('month') },
+                        { key: 'menu', label: 'Cost', aria: 'Cost and inventory', icon: Package, action: () => setView('menu') },
+                        { key: 'staff', label: 'Staff', aria: 'Staff and labor', icon: Users, action: () => setView('staff') },
+                    ].map((item) => {
+                        const Icon = item.icon;
+                        const active = view === item.key;
+                        return (
+                            <button
+                                key={item.key}
+                                type="button"
+                                aria-label={item.aria}
+                                onClick={item.action}
+                                className={`flex min-w-0 flex-1 flex-col items-center gap-0.5 rounded-xl px-1 py-1.5 ${
+                                    active ? 'bg-gray-100 text-black' : 'text-gray-400'
+                                }`}
+                            >
+                                <Icon className="h-4 w-4" />
+                                <span className="text-[9px] font-bold leading-none">{item.label}</span>
+                            </button>
+                        );
+                    })}
                 </div>
 
                 {/* Main Content */}
-                <div className="flex-1 overflow-y-auto p-6 md:p-8 pb-24 md:pb-8">
+                <div ref={mainContentRef} className="min-w-0 flex-1 overflow-y-auto p-4 pb-24 sm:p-6 sm:pb-24 xl:p-8 xl:pb-8">
                     {view === 'dashboard' && (
                         <div className="space-y-6">
+                            <div>
+                                <div className="text-xs font-black uppercase tracking-[0.18em] text-gray-400">What to do next</div>
+                                <h2 className="text-2xl font-extrabold mt-1">Store Overview</h2>
+                                <p className="text-sm text-gray-500 mt-1">Daily work and month-end work are separated below.</p>
+                            </div>
+
+                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                                <button
+                                    type="button"
+                                    onClick={() => { setReportDate(todayDate); setView('report'); }}
+                                    className={`rounded-2xl border p-6 text-left transition hover:-translate-y-0.5 hover:shadow-md ${
+                                        todayReport ? 'bg-white border-emerald-200' : 'bg-red-50 border-red-200'
+                                    }`}
+                                >
+                                    <div className="flex items-start justify-between gap-3">
+                                        <div>
+                                            <div className="text-[10px] font-black uppercase tracking-[0.18em] text-gray-400">Daily task</div>
+                                            <div className={`mt-3 inline-flex p-2 rounded-xl ${todayReport ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
+                                                <FileText className="w-5 h-5" />
+                                            </div>
+                                        </div>
+                                        <span className={`text-[10px] font-black uppercase px-2 py-1 rounded-full ${
+                                            todayReport ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'
+                                        }`}>
+                                            {todayReport ? 'Submitted' : 'Do today'}
+                                        </span>
+                                    </div>
+                                    <div className="font-extrabold mt-4">Today's Sales Report</div>
+                                    <div className="text-xs text-gray-500 mt-1">{todayDate}</div>
+                                    <div className="text-xs font-bold mt-4 flex items-center gap-1">
+                                        {todayReport ? 'Review or edit report' : 'Enter sales and upload receipt'}
+                                        <ChevronRight className="w-3 h-3" />
+                                    </div>
+                                </button>
+
+                                <button
+                                    type="button"
+                                    onClick={() => setView('month')}
+                                    className={`rounded-2xl border p-6 text-left transition hover:-translate-y-0.5 hover:shadow-md ${
+                                        currentMonthReportStatus.missingDates.length > 0 ? 'bg-amber-50 border-amber-200' : 'bg-white border-emerald-200'
+                                    }`}
+                                >
+                                    <div className="flex items-start justify-between gap-3">
+                                        <div>
+                                            <div className="text-[10px] font-black uppercase tracking-[0.18em] text-gray-400">Month-end task</div>
+                                            <div className="mt-3 inline-flex p-2 rounded-xl bg-amber-100 text-amber-700"><ClipboardList className="w-5 h-5" /></div>
+                                        </div>
+                                        <span className={`text-[10px] font-black uppercase px-2 py-1 rounded-full ${
+                                            currentMonthReportStatus.missingDates.length > 0
+                                                ? 'bg-amber-100 text-amber-700'
+                                                : 'bg-emerald-100 text-emerald-700'
+                                        }`}>
+                                            {currentMonthReportStatus.missingDates.length > 0
+                                                ? `${currentMonthReportStatus.missingDates.length} missing`
+                                                : 'On track'}
+                                        </span>
+                                    </div>
+                                    <div className="font-extrabold mt-4">Month Close</div>
+                                    <div className="text-xs text-gray-500 mt-1">
+                                        {currentMonthReportStatus.submitted}/{currentMonthReportStatus.expected} due reports complete
+                                    </div>
+                                    <div className="text-xs font-bold mt-4 flex items-center gap-1">Check monthly readiness <ChevronRight className="w-3 h-3" /></div>
+                                </button>
+                            </div>
+
+                            <div>
+                                <div className="text-xs font-black uppercase tracking-[0.18em] text-gray-400">Setup & maintenance</div>
+                                <p className="mt-1 text-sm text-gray-500">Open these only when ingredients, recipes or staff records need updating.</p>
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                <button
+                                    type="button"
+                                    onClick={() => { setOwnerCostSection('cost'); setView('menu'); }}
+                                    className={`rounded-2xl border p-5 text-left transition hover:-translate-y-0.5 hover:shadow-md ${
+                                        menusMissingRecipes.length > 0 || setsNeedingAttention.length > 0
+                                            ? 'bg-amber-50 border-amber-200'
+                                            : 'bg-white border-emerald-200'
+                                    }`}
+                                >
+                                    <div className="flex items-start justify-between gap-3">
+                                        <div className="p-2 rounded-xl bg-indigo-100 text-indigo-700"><Package className="w-5 h-5" /></div>
+                                        <span className="text-[10px] font-black uppercase px-2 py-1 rounded-full bg-gray-100 text-gray-700">
+                                            {recipeReadyCount}/{storeMenus.length} recipes
+                                        </span>
+                                    </div>
+                                    <div className="font-extrabold mt-4">Cost & Inventory</div>
+                                    <div className="text-xs text-gray-500 mt-1">{storeMenus.length} single items · {storeSetMenus.length} courses/sets</div>
+                                    <div className="text-xs font-bold mt-4 flex items-center gap-1">Manage costs, inventory and recipes <ChevronRight className="w-3 h-3" /></div>
+                                </button>
+
+                                <button
+                                    type="button"
+                                    onClick={() => setView('staff')}
+                                    className={`rounded-2xl border p-5 text-left transition hover:-translate-y-0.5 hover:shadow-md ${
+                                        storeEmployees.length > 0 ? 'bg-white border-emerald-200' : 'bg-amber-50 border-amber-200'
+                                    }`}
+                                >
+                                    <div className="flex items-start justify-between gap-3">
+                                        <div className="p-2 rounded-xl bg-sky-100 text-sky-700"><Users className="w-5 h-5" /></div>
+                                        <span className="text-[10px] font-black uppercase px-2 py-1 rounded-full bg-gray-100 text-gray-700">
+                                            {storeEmployees.length} staff
+                                        </span>
+                                    </div>
+                                    <div className="font-extrabold mt-4">Staff & Labor</div>
+                                    <div className="text-xs text-gray-500 mt-1">Keep the active staff list current.</div>
+                                    <div className="text-xs font-bold mt-4 flex items-center gap-1">Open staff records <ChevronRight className="w-3 h-3" /></div>
+                                </button>
+                            </div>
+
                             {/* Missing Report Alert */}
                             {missingDates.length > 0 && (
-                                <div className="bg-red-50 border-l-4 border-red-500 p-4 rounded-r-xl flex items-start gap-3 shadow-sm animate-pulse">
+                                <div className="bg-red-50 border-l-4 border-red-500 p-4 rounded-r-xl flex items-start gap-3 shadow-sm">
                                     <div className="p-2 bg-white rounded-full text-red-500 shadow-sm">
                                         <CalendarX className="w-6 h-6"/>
                                     </div>
                                     <div>
-                                        <h3 className="font-bold text-red-800 text-lg">Action Required: Missing Sales Reports</h3>
-                                        <p className="text-sm text-red-600 mb-2">You have not submitted daily reports for the following dates. Please submit them immediately to maintain compliance.</p>
+                                        <h3 className="font-bold text-red-800 text-lg">Missing Daily Sales Reports</h3>
+                                        <p className="text-sm text-red-600 mb-2">Enter these dates to complete this month’s sales record.</p>
                                         <div className="flex flex-wrap gap-2">
                                           {missingDates.map(d => (
   <button
@@ -8658,10 +10071,7 @@ const StoreDashboard: React.FC<{
 
                                           <button
                                             type="button"
-                                            onClick={() => {
-                                              setCalendarMonth(new Date(new Date().getFullYear(), new Date().getMonth(), 1));
-                                              setShowMissingCalendar(true);
-                                            }}
+                                            onClick={openOwnerMissingCalendar}
                                             className="px-2 py-1 bg-white text-red-700 text-xs font-bold rounded border border-red-200 hover:bg-red-50 transition"
                                           >
                                             View Older Dates
@@ -8670,17 +10080,27 @@ const StoreDashboard: React.FC<{
                                     </div>
                                 </div>
                             )}
-
-                            <h2 className="text-2xl font-bold">Store Overview</h2>
                              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                                 <div className="bg-white p-6 rounded-2xl shadow-sm border relative overflow-hidden group">
                                     <div className="text-sm font-bold text-gray-500 mb-1">Total Sales (Month)</div>
                                     <div className="text-3xl font-extrabold flex items-baseline gap-2">
                                         {store.currency} {metricComparison.currentMonthSales.toLocaleString()}
                                     </div>
-                                    <div className={`flex items-center gap-1 text-xs font-bold mt-2 ${metricComparison.growth >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
-                                        {metricComparison.growth >= 0 ? <ArrowUpRight className="w-4 h-4"/> : <ArrowDownRight className="w-4 h-4"/>}
-                                        {Math.abs(metricComparison.growth).toFixed(1)}% vs Last Month
+                                    <div className={`flex items-center gap-1 text-xs font-bold mt-2 ${
+                                        metricComparison.growth === null
+                                            ? 'text-gray-400'
+                                            : metricComparison.growth >= 0
+                                                ? 'text-emerald-600'
+                                                : 'text-red-500'
+                                    }`}>
+                                        {metricComparison.growth === null
+                                            ? <Minus className="w-4 h-4"/>
+                                            : metricComparison.growth >= 0
+                                                ? <ArrowUpRight className="w-4 h-4"/>
+                                                : <ArrowDownRight className="w-4 h-4"/>}
+                                        {metricComparison.growth === null
+                                            ? 'No prior-month baseline'
+                                            : `${Math.abs(metricComparison.growth).toFixed(1)}% vs Last Month`}
                                     </div>
                                     <div className="absolute right-0 top-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
                                         <TrendingUp className="w-24 h-24 text-black"/>
@@ -8703,7 +10123,17 @@ const StoreDashboard: React.FC<{
                                  <div className="bg-white p-6 rounded-2xl shadow-sm border h-80">
                                      <div className="flex justify-between items-center mb-4">
                                          <h3 className="font-bold text-lg">Weekly Revenue Trend</h3>
-                                         <span className="text-xs font-bold bg-green-100 text-green-700 px-2 py-1 rounded-full">+12% vs Last Week</span>
+                                         <span className={`text-xs font-bold px-2 py-1 rounded-full ${
+                                             metricComparison.weeklyGrowth === null
+                                                 ? 'bg-gray-100 text-gray-500'
+                                                 : metricComparison.weeklyGrowth >= 0
+                                                     ? 'bg-emerald-100 text-emerald-700'
+                                                     : 'bg-red-100 text-red-700'
+                                         }`}>
+                                             {metricComparison.weeklyGrowth === null
+                                                 ? 'No prior-week baseline'
+                                                 : `${metricComparison.weeklyGrowth >= 0 ? '+' : ''}${metricComparison.weeklyGrowth.toFixed(1)}% vs Last Week`}
+                                         </span>
                                      </div>
                                      <ResponsiveContainer width="100%" height="100%">
                                          <BarChart data={salesData} margin={{top:0, bottom: 30}}>
@@ -8774,6 +10204,23 @@ const StoreDashboard: React.FC<{
                         </div>
                     )}
 
+                    {view === 'month' && (
+                        <MonthlyCloseWorkspace
+                            store={store}
+                            sales={sales}
+                            initialMonthKey={dashboardMonthKey}
+                            mode="owner"
+                            onOpenSalesReport={(date) => {
+                                setReportDate(date);
+                                setView('report');
+                            }}
+                            onOpenInventory={() => {
+                                setOwnerCostSection('cost');
+                                setView('menu');
+                            }}
+                        />
+                    )}
+
                     {view === 'report' && (
                       <SalesReporter
   store={store}
@@ -8796,26 +10243,96 @@ const StoreDashboard: React.FC<{
                     )}
 
                     {view === 'menu' && (
-                        <div className="space-y-4">
-                            <div className="sticky top-2 z-10 bg-gray-50/95 backdrop-blur supports-[backdrop-filter]:bg-gray-50/80 py-1 flex items-center justify-end">
-                                <div className="inline-flex items-center rounded-xl border border-gray-200 bg-white p-1">
+                        <div className="space-y-6">
+                            <div className="sticky top-2 z-20 grid grid-cols-2 rounded-2xl border border-gray-200 bg-white p-1 shadow-sm">
+                                <button
+                                    type="button"
+                                    aria-pressed={ownerCostSection === 'cost'}
+                                    onClick={() => setOwnerCostSection('cost')}
+                                    className={`rounded-xl px-4 py-3 text-sm font-extrabold transition ${
+                                        ownerCostSection === 'cost' ? 'bg-black text-white' : 'text-gray-500 hover:bg-gray-50 hover:text-black'
+                                    }`}
+                                >
+                                    Cost, Purchases & Inventory
+                                </button>
+                                <button
+                                    type="button"
+                                    aria-pressed={ownerCostSection === 'recipes'}
+                                    onClick={() => setOwnerCostSection('recipes')}
+                                    className={`rounded-xl px-4 py-3 text-sm font-extrabold transition ${
+                                        ownerCostSection === 'recipes' ? 'bg-black text-white' : 'text-gray-500 hover:bg-gray-50 hover:text-black'
+                                    }`}
+                                >
+                                    Menus, Courses & Recipes
+                                </button>
+                            </div>
+
+                            {ownerCostSection === 'cost' && (
+                            <CostInventoryWorkspace
+                                store={store}
+                                ingredients={ingredients}
+                                menus={storeMenus}
+                                setMenus={storeSetMenus}
+                                sales={canonicalStoreSales}
+                                initialMonthKey={dashboardMonthKey}
+                                mode="owner"
+                                onAddIngredient={onAddIngredient}
+                            />
+                            )}
+
+                            {ownerCostSection === 'recipes' && (
+                            <div className="pt-2">
+                            <div>
+                                <div className="text-xs font-black tracking-[0.12em] text-gray-400">RECIPE SETUP</div>
+                                <h2 className="text-2xl font-extrabold mt-1">Menus, Courses & Recipes</h2>
+                                <p className="text-sm text-gray-500 mt-1">Register ingredient quantities for single items first, then build courses and sets.</p>
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                                <div className="rounded-2xl border border-gray-200 bg-white p-4">
+                                    <div className="text-xs font-bold text-gray-500">SINGLE ITEMS</div>
+                                    <div className="text-2xl font-extrabold mt-1">{storeMenus.length}</div>
+                                    <div className="text-xs text-gray-500 mt-1">Individually sold menu items</div>
+                                </div>
+                                <div className={`rounded-2xl border p-4 ${
+                                    menusMissingRecipes.length > 0 ? 'border-amber-200 bg-amber-50' : 'border-emerald-200 bg-white'
+                                }`}>
+                                    <div className="text-xs font-bold text-gray-500">RECIPES READY</div>
+                                    <div className="text-2xl font-extrabold mt-1">{recipeReadyCount}/{storeMenus.length}</div>
+                                    <div className="text-xs text-gray-500 mt-1">
+                                        {menusMissingRecipes.length > 0 ? `${menusMissingRecipes.length} item(s) need ingredients` : 'All item recipes configured'}
+                                    </div>
+                                </div>
+                                <div className={`rounded-2xl border p-4 ${
+                                    setsNeedingAttention.length > 0 ? 'border-amber-200 bg-amber-50' : 'border-emerald-200 bg-white'
+                                }`}>
+                                    <div className="text-xs font-bold text-gray-500">COURSES & SETS</div>
+                                    <div className="text-2xl font-extrabold mt-1">{storeSetMenus.length}</div>
+                                    <div className="text-xs text-gray-500 mt-1">
+                                        {setsNeedingAttention.length > 0 ? `${setsNeedingAttention.length} need components` : 'Components configured'}
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="sticky top-2 z-10 bg-gray-50/95 backdrop-blur supports-[backdrop-filter]:bg-gray-50/80 py-1">
+                                <div className="grid grid-cols-2 items-stretch rounded-2xl border border-gray-200 bg-white p-1">
                                     <button
                                         type="button"
                                         onClick={() => setMenuSection('items')}
-                                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
+                                        className={`px-3 py-3 rounded-xl text-sm font-bold transition ${
                                             menuSection === 'items' ? 'bg-black text-white' : 'text-gray-600 hover:bg-gray-100'
                                         }`}
                                     >
-                                        Items ({storeMenus.length})
+                                        Single Items & Recipes ({storeMenus.length})
                                     </button>
                                     <button
                                         type="button"
                                         onClick={() => setMenuSection('sets')}
-                                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
+                                        className={`px-3 py-3 rounded-xl text-sm font-bold transition ${
                                             menuSection === 'sets' ? 'bg-black text-white' : 'text-gray-600 hover:bg-gray-100'
                                         }`}
                                     >
-                                        Set Menus ({storeSetMenus.length})
+                                        Courses & Sets ({storeSetMenus.length})
                                     </button>
                                 </div>
                             </div>
@@ -8824,8 +10341,8 @@ const StoreDashboard: React.FC<{
                                 <MenuManager
                                     store={store}
                                     menus={storeMenus}
-                                    onEdit={setEditingMenu}
-                                    onCreate={(menu) => setEditingMenu(menu)}
+                                    onEdit={openOwnerMenuEditor}
+                                    onCreate={openOwnerMenuEditor}
                                     onDelete={onDeleteMenu}
                                 />
                             ) : (
@@ -8833,21 +10350,32 @@ const StoreDashboard: React.FC<{
                                     store={store}
                                     menus={storeMenus}
                                     setMenus={storeSetMenus}
-                                    onEdit={setEditingSetMenu}
-                                    onCreate={(setMenu) => setEditingSetMenu(setMenu)}
+                                    onEdit={openOwnerSetMenuEditor}
+                                    onCreate={openOwnerSetMenuEditor}
                                     onDelete={onDeleteSetMenu}
                                 />
+                            )}
+                            </div>
                             )}
                         </div>
                     )}
 
                     {view === 'staff' && (
-                        <EmployeeManager
-                            store={store}
-                            employees={storeEmployees}
-                            positions={globalConfig.positions}
-                            onUpdate={(emps) => onUpdateEmployees(emps)}
-                        />
+                        <div className="space-y-6">
+                            <div>
+                                <div className="text-xs font-black uppercase tracking-[0.18em] text-gray-400">People records</div>
+                                <h2 className="text-2xl font-extrabold mt-1">Staff & Labor</h2>
+                                <p className="text-sm text-gray-500 mt-1">
+                                    Keep the active staff list current. Monthly payroll, total labor hours, and labor-cost ratio are managed in Month Close.
+                                </p>
+                            </div>
+                            <EmployeeManager
+                                store={store}
+                                employees={storeEmployees}
+                                positions={globalConfig.positions}
+                                onUpdate={(emps) => onUpdateEmployees(emps)}
+                            />
+                        </div>
                     )}
                 </div>
             </div>
@@ -9072,41 +10600,14 @@ const LoginScreen: React.FC = () => {
 
 
 
-const OnboardingScreen: React.FC<{
+const AccountAccessScreen: React.FC<{
   onDone: () => Promise<void>;
-  globalConfig: {
-    storeNames: string[];
-    countries: string[];
-    cities: string[];
-    currencies: string[];
-  };
-  globalConfigStatus: GlobalConfigLoadState;
-  globalConfigError: string | null;
-  onReload: () => void;
-}> = ({ onDone, globalConfig, globalConfigStatus, globalConfigError, onReload }) => {
+  profileExists?: boolean;
+}> = ({ onDone, profileExists = false }) => {
 
   const [name, setName] = useState('');
-  const [storeName, setStoreName] = useState('');
-  const [country, setCountry] = useState('South Korea');
-  const [city, setCity] = useState('Seoul');
-  const [currency, setCurrency] = useState('JPY');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  const configReady = globalConfigStatus === 'loaded';
-
-  useEffect(() => {
-    if (!configReady) return;
-    if (globalConfig.countries.length > 0 && !globalConfig.countries.includes(country)) {
-      setCountry(globalConfig.countries[0]);
-    }
-    if (globalConfig.cities.length > 0 && !globalConfig.cities.includes(city)) {
-      setCity(globalConfig.cities[0]);
-    }
-    if (globalConfig.currencies.length > 0 && !globalConfig.currencies.includes(currency)) {
-      setCurrency(globalConfig.currencies[0]);
-    }
-  }, [configReady, globalConfig, country, city, currency]);
 
   const withTimeout = async <T,>(promise: Promise<T>, ms: number, label: string): Promise<T> => {
     let timer: number | undefined;
@@ -9127,12 +10628,6 @@ const OnboardingScreen: React.FC<{
       setLoading(true);
       setError(null);
 
-      if (!storeName || !country || !city || !currency) {
-        setError('Please select store name, country, city, and currency.');
-        setLoading(false);
-        return;
-      }
-
       const { data: authData } = await withTimeout(
         supabase.auth.getUser(),
         8000,
@@ -9140,65 +10635,28 @@ const OnboardingScreen: React.FC<{
       );
       const email = authData.user?.email;
       if (!email) throw new Error('No email in session');
-
-      // 0) Check for existing store with same selections (RPC bypasses RLS)
-      const { data: existingRows, error: existingErr } = await withTimeout(
-        supabase.rpc('find_store_for_onboarding', {
-          p_name: storeName,
-          p_country: country,
-          p_city: city,
-          p_currency: currency,
-        }),
-        10000,
-        'Find store'
-      );
-      if (existingErr) throw existingErr;
-      const existingStoreId = Array.isArray(existingRows) ? existingRows[0]?.id : null;
-
-      if (existingStoreId) {
-        // Join existing store
-        await withTimeout(
-          upsertMyOwnerProfile({ name: name || email, email, storeId: existingStoreId }),
-          10000,
-          'Join existing store'
-        );
-        await withTimeout(onDone(), 12000, 'Sync data');
-        return;
-      }
-
-      const storeId = `S_${crypto.randomUUID()}`;
-
-      // 1) Create owner profile first so RLS allows store insert (current_store_id matches)
       await withTimeout(
-        upsertMyOwnerProfile({ name: name || email, email, storeId }),
+        createMyPendingOwnerProfile({ name: name.trim() || email, email }),
         10000,
-        'Create owner profile'
+        'Register account request'
       );
-
-      // 2) Create store record
-      const { error: storeErr } = await withTimeout(
-        supabase.from('stores').insert({
-          id: storeId,
-          name: storeName,
-          country,
-          city,
-          owner_email: email,
-          currency,
-        }),
-        10000,
-        'Create store'
-      );
-
-      if (storeErr) {
-        // rollback store_id on failure to avoid dangling reference
-        await supabase.from('app_users').update({ store_id: null }).eq('user_id', authData.user?.id);
-        throw storeErr;
-      }
-
       await withTimeout(onDone(), 12000, 'Sync data');
     } catch (e: any) {
-      console.error('Onboarding failed', e);
-      setError(e?.message ?? 'Failed to onboard');
+      console.error('Account request failed', e);
+      setError(e?.message ?? 'Failed to register the account request.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const checkApproval = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      await withTimeout(onDone(), 12000, 'Check approval');
+    } catch (e: any) {
+      console.error('Approval check failed', e);
+      setError(e?.message ?? 'Failed to check approval.');
     } finally {
       setLoading(false);
     }
@@ -9207,78 +10665,38 @@ const OnboardingScreen: React.FC<{
   return (
     <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
       <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-xl">
-        <div className="text-2xl font-extrabold mb-2">Initial Setup</div>
-        <div className="text-gray-500 mb-6">Create your OWNER profile and store.</div>
-
-        {globalConfigStatus !== 'loaded' && (
-          <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700 flex items-center justify-between gap-3">
-            <span>
-              {globalConfigStatus === 'loading'
-                ? 'Loading global settings...'
-                : (globalConfigError ?? 'Failed to load global settings.')}
-            </span>
-            <button
-              type="button"
-              onClick={onReload}
-              className="px-3 py-1 rounded-lg border border-amber-300 bg-white text-amber-700 font-semibold hover:bg-amber-100 transition"
-            >
-              Retry
-            </button>
-          </div>
-        )}
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <label className="text-sm font-semibold text-gray-700">Display Name</label>
-            <input value={name} onChange={(e) => setName(e.target.value)} className="mt-1 w-full px-3 py-2 rounded-xl border border-gray-200" placeholder="e.g. Keito Kimura" />
-          </div>
-          <div>
-            <label className="text-sm font-semibold text-gray-700">Store Name</label>
-          <select value={storeName} onChange={(e) => setStoreName(e.target.value)} disabled={!configReady} className="mt-1 w-full px-3 py-2 rounded-xl border border-gray-200 disabled:opacity-50">
-  <option value="">Select approved name...</option>
-  {globalConfig.storeNames.map(name => (
-    <option key={name} value={name}>{name}</option>
-  ))}
-</select>
-
-<select value={country} onChange={(e) => setCountry(e.target.value)} disabled={!configReady} className="mt-1 w-full px-3 py-2 rounded-xl border border-gray-200 disabled:opacity-50">
-  <option value="">Select Country</option>
-  {globalConfig.countries.map(c => (
-    <option key={c} value={c}>{c}</option>
-  ))}
-</select>
-
-<select value={city} onChange={(e) => setCity(e.target.value)} disabled={!configReady} className="mt-1 w-full px-3 py-2 rounded-xl border border-gray-200 disabled:opacity-50">
-  <option value="">Select City</option>
-  {globalConfig.cities.map(c => (
-    <option key={c} value={c}>{c}</option>
-  ))}
-</select>
-
-<select value={currency} onChange={(e) => setCurrency(e.target.value)} disabled={!configReady} className="mt-1 w-full px-3 py-2 rounded-xl border border-gray-200 disabled:opacity-50">
-  <option value="">Select Currency</option>
-  {globalConfig.currencies.map(c => (
-    <option key={c} value={c}>{c}</option>
-  ))}
-</select>
-
-          </div>
-
+        <div className="text-2xl font-extrabold mb-2">{profileExists ? 'Waiting for HQ Approval' : 'Request Store Access'}</div>
+        <div className="text-gray-500 mb-6 leading-relaxed">
+          {profileExists
+            ? 'Your account request is registered. HQ must connect this email to an approved store before store data becomes available.'
+            : 'Stores, countries and currencies are registered by HQ. Submit this account request, then ask HQ to connect your email to the approved store.'}
         </div>
+
+        {!profileExists && (
+        <>
+        <label className="text-sm font-semibold text-gray-700">Your name</label>
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          className="mt-1 w-full px-3 py-3 rounded-xl border border-gray-200"
+          placeholder="e.g. Store manager name"
+        />
+        </>
+        )}
 
         {error && <div className="mt-4 text-sm text-red-600">{error}</div>}
 
         <div className="mt-6 flex gap-3">
-          <button onClick={submit} disabled={loading || !storeName || !configReady} className="px-4 py-2 rounded-xl bg-black text-white font-semibold disabled:opacity-50">
-            {loading ? 'Creating...' : 'Create'}
+          <button onClick={profileExists ? checkApproval : submit} disabled={loading} className="px-4 py-3 rounded-xl bg-black text-white font-semibold disabled:opacity-50">
+            {loading ? (profileExists ? 'Checking...' : 'Registering...') : profileExists ? 'Check Approval' : 'Request Access'}
           </button>
-          <button onClick={() => signOut()} className="px-4 py-2 rounded-xl border border-gray-200 hover:bg-gray-50 transition font-semibold">
+          <button onClick={() => signOut()} className="px-4 py-3 rounded-xl border border-gray-200 hover:bg-gray-50 transition font-semibold">
             Sign Out
           </button>
         </div>
 
-        <div className="mt-6 text-xs text-gray-400 leading-relaxed">
-          For HQ accounts, manually registering role=HQ in app_users is the most stable method.
+        <div className="mt-6 rounded-xl border border-blue-200 bg-blue-50 p-3 text-xs text-blue-800 leading-relaxed">
+          This account cannot create or join a store by itself. HQ approval is required before store data becomes available.
         </div>
       </div>
     </div>
@@ -9288,6 +10706,7 @@ const OnboardingScreen: React.FC<{
 
 const App = () => {
   const localHqPreviewMode = isLocalHqPreviewMode();
+  const localOwnerPreviewMode = isLocalOwnerPreviewMode();
   const [user, setUser] = useState<User | null>(null);
   const [sessionEmail, setSessionEmail] = useState<string | null>(null);
 
@@ -9295,6 +10714,28 @@ const App = () => {
     if (typeof document !== 'undefined') {
       document.documentElement.lang = 'en';
     }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.key !== 'Backspace'
+        || event.defaultPrevented
+        || event.metaKey
+        || event.ctrlKey
+        || event.altKey
+        || isEditableNavigationTarget(event.target)
+      ) {
+        return;
+      }
+      const state = window.history.state as { screen?: string } | null;
+      if (!state?.screen) return;
+      event.preventDefault();
+      window.history.back();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
   useEffect(() => {
@@ -9407,50 +10848,50 @@ VITE_SUPABASE_ANON_KEY=...`}</div>
     const errors: string[] = [];
 
     const stRes = results[0];
-    if (stRes.status === 'fulfilled' && canApplyScopeResult('stores', scopeSnapshot)) {
-      setStores(stRes.value);
+    if (stRes.status === 'fulfilled') {
+      if (canApplyScopeResult('stores', scopeSnapshot)) setStores(stRes.value);
     } else {
       errors.push(stRes.reason?.message ?? 'Failed to load stores');
     }
 
     const ingRes = results[1];
-    if (ingRes.status === 'fulfilled' && canApplyScopeResult('ingredients', scopeSnapshot)) {
-      setIngredients(ingRes.value);
+    if (ingRes.status === 'fulfilled') {
+      if (canApplyScopeResult('ingredients', scopeSnapshot)) setIngredients(ingRes.value);
     } else {
       errors.push(ingRes.reason?.message ?? 'Failed to load ingredients');
     }
 
     const empRes = results[2];
-    if (empRes.status === 'fulfilled' && canApplyScopeResult('employees', scopeSnapshot)) {
-      setEmployees(empRes.value);
+    if (empRes.status === 'fulfilled') {
+      if (canApplyScopeResult('employees', scopeSnapshot)) setEmployees(empRes.value);
     } else {
       errors.push(empRes.reason?.message ?? 'Failed to load employees');
     }
 
     const mnRes = results[3];
-    if (mnRes.status === 'fulfilled' && canApplyScopeResult('menus', scopeSnapshot)) {
-      setMenuRows(mnRes.value);
+    if (mnRes.status === 'fulfilled') {
+      if (canApplyScopeResult('menus', scopeSnapshot)) setMenuRows(mnRes.value);
     } else {
       errors.push(mnRes.reason?.message ?? 'Failed to load menus');
     }
 
     const smRes = results[4];
-    if (smRes.status === 'fulfilled' && canApplyScopeResult('setMenus', scopeSnapshot)) {
-      setSetMenus(smRes.value);
+    if (smRes.status === 'fulfilled') {
+      if (canApplyScopeResult('setMenus', scopeSnapshot)) setSetMenus(smRes.value);
     } else {
       errors.push(smRes.reason?.message ?? 'Failed to load set menus');
     }
 
     const slRes = results[5];
-    if (slRes.status === 'fulfilled' && canApplyScopeResult('sales', scopeSnapshot)) {
-      setSales(slRes.value);
+    if (slRes.status === 'fulfilled') {
+      if (canApplyScopeResult('sales', scopeSnapshot)) setSales(slRes.value);
     } else {
       errors.push(slRes.reason?.message ?? 'Failed to load sales');
     }
 
     const ssRes = results[6];
-    if (ssRes.status === 'fulfilled' && canApplyScopeResult('storeStocks', scopeSnapshot)) {
-      setStoreStocks(ssRes.value);
+    if (ssRes.status === 'fulfilled') {
+      if (canApplyScopeResult('storeStocks', scopeSnapshot)) setStoreStocks(ssRes.value);
     } else {
       errors.push(ssRes.reason?.message ?? 'Failed to load store stock');
     }
@@ -9499,25 +10940,25 @@ VITE_SUPABASE_ANON_KEY=...`}</div>
     const tasks: Promise<void>[] = [];
 
     if (scopes.has('stores')) {
-      tasks.push(loadStores().then((rows) => { if (canApplyScopeResult('stores', scopeSnapshot)) setStores(rows); }).catch(e => errors.push(e?.message ?? 'Failed to load stores')));
+      tasks.push(loadStores().then((rows) => { if (canApplyScopeResult('stores', scopeSnapshot)) setStores(rows); }).catch(e => { errors.push(e?.message ?? 'Failed to load stores'); }));
     }
     if (scopes.has('ingredients')) {
-      tasks.push(loadIngredients().then((rows) => { if (canApplyScopeResult('ingredients', scopeSnapshot)) setIngredients(rows); }).catch(e => errors.push(e?.message ?? 'Failed to load ingredients')));
+      tasks.push(loadIngredients().then((rows) => { if (canApplyScopeResult('ingredients', scopeSnapshot)) setIngredients(rows); }).catch(e => { errors.push(e?.message ?? 'Failed to load ingredients'); }));
     }
     if (scopes.has('employees')) {
-      tasks.push(loadEmployees().then((rows) => { if (canApplyScopeResult('employees', scopeSnapshot)) setEmployees(rows); }).catch(e => errors.push(e?.message ?? 'Failed to load employees')));
+      tasks.push(loadEmployees().then((rows) => { if (canApplyScopeResult('employees', scopeSnapshot)) setEmployees(rows); }).catch(e => { errors.push(e?.message ?? 'Failed to load employees'); }));
     }
     if (scopes.has('menus')) {
-      tasks.push(loadMenus().then((rows) => { if (canApplyScopeResult('menus', scopeSnapshot)) setMenuRows(rows); }).catch(e => errors.push(e?.message ?? 'Failed to load menus')));
+      tasks.push(loadMenus().then((rows) => { if (canApplyScopeResult('menus', scopeSnapshot)) setMenuRows(rows); }).catch(e => { errors.push(e?.message ?? 'Failed to load menus'); }));
     }
     if (scopes.has('setMenus')) {
-      tasks.push(loadSetMenus().then((rows) => { if (canApplyScopeResult('setMenus', scopeSnapshot)) setSetMenus(rows); }).catch(e => errors.push(e?.message ?? 'Failed to load set menus')));
+      tasks.push(loadSetMenus().then((rows) => { if (canApplyScopeResult('setMenus', scopeSnapshot)) setSetMenus(rows); }).catch(e => { errors.push(e?.message ?? 'Failed to load set menus'); }));
     }
     if (scopes.has('sales')) {
-      tasks.push(loadSales(salesLookbackRef.current).then((rows) => { if (canApplyScopeResult('sales', scopeSnapshot)) setSales(rows); }).catch(e => errors.push(e?.message ?? 'Failed to load sales')));
+      tasks.push(loadSales(salesLookbackRef.current).then((rows) => { if (canApplyScopeResult('sales', scopeSnapshot)) setSales(rows); }).catch(e => { errors.push(e?.message ?? 'Failed to load sales'); }));
     }
     if (scopes.has('storeStocks')) {
-      tasks.push(loadStoreIngredientStocks().then((rows) => { if (canApplyScopeResult('storeStocks', scopeSnapshot)) setStoreStocks(rows); }).catch(e => errors.push(e?.message ?? 'Failed to load store stock')));
+      tasks.push(loadStoreIngredientStocks().then((rows) => { if (canApplyScopeResult('storeStocks', scopeSnapshot)) setStoreStocks(rows); }).catch(e => { errors.push(e?.message ?? 'Failed to load store stock'); }));
     }
     if (scopes.has('globalConfig')) {
       tasks.push(
@@ -9726,6 +11167,7 @@ VITE_SUPABASE_ANON_KEY=...`}</div>
       .on('postgres_changes', { event: '*', schema: 'public', table: 'stores' }, () => schedulePartialRefresh(['stores']))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'sales' }, () => schedulePartialRefresh(['sales']))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'sale_items' }, () => schedulePartialRefresh(['sales']))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'sale_menu_items' }, () => schedulePartialRefresh(['sales']))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'sale_set_items' }, () => schedulePartialRefresh(['sales']))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'menus' }, () => schedulePartialRefresh(['menus']))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'menu_recipe_items' }, () => schedulePartialRefresh(['menus']))
@@ -9957,11 +11399,12 @@ if (localHqPreviewMode) {
       ingredients={MOCK_INGREDIENTS}
       storeStocks={previewStoreStocks}
       globalConfig={DEFAULT_GLOBAL_CONFIG}
-      salesLookbackLabel="sample data"
+      salesLookbackLabel="sample"
       onLoadMoreSales={() => {}}
       onUpdateGlobalConfig={() => {}}
       onUpdateStore={() => {}}
       onSaveStoreStocks={() => {}}
+      onMergeStores={async () => {}}
       onDeleteStore={async () => {}}
       onUpdateMenu={() => {}}
       onCreateMenu={() => {}}
@@ -9972,6 +11415,58 @@ if (localHqPreviewMode) {
       onUpdateEmployees={() => {}}
       onAddIngredient={() => {}}
     />
+  );
+}
+
+if (localOwnerPreviewMode) {
+  const previewStore = MOCK_STORES[0];
+  const previewUser = MOCK_USERS.find((mockUser) => mockUser.role === UserRole.OWNER) ?? {
+    name: 'Store Owner Preview',
+    email: 'owner-preview@chibo.local',
+    role: UserRole.OWNER,
+    storeId: previewStore.id,
+  };
+  const previewSetMenus: SetMenu[] = [
+    {
+      id: 'SM_PREVIEW_1',
+      storeId: previewStore.id,
+      name: 'CHIBO Course',
+      price: 3200,
+      items: [
+        { menuId: 'M1', quantity: 1 },
+        { menuId: 'M4', quantity: 1 },
+      ],
+    },
+  ];
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      <div className="sticky top-0 z-[80] border-b border-amber-300 bg-amber-100 px-4 py-2 text-center text-xs font-black text-amber-950">
+        DEMO PREVIEW · Sample numbers only · Never use this screen to verify operating data
+      </div>
+      <StoreDashboard
+        user={previewUser}
+        store={previewStore}
+        onLogout={() => {
+          window.location.href = window.location.pathname;
+        }}
+        sales={MOCK_SALES}
+        menus={MOCK_MENUS}
+        setMenus={previewSetMenus}
+        employees={MOCK_EMPLOYEES}
+        ingredients={MOCK_INGREDIENTS}
+        globalConfig={DEFAULT_GLOBAL_CONFIG}
+        onAddSale={() => {}}
+        onUpdateMenu={() => {}}
+        onCreateMenu={() => {}}
+        onDeleteMenu={() => {}}
+        onUpdateSetMenu={() => {}}
+        onCreateSetMenu={() => {}}
+        onDeleteSetMenu={() => {}}
+        onUpdateEmployees={() => {}}
+        onAddIngredient={() => {}}
+      />
+    </div>
   );
 }
 
@@ -10022,11 +11517,7 @@ if (!resolvedUser) {
     );
   }
   return (
-    <OnboardingScreen
-      globalConfig={globalConfig}
-      globalConfigStatus={globalConfigStatus}
-      globalConfigError={globalConfigError}
-      onReload={() => refreshAll()}
+    <AccountAccessScreen
       onDone={async () => {
         await refreshAll();
         await loadResolvedUser();
@@ -10089,6 +11580,14 @@ if (!resolvedUser) {
                   endScopeMutation(['storeStocks']);
                   schedulePartialRefresh(['storeStocks']);
                 }
+              }}
+              onMergeStores={async (sourceId, targetId) => {
+                const { error } = await supabase.rpc('merge_stores', {
+                  p_source_id: sourceId,
+                  p_target_id: targetId,
+                });
+                if (error) throw error;
+                await refreshAll();
               }}
               onDeleteStore={async (storeId) => {
                 setStores(prev => prev.filter(s => s.id !== storeId));
@@ -10205,16 +11704,37 @@ const myStore = stores.find(s => s.id === user.storeId);
 
 if (!myStore) {
   return (
-    <OnboardingScreen
-      globalConfig={globalConfig}
-      globalConfigStatus={globalConfigStatus}
-      globalConfigError={globalConfigError}
-      onReload={() => refreshAll()}
+    <AccountAccessScreen
+      profileExists
       onDone={async () => {
         await refreshAll();
         await loadResolvedUser();
       }}
     />
+  );
+}
+
+if (myStore.reportingStatus === 'quarantined') {
+  return (
+    <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
+      <div className="w-full max-w-lg rounded-2xl border border-red-200 bg-white p-7 shadow-sm">
+        <div className="text-xs font-black uppercase tracking-[0.18em] text-red-700">HQ review required</div>
+        <h1 className="mt-2 text-2xl font-extrabold">Store access is temporarily paused</h1>
+        <p className="mt-3 text-sm leading-relaxed text-gray-600">
+          This account is connected to a store record with an invalid country or currency setup. Existing data is preserved, but new reports are blocked until HQ confirms the correct store.
+        </p>
+        {myStore.dataQualityNote && (
+          <div className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-800">{myStore.dataQualityNote}</div>
+        )}
+        <button
+          type="button"
+          onClick={handleLogout}
+          className="mt-6 rounded-xl bg-black px-5 py-3 text-sm font-bold text-white"
+        >
+          Sign Out
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -10244,11 +11764,13 @@ if (!myStore) {
               if (s.items && s.items.length > 0) {
                 const standardIngredients = globalConfig.standardIngredients ?? [];
                 const standardSet = new Set(standardIngredients.map(si => si.name));
-                const standardMap = new Map(standardIngredients.map(si => [si.name, si]));
+                const standardMap = new Map<string, GlobalConfig['standardIngredients'][number]>(
+                  standardIngredients.map(si => [si.name, si]),
+                );
                 const storeMenus = menus.filter(m => m.storeId === s.storeId);
 
                 if (storeMenus.length > 0 && standardIngredients.length > 0) {
-                  const ingredientById = new Map(ingredients.map(i => [i.id, i]));
+                  const ingredientById = new Map<string, Ingredient>(ingredients.map(i => [i.id, i]));
                   const categories = globalConfig.categories ?? [];
                   const categoryUsageMap: Record<string, Record<string, number>> = {};
 

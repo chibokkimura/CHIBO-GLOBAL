@@ -1,0 +1,28 @@
+{
+  "captured_at_utc": "2026-08-05T05:17:02.093861+00:00",
+  "project_ref": "kplnxkmktsylrmudhezz",
+  "purpose": "Read-only pre-change baseline for quarantine-write protection, migration reconciliation, and owner/HQ UX rollout.",
+  "global_config_count": 1,
+  "global_config_hash": "ee56563fdafd00e8113a5c7d723d73e2",
+  "stores": 10,
+  "stores_by_status": {
+    "active": 8,
+    "quarantined": 1,
+    "test": 1
+  },
+  "app_users": 25,
+  "sales": 578,
+  "sale_items": 1064,
+  "sale_menu_items": 41,
+  "sale_set_items": 132,
+  "menus": 46,
+  "set_menus": 5,
+  "ingredients": 12,
+  "ingredient_purchases": 14,
+  "monthly_ingredient_inventory": 14,
+  "monthly_profitability_inputs": 2,
+  "monthly_close_periods": 1,
+  "monthly_close_snapshots": 4,
+  "monthly_product_sales_submissions": 1,
+  "monthly_product_sales_totals": 5
+}

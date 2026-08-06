@@ -28,7 +28,26 @@ create table if not exists public.stores (
   city text not null,
   owner_email text not null,
   currency text not null,
-  royalty_percentage numeric not null default 5.0
+  royalty_percentage numeric not null default 5.0,
+  reporting_status text not null default 'active' check (reporting_status in ('active', 'quarantined', 'test')),
+  data_quality_note text
+);
+
+alter table public.stores
+  add column if not exists reporting_status text not null default 'active',
+  add column if not exists data_quality_note text;
+
+alter table public.stores
+  drop constraint if exists stores_reporting_status_check;
+alter table public.stores
+  add constraint stores_reporting_status_check
+  check (reporting_status in ('active', 'quarantined', 'test'));
+
+create table if not exists public.store_id_aliases (
+  legacy_store_id text primary key,
+  canonical_store_id text not null references public.stores(id) on update cascade on delete restrict,
+  reason text not null,
+  migrated_at timestamptz not null default now()
 );
 
 create table if not exists public.ingredients (
@@ -101,6 +120,15 @@ create table if not exists public.sale_items (
   sale_id text not null references public.sales(id) on delete cascade,
   menu_id text not null,
   quantity integer not null,
+  primary key (sale_id, menu_id)
+);
+
+create table if not exists public.sale_menu_items (
+  sale_id text not null references public.sales(id) on delete cascade,
+  menu_id text not null references public.menus(id) on delete restrict,
+  quantity integer not null check (quantity > 0),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
   primary key (sale_id, menu_id)
 );
 
@@ -214,7 +242,9 @@ as $$
   limit 1;
 $$;
 
-grant execute on function public.find_store_for_onboarding(text, text, text, text) to authenticated;
+revoke all on function public.find_store_for_onboarding(text, text, text, text)
+from public, anon, authenticated;
+grant execute on function public.find_store_for_onboarding(text, text, text, text) to service_role;
 
 create or replace function public.merge_stores(
   p_source_id text,
@@ -259,18 +289,26 @@ grant execute on function public.merge_stores(text, text) to authenticated;
 
 create or replace function public.list_store_accounts(p_store_id text)
 returns table (user_id uuid, email text, name text, store_id text)
-language sql
+language plpgsql
 stable
 security definer
 set search_path = public
 as $$
+begin
+  if not public.is_hq() then
+    raise exception 'Not authorized';
+  end if;
+
+  return query
   select u.user_id, u.email, u.name, u.store_id
   from public.app_users u
   where u.store_id = p_store_id
   order by u.email;
+end;
 $$;
 
-grant execute on function public.list_store_accounts(text) to authenticated;
+revoke all on function public.list_store_accounts(text) from public, anon;
+grant execute on function public.list_store_accounts(text) to authenticated, service_role;
 
 create or replace function public.link_account_to_store(
   p_email text,
@@ -334,6 +372,7 @@ grant execute on function public.unlink_account_from_store(text, text) to authen
 alter table public.app_users enable row level security;
 alter table public.global_config enable row level security;
 alter table public.stores enable row level security;
+alter table public.store_id_aliases enable row level security;
 alter table public.ingredients enable row level security;
 alter table public.store_ingredient_stock enable row level security;
 alter table public.employees enable row level security;
@@ -343,7 +382,18 @@ alter table public.set_menus enable row level security;
 alter table public.set_menu_items enable row level security;
 alter table public.sales enable row level security;
 alter table public.sale_items enable row level security;
+alter table public.sale_menu_items enable row level security;
 alter table public.sale_set_items enable row level security;
+
+revoke all on table public.store_id_aliases from public, anon, authenticated;
+create index if not exists store_id_aliases_canonical_store_idx
+  on public.store_id_aliases(canonical_store_id);
+drop policy if exists "store_id_aliases_select_hq_or_canonical" on public.store_id_aliases;
+create policy "store_id_aliases_select_hq_or_canonical"
+on public.store_id_aliases for select
+to authenticated
+using (public.is_hq() or canonical_store_id = public.current_store_id());
+grant select on table public.store_id_aliases to authenticated, service_role;
 
 -- app_users: users can read/update their own profile; HQ can read all
 drop policy if exists "app_users_select_own_or_hq" on public.app_users;
@@ -352,35 +402,69 @@ on public.app_users for select
 using (user_id = auth.uid() or public.is_hq());
 
 drop policy if exists "app_users_insert_self" on public.app_users;
+drop policy if exists "app_users_upsert_own" on public.app_users;
 create policy "app_users_insert_self"
 on public.app_users for insert
+to authenticated
 with check (
-  (
-    coalesce(user_id::text, '') = public.current_auth_uid_text()
-    or lower(trim(coalesce(email, ''))) = public.current_auth_email()
-  )
+  coalesce(user_id::text, '') = public.current_auth_uid_text()
+  and lower(trim(coalesce(email, ''))) = public.current_auth_email()
   and (
-    role = 'OWNER'
+    (
+      role = 'OWNER'
+      and store_id is null
+    )
     or (
       role = 'HQ'
+      and store_id is null
       and public.is_authorized_hq_email(email)
       and public.is_authorized_hq_email(public.current_auth_email())
     )
   )
 );
 
+create or replace function public.guard_owner_app_user_assignment()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+begin
+  if current_user in ('postgres', 'service_role', 'supabase_admin') or public.is_hq() then
+    return new;
+  end if;
+
+  if new.user_id is distinct from old.user_id
+    or lower(trim(new.email)) is distinct from lower(trim(old.email))
+    or new.role is distinct from old.role
+    or new.store_id is distinct from old.store_id
+  then
+    raise exception 'Store assignment and account role can only be changed by HQ.';
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists app_users_guard_owner_assignment on public.app_users;
+create trigger app_users_guard_owner_assignment
+before update on public.app_users
+for each row execute function public.guard_owner_app_user_assignment();
+
+revoke all on function public.guard_owner_app_user_assignment() from public, anon, authenticated;
+grant execute on function public.guard_owner_app_user_assignment() to service_role;
+
 drop policy if exists "app_users_update_self" on public.app_users;
+drop policy if exists "app_users_update_own" on public.app_users;
+drop policy if exists "app_users_update_own_check" on public.app_users;
 create policy "app_users_update_self"
 on public.app_users for update
+to authenticated
 using (
   coalesce(user_id::text, '') = public.current_auth_uid_text()
-  or lower(trim(coalesce(email, ''))) = public.current_auth_email()
 )
 with check (
-  (
-    coalesce(user_id::text, '') = public.current_auth_uid_text()
-    or lower(trim(coalesce(email, ''))) = public.current_auth_email()
-  )
+  coalesce(user_id::text, '') = public.current_auth_uid_text()
+  and lower(trim(coalesce(email, ''))) = public.current_auth_email()
   and (
     role = 'OWNER'
     or (
@@ -422,20 +506,26 @@ with check (public.is_hq());
 
 -- stores: HQ all; OWNER only their store
 drop policy if exists "stores_select_hq_or_own" on public.stores;
+drop policy if exists "stores_select_own" on public.stores;
 create policy "stores_select_hq_or_own"
 on public.stores for select
 using (public.is_hq() or id = public.current_store_id());
 
 drop policy if exists "stores_write_hq_or_own" on public.stores;
-create policy "stores_write_hq_or_own"
+drop policy if exists "stores_insert_own_email" on public.stores;
+drop policy if exists "stores_insert_hq" on public.stores;
+create policy "stores_insert_hq"
 on public.stores for insert
-with check (public.is_hq() or id = public.current_store_id());
+to authenticated
+with check (public.is_hq());
 
 drop policy if exists "stores_update_hq_or_own" on public.stores;
-create policy "stores_update_hq_or_own"
+drop policy if exists "stores_update_hq" on public.stores;
+create policy "stores_update_hq"
 on public.stores for update
-using (public.is_hq() or id = public.current_store_id())
-with check (public.is_hq() or id = public.current_store_id());
+to authenticated
+using (public.is_hq())
+with check (public.is_hq());
 
 drop policy if exists "stores_delete_hq" on public.stores;
 create policy "stores_delete_hq"
@@ -832,6 +922,68 @@ using (
   )
 );
 
+-- sale_menu_items: direct menu-level quantities for recipe cost.
+drop policy if exists "sale_menu_items_select_store_member" on public.sale_menu_items;
+create policy "sale_menu_items_select_store_member"
+on public.sale_menu_items for select
+to authenticated
+using (
+  exists (
+    select 1 from public.sales s
+    where s.id = sale_menu_items.sale_id
+      and public.is_store_member(s.store_id)
+  )
+);
+
+drop policy if exists "sale_menu_items_insert_store_member" on public.sale_menu_items;
+create policy "sale_menu_items_insert_store_member"
+on public.sale_menu_items for insert
+to authenticated
+with check (
+  exists (
+    select 1
+    from public.sales s
+    join public.menus m on m.id = sale_menu_items.menu_id
+    where s.id = sale_menu_items.sale_id
+      and m.store_id = s.store_id
+      and public.is_store_member(s.store_id)
+  )
+);
+
+drop policy if exists "sale_menu_items_update_store_member" on public.sale_menu_items;
+create policy "sale_menu_items_update_store_member"
+on public.sale_menu_items for update
+to authenticated
+using (
+  exists (
+    select 1 from public.sales s
+    where s.id = sale_menu_items.sale_id
+      and public.is_store_member(s.store_id)
+  )
+)
+with check (
+  exists (
+    select 1
+    from public.sales s
+    join public.menus m on m.id = sale_menu_items.menu_id
+    where s.id = sale_menu_items.sale_id
+      and m.store_id = s.store_id
+      and public.is_store_member(s.store_id)
+  )
+);
+
+drop policy if exists "sale_menu_items_delete_store_member" on public.sale_menu_items;
+create policy "sale_menu_items_delete_store_member"
+on public.sale_menu_items for delete
+to authenticated
+using (
+  exists (
+    select 1 from public.sales s
+    where s.id = sale_menu_items.sale_id
+      and public.is_store_member(s.store_id)
+  )
+);
+
 -- sale_set_items: HQ all; OWNER own store via sales join
 drop policy if exists "sale_set_items_select_hq_or_own" on public.sale_set_items;
 create policy "sale_set_items_select_hq_or_own"
@@ -900,6 +1052,7 @@ using (
 
 create index if not exists sales_store_date_idx on public.sales (store_id, date);
 create index if not exists sale_items_sale_id_idx on public.sale_items (sale_id);
+create index if not exists sale_menu_items_menu_id_idx on public.sale_menu_items (menu_id);
 create index if not exists sale_set_items_sale_id_idx on public.sale_set_items (sale_id);
 create index if not exists sale_set_items_set_menu_id_idx on public.sale_set_items (set_menu_id);
 create index if not exists menu_recipe_items_menu_id_idx on public.menu_recipe_items (menu_id);
@@ -918,55 +1071,65 @@ insert into storage.buckets (id, name, public)
 values ('receipts', 'receipts', false)
 on conflict (id) do nothing;
 
+create or replace function public.can_access_store_storage_path(p_path_store_id text)
+returns boolean
+language sql
+stable
+security invoker
+set search_path = public
+as $$
+  select
+    public.is_hq()
+    or p_path_store_id = public.current_store_id()
+    or exists (
+      select 1
+      from public.store_id_aliases a
+      where a.legacy_store_id = p_path_store_id
+        and a.canonical_store_id = public.current_store_id()
+    );
+$$;
+
+revoke all on function public.can_access_store_storage_path(text) from public, anon;
+grant execute on function public.can_access_store_storage_path(text) to authenticated, service_role;
+
 drop policy if exists "receipts_select_hq_or_own" on storage.objects;
 create policy "receipts_select_hq_or_own"
 on storage.objects for select
+to authenticated
 using (
   bucket_id = 'receipts'
-  and (
-    public.is_hq()
-    or split_part(name, '/', 1) = public.current_store_id()
-  )
+  and public.can_access_store_storage_path(split_part(name, '/', 1))
 );
 
 drop policy if exists "receipts_insert_hq_or_own" on storage.objects;
 create policy "receipts_insert_hq_or_own"
 on storage.objects for insert
+to authenticated
 with check (
   bucket_id = 'receipts'
-  and (
-    public.is_hq()
-    or split_part(name, '/', 1) = public.current_store_id()
-  )
+  and public.can_access_store_storage_path(split_part(name, '/', 1))
 );
 
 drop policy if exists "receipts_update_hq_or_own" on storage.objects;
 create policy "receipts_update_hq_or_own"
 on storage.objects for update
+to authenticated
 using (
   bucket_id = 'receipts'
-  and (
-    public.is_hq()
-    or split_part(name, '/', 1) = public.current_store_id()
-  )
+  and public.can_access_store_storage_path(split_part(name, '/', 1))
 )
 with check (
   bucket_id = 'receipts'
-  and (
-    public.is_hq()
-    or split_part(name, '/', 1) = public.current_store_id()
-  )
+  and public.can_access_store_storage_path(split_part(name, '/', 1))
 );
 
 drop policy if exists "receipts_delete_hq_or_own" on storage.objects;
 create policy "receipts_delete_hq_or_own"
 on storage.objects for delete
+to authenticated
 using (
   bucket_id = 'receipts'
-  and (
-    public.is_hq()
-    or split_part(name, '/', 1) = public.current_store_id()
-  )
+  and public.can_access_store_storage_path(split_part(name, '/', 1))
 );
 
 alter table public.sales

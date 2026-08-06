@@ -9,21 +9,22 @@ Use this folder for every DB change.
 
 ## File name format
 
-`YYYYMMDD_HHMMSS__short_description.sql`
+`YYYYMMDDHHMMSS_short_description.sql`
 
 Example:
 
-`20260216_190000__add_sales_closed_reason.sql`
+`20260216190000_add_sales_closed_reason.sql`
 
 ## Apply order
 
-1. Open Supabase SQL Editor.
-2. Run migration SQL.
-3. Save result in your release notes.
+1. Create the file with `supabase migration new short_description`.
+2. Apply it through the migration workflow, never by copying the SQL into the
+   Dashboard without recording the same version.
+3. Verify that the local filename version and remote migration-history version
+   are identical before the release is considered complete.
 
 ## Minimum migration content
 
 - `alter table ... add column if not exists ...`
 - `drop policy if exists ...`
 - `create policy ...`
-
