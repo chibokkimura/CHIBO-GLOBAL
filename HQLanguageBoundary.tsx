@@ -54,6 +54,11 @@ const EXACT_JA: Record<string, string> = {
   'Country → Store → Month': '国 → 店舗 → 月',
   'Choose a country and reporting month before opening a store.': '国と対象月を選択してから店舗を開いてください。',
   'Scroll sideways to view every country →': '横にスクロールするとすべての国を確認できます →',
+  'Store review': '店舗確認',
+  'Review stores by month': '対象月の店舗状況を確認',
+  'Select a month, then choose a country. The matching stores appear below.': '対象月を選び、次に国を選択してください。該当する店舗が下に表示されます。',
+  '1. Select month': '1. 対象月を選択',
+  '2. Select country': '2. 国を選択',
   'Network overview': '全体を見る',
   s: '',
   sales: 'の売上',
@@ -98,6 +103,12 @@ const EXACT_JA: Record<string, string> = {
   'Export Excel': 'Excel出力',
   'Sales reporting detail & Excel': '売上報告の詳細・Excel出力',
   'Supply chain setup': '在庫基準設定',
+  'Data management': 'データ管理',
+  'Test workspaces': 'テスト環境',
+  'Held records': '保留データ',
+  'Excluded from operating results.': '運用実績の集計対象外です。',
+  'Preserved for review but excluded from HQ totals.': '確認用に保存されていますが、本部集計から除外されています。',
+  'Open test cost analysis': 'テスト原価分析を開く',
   'PB Stock Setup Gaps': '在庫基準の未設定',
   'Separate from profitability readiness': '収益分析の準備状況とは別項目です',
   'Franchise Network': '店舗一覧',
@@ -448,6 +459,7 @@ const EXACT_JA: Record<string, string> = {
 };
 
 const DYNAMIC_JA: Array<[RegExp, (...matches: string[]) => string]> = [
+  [/^Test data (\d+) · Held records (\d+)\. Open only when maintenance is required\.$/, (_all, tests, held) => `テストデータ ${tests}件・保留データ ${held}件。メンテナンス時のみ開いてください。`],
   [/^(\d+) report days missing$/, (_all, count) => `日次報告 未提出 ${count}日`],
   [/^(\d+) daily report\(s\) missing$/, (_all, count) => `日次報告 未提出 ${count}日`],
   [/^(\d+) stores?$/, (_all, count) => `${count}店舗`],

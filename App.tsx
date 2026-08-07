@@ -8941,88 +8941,16 @@ const HQDashboard: React.FC<{
        />
 
        <div className="mx-auto w-full max-w-7xl flex-1 space-y-6 overflow-y-auto p-4 sm:p-6 lg:space-y-8 lg:p-8">
-           {testStoreSummaries.length > 0 && (
-             <section className="rounded-2xl border-2 border-amber-300 bg-amber-50 p-5 shadow-sm">
-               <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-                 <div>
-                   <div className="text-xs font-black uppercase tracking-[0.18em] text-amber-700">QA / sample data</div>
-                   <h2 className="mt-1 text-2xl font-extrabold">Test Cost Workspace</h2>
-                   <p className="mt-1 text-sm text-amber-950/70">
-                     Use this entry point to open the prepared cost-analysis data without finding the test month manually.
-                   </p>
-                 </div>
-                 <div className="rounded-full bg-amber-200 px-3 py-1 text-xs font-black text-amber-900">
-                   Excluded from current-month sales
-                 </div>
-               </div>
-               <div className="mt-4 grid gap-3 lg:grid-cols-2">
-                 {testStoreSummaries.map((summary) => (
-                   <div key={summary.store.id} className="rounded-xl border border-amber-200 bg-white p-4">
-                     <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                       <div>
-                         <div className="font-extrabold">{summary.store.name}</div>
-                         <div className="mt-1 text-xs text-gray-500">
-                           {formatMonthKeyLabel(summary.monthKey)} · {summary.salesDays} reports · {summary.menuCount} menus · {summary.courseCount} course
-                         </div>
-                         <div className="mt-2 text-lg font-extrabold">
-                           {summary.store.currency} {Math.round(summary.salesTotal).toLocaleString()}
-                         </div>
-                       </div>
-                       <button
-                         type="button"
-                         onClick={() => openHqStore(summary.store, 'inventory', summary.monthKey)}
-                         className="rounded-xl bg-black px-5 py-3 text-sm font-extrabold text-white hover:bg-gray-800"
-                       >
-                         Open Cost Analysis
-                       </button>
-                     </div>
-                   </div>
-                 ))}
-               </div>
-             </section>
-           )}
-
-           {quarantinedStores.length > 0 && (
-             <section className="rounded-2xl border border-red-200 bg-red-50 p-5 shadow-sm">
-               <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-                 <div>
-                   <div className="text-xs font-black uppercase tracking-[0.18em] text-red-700">Data quality hold</div>
-                   <h2 className="mt-1 text-xl font-extrabold">Excluded from HQ totals</h2>
-                   <p className="mt-1 text-sm text-red-950/70">
-                     These records are preserved for review but cannot affect sales, FX, royalty or profitability totals.
-                   </p>
-                 </div>
-                 <div className="rounded-full bg-red-100 px-3 py-1 text-xs font-black text-red-800">
-                   {quarantinedStores.length} store{quarantinedStores.length === 1 ? '' : 's'}
-                 </div>
-               </div>
-               <div className="mt-4 grid gap-3 lg:grid-cols-2">
-                 {quarantinedStores.map((store) => (
-                   <button
-                     key={store.id}
-                     type="button"
-                     onClick={() => openHqStore(store)}
-                     className="rounded-xl border border-red-200 bg-white p-4 text-left hover:border-red-400"
-                   >
-                     <div className="font-extrabold">{store.name}</div>
-                     <div className="mt-1 text-xs text-gray-500">{store.city}, {store.country} · {store.currency}</div>
-                     <div className="mt-2 text-sm text-red-800">{store.dataQualityNote ?? 'HQ review required.'}</div>
-                   </button>
-                 ))}
-               </div>
-             </section>
-           )}
-
            <section className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
               <div className="p-6 border-b bg-gray-50">
                   <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
                       <div>
-                          <div className="text-xs font-black uppercase tracking-[0.18em] text-gray-400">Management path</div>
-                          <h2 className="text-2xl font-extrabold mt-1">Country → Store → Month</h2>
-                          <p className="text-sm text-gray-500 mt-1">Choose a country and reporting month before opening a store.</p>
+                          <div className="text-xs font-black uppercase tracking-[0.18em] text-gray-400">Store review</div>
+                          <h2 className="text-2xl font-extrabold mt-1">Review stores by month</h2>
+                          <p className="text-sm text-gray-500 mt-1">Select a month, then choose a country. The matching stores appear below.</p>
                       </div>
                       <label className="block min-w-[220px]">
-                          <span className="text-xs font-bold uppercase text-gray-500">Reporting month</span>
+                          <span className="text-xs font-bold uppercase text-gray-500">1. Select month</span>
                           <select
                               value={selectedMonthKey}
                               onChange={(event) => setSelectedMonthKey(event.target.value)}
@@ -9036,21 +8964,19 @@ const HQDashboard: React.FC<{
                   </div>
               </div>
               <div className="p-4 sm:p-6">
-                  <div className="mb-2 text-right text-[11px] font-bold text-gray-400">
-                      Scroll sideways to view every country →
-                  </div>
-                  <div className="flex gap-3 overflow-x-auto pb-2">
+                  <div className="mb-3 text-xs font-black uppercase tracking-[0.14em] text-gray-500">2. Select country</div>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
                       <button
                           type="button"
                           onClick={() => setSelectedCountry('all')}
-                          className={`min-w-[180px] rounded-xl border p-4 text-left transition ${
+                          className={`min-h-[132px] rounded-xl border p-4 text-left transition ${
                               selectedCountry === 'all'
                                   ? 'border-black bg-black text-white shadow-lg'
                                   : 'border-gray-200 bg-white hover:border-gray-400'
                           }`}
                       >
                           <div className="text-xs font-bold opacity-60 uppercase">All countries</div>
-                          <div className="text-2xl font-extrabold mt-1">{stores.length} stores</div>
+                          <div className="text-2xl font-extrabold mt-1">{reportingStores.length} stores</div>
                           <div className="text-xs mt-2 opacity-70">Network overview</div>
                       </button>
                       {countryPerformance.map((row) => (
@@ -9058,18 +8984,18 @@ const HQDashboard: React.FC<{
                               key={row.country}
                               type="button"
                               onClick={() => setSelectedCountry(row.country)}
-                              className={`min-w-[220px] rounded-xl border p-4 text-left transition ${
+                              className={`min-h-[132px] rounded-xl border p-4 text-left transition ${
                                   selectedCountry === row.country
                                       ? 'border-black bg-black text-white shadow-lg'
                                       : 'border-gray-200 bg-white hover:border-gray-400'
                               }`}
                           >
-                              <div className="flex items-start justify-between gap-3">
-                                  <div>
+                              <div className="flex min-w-0 items-start justify-between gap-2">
+                                  <div className="min-w-0">
                                       <div className="font-extrabold">{row.country}</div>
                                       <div className="text-xs mt-0.5 opacity-60">{row.stores} store{row.stores === 1 ? '' : 's'}</div>
                                   </div>
-                                  <span className={`text-[10px] font-black px-2 py-1 rounded-full ${
+                                  <span className={`max-w-[112px] shrink-0 rounded-full px-2 py-1 text-right text-[10px] font-black leading-tight ${
                                       selectedCountry === row.country
                                           ? 'bg-white/15 text-white'
                                           : row.missingReports > 0
@@ -9309,6 +9235,81 @@ const HQDashboard: React.FC<{
                <SupplyChainIntelligence stores={reportingStores} sales={sales} menus={menus} storeStocks={storeStocks} />
              </div>
            </details>
+
+           {(testStoreSummaries.length > 0 || quarantinedStores.length > 0) && (
+             <details className="group overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
+               <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-4 p-5 [&::-webkit-details-marker]:hidden">
+                 <div className="min-w-0">
+                   <div className="font-extrabold">Data management</div>
+                   <div className="mt-1 text-xs text-gray-500">
+                     Test data {testStoreSummaries.length} · Held records {quarantinedStores.length}. Open only when maintenance is required.
+                   </div>
+                 </div>
+                 <ChevronRight className="h-5 w-5 shrink-0 text-gray-400 transition group-open:rotate-90" />
+               </summary>
+               <div className="space-y-5 border-t border-gray-100 bg-gray-50 p-5">
+                 {testStoreSummaries.length > 0 && (
+                   <section>
+                     <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                       <div>
+                         <div className="text-xs font-black uppercase tracking-[0.14em] text-amber-700">Test workspaces</div>
+                         <div className="mt-1 text-xs text-gray-500">Excluded from operating results.</div>
+                       </div>
+                       <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-black text-amber-800">{testStoreSummaries.length}</span>
+                     </div>
+                     <div className="grid gap-3 lg:grid-cols-2">
+                       {testStoreSummaries.map((summary) => (
+                         <div key={summary.store.id} className="rounded-xl border border-amber-200 bg-white p-4">
+                           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                             <div>
+                               <div className="font-extrabold">{summary.store.name}</div>
+                               <div className="mt-1 text-xs text-gray-500">
+                                 {formatMonthKeyLabel(summary.monthKey)} · {summary.salesDays} reports · {summary.menuCount} menus · {summary.courseCount} course
+                               </div>
+                               <div className="mt-2 font-extrabold">{summary.store.currency} {Math.round(summary.salesTotal).toLocaleString()}</div>
+                             </div>
+                             <button
+                               type="button"
+                               onClick={() => openHqStore(summary.store, 'inventory', summary.monthKey)}
+                               className="min-h-11 rounded-xl bg-black px-4 py-2.5 text-sm font-extrabold text-white hover:bg-gray-800"
+                             >
+                               Open test cost analysis
+                             </button>
+                           </div>
+                         </div>
+                       ))}
+                     </div>
+                   </section>
+                 )}
+
+                 {quarantinedStores.length > 0 && (
+                   <section>
+                     <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                       <div>
+                         <div className="text-xs font-black uppercase tracking-[0.14em] text-red-700">Held records</div>
+                         <div className="mt-1 text-xs text-gray-500">Preserved for review but excluded from HQ totals.</div>
+                       </div>
+                       <span className="rounded-full bg-red-100 px-2.5 py-1 text-xs font-black text-red-800">{quarantinedStores.length}</span>
+                     </div>
+                     <div className="grid gap-3 lg:grid-cols-2">
+                       {quarantinedStores.map((store) => (
+                         <button
+                           key={store.id}
+                           type="button"
+                           onClick={() => openHqStore(store)}
+                           className="min-h-11 rounded-xl border border-red-200 bg-white p-4 text-left hover:border-red-400"
+                         >
+                           <div className="font-extrabold">{store.name}</div>
+                           <div className="mt-1 text-xs text-gray-500">{store.city}, {store.country} · {store.currency}</div>
+                           <div className="mt-2 text-sm text-red-800">{store.dataQualityNote ?? 'HQ review required.'}</div>
+                         </button>
+                       ))}
+                     </div>
+                   </section>
+                 )}
+               </div>
+             </details>
+           )}
        </div>
     </div>
     </HQLanguageBoundary>
