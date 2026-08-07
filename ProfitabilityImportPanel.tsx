@@ -461,7 +461,7 @@ const ProfitabilityImportPanel: React.FC<Props> = ({
               type="button"
               aria-expanded={expanded}
               onClick={() => setExpanded((current) => !current)}
-              className="inline-flex items-center gap-2 rounded-xl border border-gray-300 bg-white px-3 py-2 text-xs font-extrabold text-gray-700 hover:bg-gray-50"
+              className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-gray-300 bg-white px-3 py-2 text-xs font-extrabold text-gray-700 hover:bg-gray-50"
             >
               {expanded ? 'Close File Import' : 'Open File Import'}
               <ChevronDown className={`h-4 w-4 transition-transform ${expanded ? 'rotate-180' : ''}`} />
@@ -473,7 +473,7 @@ const ProfitabilityImportPanel: React.FC<Props> = ({
               aria-label="Reload import history"
               onClick={() => void loadRecords()}
               disabled={loading || applying}
-              className="rounded-xl border border-gray-200 bg-white p-2.5 text-gray-600 hover:bg-gray-50 disabled:opacity-40"
+              className="flex h-11 w-11 items-center justify-center rounded-xl border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-40"
               title="Reload"
             >
               <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />

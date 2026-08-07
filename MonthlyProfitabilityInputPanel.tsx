@@ -271,7 +271,7 @@ const MonthlyProfitabilityInputPanel: React.FC<Props> = ({
                 ? 'bg-emerald-100 text-emerald-700'
                 : 'bg-gray-100 text-gray-600'
             }`}>
-              {completedRequiredCount}/{requiredTotal} required
+              {`${completedRequiredCount}/${requiredTotal} required`}
             </span>
           </div>
           <p className="mt-1 text-xs text-gray-500">
@@ -285,7 +285,7 @@ const MonthlyProfitabilityInputPanel: React.FC<Props> = ({
           aria-label="Reload monthly profit inputs"
           onClick={() => void loadInput()}
           disabled={loading || saving}
-          className="self-start rounded-xl border border-gray-200 bg-white p-2.5 text-gray-600 hover:bg-gray-50 disabled:opacity-40"
+          className="flex h-11 w-11 self-start items-center justify-center rounded-xl border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-40"
           title="Reload"
         >
           <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />

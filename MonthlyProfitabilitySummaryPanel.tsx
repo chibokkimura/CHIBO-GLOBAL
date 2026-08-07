@@ -185,17 +185,17 @@ const MonthlyProfitabilitySummaryPanel: React.FC<Props> = ({
         netSales: 1142857.14,
         salesTaxMode: 'included',
         guestCount: 1000,
-        laborCost: 300000,
+        laborCost: previewReady ? 300000 : null,
         laborHours: 400,
-        salesLinkedFees: 57142.86,
+        salesLinkedFees: previewReady ? 57142.86 : null,
         salesLinkedFeeSource: 'default_rate',
-        utilitiesCost: 80000,
-        otherOperatingCost: 40000,
+        utilitiesCost: previewReady ? 80000 : null,
+        otherOperatingCost: previewReady ? 40000 : null,
         monthlyRent: 100000,
         commonAreaFee: 20000,
         occupancyCost: 120000,
         royaltyCost: 57142.86,
-        actualCost: 350000,
+        actualCost: previewReady ? 350000 : null,
         inventoryComplete: previewReady,
         settingsComplete: true,
         monthlyInputExists: previewReady,
@@ -316,7 +316,7 @@ const MonthlyProfitabilitySummaryPanel: React.FC<Props> = ({
             aria-label="Reload monthly profitability"
             onClick={() => void loadSummary()}
             disabled={loading}
-            className="self-start rounded-xl border border-gray-700 bg-gray-900 p-2.5 text-gray-200 hover:bg-gray-800 disabled:opacity-40"
+            className="flex h-11 w-11 self-start items-center justify-center rounded-xl border border-gray-700 bg-gray-900 text-gray-200 hover:bg-gray-800 disabled:opacity-40"
             title="Reload"
           >
             <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
