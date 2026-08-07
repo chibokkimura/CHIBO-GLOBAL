@@ -694,7 +694,7 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
           </div>
           <div className="mt-2 text-xl font-extrabold sm:text-2xl">{store.currency} {formatAmount(reportedSales)}</div>
           <div className="mt-1 text-xs text-gray-500">
-            {openDaySales.length} business day(s) · {closedDaySales.length} closed day(s)
+            {`${openDaySales.length} business day(s) · ${closedDaySales.length} closed day(s)`}
           </div>
         </div>
 

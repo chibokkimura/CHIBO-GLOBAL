@@ -13,3 +13,11 @@ body {
   font-family: 'Inter', sans-serif;
   overflow-x: hidden;
 }
+
+.no-scrollbar {
+  scrollbar-width: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}

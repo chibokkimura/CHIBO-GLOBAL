@@ -20,6 +20,13 @@ import {
   HQ_LANGUAGE_STORAGE_KEY,
   type HQLocale,
 } from './HQLanguageBoundary';
+import {
+  OwnerLanguageBoundary,
+  OwnerLanguageSwitch,
+  OWNER_LANGUAGE_STORAGE_PREFIX,
+  defaultOwnerLocaleForCountry,
+  type OwnerLocale,
+} from './OwnerLanguageBoundary';
 
 
 // --- Supabase Data Layer ---
@@ -487,31 +494,22 @@ async function loadStoreAccounts(storeId: string): Promise<{ email: string; name
 
 async function linkAccountToStore(email: string, storeId: string) {
   const { error } = await supabase.rpc('link_account_to_store', { p_email: email, p_store_id: storeId });
-  if (!error) return;
-  const { data, error: selectErr } = await supabase
-    .from('app_users')
-    .select('user_id,role')
-    .eq('email', email)
-    .maybeSingle();
-  if (selectErr) throw selectErr;
-  if (!data) throw new Error('Account not found.');
-  if (data.role === 'HQ') throw new Error('HQ accounts cannot be linked to a store.');
-  const { error: upErr } = await supabase
-    .from('app_users')
-    .update({ store_id: storeId, role: 'OWNER' })
-    .eq('user_id', data.user_id);
-  if (upErr) throw upErr;
+  if (error) throw error;
 }
 
 async function unlinkAccountFromStore(email: string, storeId: string) {
   const { error } = await supabase.rpc('unlink_account_from_store', { p_email: email, p_store_id: storeId });
-  if (!error) return;
-  const { error: upErr } = await supabase
-    .from('app_users')
-    .update({ store_id: null })
-    .eq('email', email)
-    .eq('store_id', storeId);
-  if (upErr) throw upErr;
+  if (error) throw error;
+}
+
+async function loadPendingOwnerAccounts(): Promise<{ email: string; name: string; userId: string }[]> {
+  const { data, error } = await supabase.rpc('list_pending_owner_accounts');
+  if (error) throw error;
+  return (data ?? []).map((row: any) => ({
+    email: row.email,
+    name: row.name,
+    userId: row.user_id,
+  }));
 }
 
 async function loadEmployees(): Promise<Employee[]> {
@@ -4897,7 +4895,7 @@ const MenuManager: React.FC<{
             price: 0,
             recipe: []
           })}
-          className="flex w-full items-center justify-center gap-2 rounded-xl bg-black px-4 py-2 text-sm font-bold text-white hover:bg-gray-800 sm:w-auto"
+          className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-black px-4 py-2 text-sm font-bold text-white hover:bg-gray-800 sm:w-auto"
         >
           <Plus className="w-4 h-4" /> Add Item
         </button>
@@ -6049,7 +6047,7 @@ const HQStoreDetail: React.FC<{
             hqPopLockRef.current = false;
             return;
         }
-        window.history.pushState(
+        window.history.replaceState(
             { ...(window.history.state ?? {}), screen: 'hq-detail', storeId: store.id, section: detailSection, menuSection },
             ''
         );
@@ -6857,7 +6855,7 @@ const HQStoreDetail: React.FC<{
             await refreshOwners();
         } catch (e) {
             console.error('Failed to link account', e);
-            setLinkError('Failed to link account.');
+            setLinkError(toErrorMessage(e, 'Failed to link account.'));
         } finally {
             setLinkBusy(false);
         }
@@ -6876,7 +6874,7 @@ const HQStoreDetail: React.FC<{
             await refreshOwners();
         } catch (e) {
             console.error('Failed to move account', e);
-            setMoveError('Failed to move account.');
+            setMoveError(toErrorMessage(e, 'Failed to move account.'));
         } finally {
             setMoveBusy(null);
         }
@@ -6892,7 +6890,7 @@ const HQStoreDetail: React.FC<{
             await refreshOwners();
         } catch (e) {
             console.error('Failed to unlink account', e);
-            setUnlinkError('Failed to unlink account.');
+            setUnlinkError(toErrorMessage(e, 'Failed to unlink account.'));
         } finally {
             setUnlinkBusy(null);
         }
@@ -6900,18 +6898,24 @@ const HQStoreDetail: React.FC<{
 
     const handleDeleteStore = async () => {
         setDeleteError(null);
-        if (storeSales.length > 0 || storeMenus.length > 0) {
-            setDeleteError('Store has data. Delete is blocked to prevent data loss.');
+        if ((store.reportingStatus ?? 'active') === 'active') {
+            setDeleteError('Active operating stores cannot be deleted. Change or repair the store instead.');
             return;
         }
-        const ok = window.confirm(`Delete store "${store.name}"? This cannot be undone.`);
-        if (!ok) return;
+        const confirmation = window.prompt(
+            `This will archive and remove all data for this non-operating store.\n\nType the exact store name to continue:\n${store.name}`
+        );
+        if (confirmation === null) return;
+        if (confirmation.trim() !== store.name) {
+            setDeleteError('Store name did not match. Nothing was deleted.');
+            return;
+        }
         try {
             await onDeleteStore(store.id);
             onBack();
         } catch (e) {
             console.error('Failed to delete store', e);
-            setDeleteError('Failed to delete store.');
+            setDeleteError(toErrorMessage(e, 'Failed to delete store.'));
         }
     };
 
@@ -6983,7 +6987,7 @@ const HQStoreDetail: React.FC<{
     }, [standardIngredients, categoryUsageMap, canonicalStoreSales, storeStockMap, inventoryMetricsEnabled]);
 
     return (
-        <div className="relative mx-auto w-full min-w-0 max-w-7xl overflow-x-hidden p-4 sm:p-6 lg:p-8">
+        <div className="relative mx-auto w-full min-w-0 max-w-7xl overflow-x-hidden p-3 sm:p-6 lg:p-8">
             {showReminderComposer && reminderDate && (
                 <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
                     <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl">
@@ -7274,20 +7278,42 @@ const HQStoreDetail: React.FC<{
                 />
             )}
 
-            <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2 sm:mb-5 sm:gap-3">
                 <button onClick={onBack} className="flex min-h-11 items-center gap-2 rounded-xl px-1 font-bold text-gray-500 hover:text-black">
                     <ArrowLeft className="w-5 h-5"/> Back to Dashboard
                 </button>
                 <HQLanguageSwitch locale={hqLocale} onChange={onHqLocaleChange} />
             </div>
 
-            <div className="mb-6 flex min-w-0 flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+            <div className="mb-4 flex min-w-0 flex-col gap-3 sm:mb-6 lg:flex-row lg:items-start lg:justify-between">
                 <div className="min-w-0">
-                    <h1 className="break-words text-2xl font-extrabold sm:text-3xl">{store.name}</h1>
-                    <div className="mt-2 flex min-w-0 items-start gap-2 text-sm text-gray-500 sm:text-base">
-                        <MapPin className="w-4 h-4"/> {store.city}, {store.country} • Owner: {store.ownerEmail}
+                    <h1 className="break-words text-xl font-extrabold sm:text-3xl">{store.name}</h1>
+                    <div className="mt-1.5 flex min-w-0 items-start gap-2 text-sm text-gray-500 sm:mt-2 sm:text-base">
+                        <MapPin className="mt-0.5 h-4 w-4 shrink-0"/> {store.city}, {store.country}
+                        <span className="hidden sm:inline">• Owner: {store.ownerEmail}</span>
                     </div>
-                    <div className="mt-2 break-all text-xs text-gray-500">
+                    <details className="group mt-2 rounded-xl border border-gray-200 bg-white sm:hidden">
+                        <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-2 px-3 py-2 text-xs font-bold text-gray-600 [&::-webkit-details-marker]:hidden">
+                            <span>Account information</span>
+                            <ChevronRight className="h-4 w-4 shrink-0 transition group-open:rotate-90" />
+                        </summary>
+                        <div className="space-y-2 border-t border-gray-100 px-3 py-3 text-xs text-gray-500">
+                            <div className="break-all"><span className="font-bold text-gray-700">Owner:</span> {store.ownerEmail}</div>
+                            <div className="break-all">
+                                {owners.length > 0 ? (
+                                    <span>
+                                        Linked Accounts: {owners.map(o => {
+                                            const label = o.name ? `${o.name} (${o.email})` : o.email;
+                                            return o.storeId ? `${label} [${o.storeId}]` : label;
+                                        }).join(', ')}
+                                    </span>
+                                ) : (
+                                    <span>{ownersError ? ownersError : 'Linked Accounts: —'}</span>
+                                )}
+                            </div>
+                        </div>
+                    </details>
+                    <div className="mt-2 hidden break-all text-xs text-gray-500 sm:block">
                         {owners.length > 0 ? (
                             <span>
                                 Linked Accounts: {owners.map(o => {
@@ -7300,7 +7326,58 @@ const HQStoreDetail: React.FC<{
                         )}
                     </div>
                 </div>
-                <div className="grid w-full shrink-0 grid-cols-1 gap-3 sm:grid-cols-2 lg:w-auto lg:min-w-[320px]">
+                <details className="group rounded-xl border border-gray-200 bg-white sm:hidden">
+                    <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 px-3 py-2.5 [&::-webkit-details-marker]:hidden">
+                        <div>
+                            <div className="text-sm font-extrabold text-gray-900">Store settings</div>
+                            <div className="mt-0.5 text-xs text-gray-500">{currencyDraft || '—'} · {royaltyDraft || '—'}%</div>
+                        </div>
+                        <ChevronRight className="h-4 w-4 shrink-0 text-gray-400 transition group-open:rotate-90" />
+                    </summary>
+                    <div className="grid gap-3 border-t border-gray-100 p-3">
+                        <div className="grid grid-cols-[88px_minmax(0,1fr)_64px] items-center gap-2">
+                            <span className="text-xs font-bold text-gray-500">Currency</span>
+                            <select
+                                aria-label="Currency"
+                                value={currencyDraft}
+                                onChange={(e) => setCurrencyDraft(e.target.value)}
+                                className="min-h-11 min-w-0 rounded-lg border border-gray-200 bg-white px-2 py-2 text-right text-sm font-bold"
+                            >
+                                <option value="">Select</option>
+                                {currencyOptions.map(cur => <option key={cur} value={cur}>{cur}</option>)}
+                            </select>
+                            <button
+                                type="button"
+                                onClick={saveCurrency}
+                                disabled={currencySaving || !currencyDraft}
+                                className="min-h-11 rounded-lg bg-black px-2 text-xs font-bold text-white disabled:opacity-50"
+                            >
+                                {currencySaving ? '...' : 'Save'}
+                            </button>
+                        </div>
+                        <div className="grid grid-cols-[88px_minmax(0,1fr)_64px] items-center gap-2">
+                            <span className="text-xs font-bold text-gray-500">Royalty (%)</span>
+                            <input
+                                aria-label="Royalty Rate (%)"
+                                type="text"
+                                inputMode="decimal"
+                                value={royaltyDraft}
+                                onChange={(e) => setRoyaltyDraft(normalizePercentInput(e.target.value))}
+                                className="min-h-11 min-w-0 rounded-lg border border-gray-200 px-2 py-2 text-right text-sm font-bold"
+                            />
+                            <button
+                                type="button"
+                                onClick={saveRoyaltyRate}
+                                disabled={royaltySaving || Number.isNaN(parseFloat(royaltyDraft))}
+                                className="min-h-11 rounded-lg bg-black px-2 text-xs font-bold text-white disabled:opacity-50"
+                            >
+                                {royaltySaving ? '...' : 'Save'}
+                            </button>
+                        </div>
+                        {(currencyError || royaltyError) && <div className="text-xs text-red-600">{currencyError || royaltyError}</div>}
+                    </div>
+                </details>
+                <div className="hidden w-full shrink-0 grid-cols-2 gap-3 sm:grid lg:w-auto lg:min-w-[320px]">
                   <div className="rounded-xl border border-gray-200 bg-white p-3 text-left lg:text-right">
                     <div className="text-sm font-bold text-gray-500">Currency</div>
                     <div className="mt-2 flex min-w-0 items-center gap-2 lg:justify-end">
@@ -7414,28 +7491,29 @@ const HQStoreDetail: React.FC<{
                 </section>
             )}
 
-            <div className="sticky top-0 z-20 mb-6 bg-gray-50/95 py-2 backdrop-blur supports-[backdrop-filter]:bg-gray-50/80">
-                <div className="grid w-full grid-cols-2 gap-1 rounded-2xl border border-gray-200 bg-white p-1 sm:flex sm:flex-wrap sm:items-center">
+            <div className="sticky top-0 z-20 -mx-3 mb-4 border-y border-gray-200 bg-white/95 px-3 py-1.5 backdrop-blur supports-[backdrop-filter]:bg-white/90 sm:mx-0 sm:mb-6 sm:rounded-2xl sm:border sm:bg-gray-50/95 sm:p-1">
+                <div className="no-scrollbar flex w-full gap-1 overflow-x-auto sm:flex-wrap sm:items-center">
                     {[
-                        { key: 'sales', label: 'Sales' },
-                        { key: 'close', label: 'Month Close' },
-                        { key: 'inventory', label: 'Cost & Inventory' },
-                        { key: 'invoice', label: 'Invoice' },
-                        { key: 'menu', label: 'Menu' },
-                        { key: 'staff', label: 'Staff' },
-                        { key: 'accounts', label: 'Accounts' },
+                        { key: 'sales', label: 'Sales', shortLabel: 'Sales' },
+                        { key: 'close', label: 'Month Close', shortLabel: 'Month Close' },
+                        { key: 'inventory', label: 'Cost & Inventory', shortLabel: 'Cost & Inventory' },
+                        { key: 'invoice', label: 'Invoice', shortLabel: 'Invoice' },
+                        { key: 'menu', label: 'Menu', shortLabel: 'Menu' },
+                        { key: 'staff', label: 'Staff', shortLabel: 'Staff' },
+                        { key: 'accounts', label: 'Accounts', shortLabel: 'Accounts' },
                     ].map((tab) => (
                         <button
                             key={tab.key}
                             type="button"
                             onClick={() => setDetailSection(tab.key as 'sales' | 'close' | 'inventory' | 'invoice' | 'menu' | 'staff' | 'accounts')}
-                            className={`min-h-11 rounded-xl px-3 py-2 text-sm font-bold transition sm:px-4 ${
+                            className={`min-h-10 shrink-0 rounded-lg px-4 py-2 text-xs font-bold transition sm:min-h-11 sm:rounded-xl sm:text-sm ${
                                 detailSection === tab.key
                                     ? 'bg-black text-white'
                                     : 'text-gray-600 hover:bg-gray-100'
                             }`}
                         >
-                            {tab.label}
+                            <span className="sm:hidden">{tab.shortLabel}</span>
+                            <span className="hidden sm:inline">{tab.label}</span>
                         </button>
                     ))}
                 </div>
@@ -7666,22 +7744,22 @@ const HQStoreDetail: React.FC<{
             )}
 
             {detailSection === 'sales' && (
-            <div className="space-y-8 mb-8">
+            <div className="mb-6 space-y-4 sm:mb-8 sm:space-y-8">
                     {/* Compliance Alert */}
-                    <div className={`p-6 rounded-2xl shadow-sm border ${missingDates.length > 0 ? 'bg-red-50 border-red-200' : 'bg-green-50 border-green-200'}`}>
-                        <div className="flex items-start gap-4">
-                            <div className={`p-3 rounded-full ${missingDates.length > 0 ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'}`}>
-                                {missingDates.length > 0 ? <AlertOctagon className="w-6 h-6"/> : <CheckCircle2 className="w-6 h-6"/>}
+                    <div className={`rounded-2xl border p-4 shadow-sm sm:p-6 ${missingDates.length > 0 ? 'bg-red-50 border-red-200' : 'bg-green-50 border-green-200'}`}>
+                        <div className="flex items-start gap-3 sm:gap-4">
+                            <div className={`rounded-full p-2 sm:p-3 ${missingDates.length > 0 ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'}`}>
+                                {missingDates.length > 0 ? <AlertOctagon className="h-5 w-5 sm:h-6 sm:w-6"/> : <CheckCircle2 className="h-5 w-5 sm:h-6 sm:w-6"/>}
                             </div>
-                            <div>
-                                <h3 className={`font-bold text-lg ${missingDates.length > 0 ? 'text-red-900' : 'text-green-900'}`}>
+                            <div className="min-w-0 flex-1">
+                                <h3 className={`text-base font-bold sm:text-lg ${missingDates.length > 0 ? 'text-red-900' : 'text-green-900'}`}>
                                     {missingDates.length > 0 ? 'Missing Daily Reports' : 'Reporting Compliance'}
                                 </h3>
                                 <div className={`text-sm mt-1 ${missingDates.length > 0 ? 'text-red-700' : 'text-green-700'}`}>
                                     {missingDates.length > 0 ? (
                                         <>
-                                            <p className="font-bold mb-2">The following dates are missing:</p>
-                                            <div className="flex flex-wrap gap-2">
+                                            <p className="mb-2 font-bold">The following dates are missing:</p>
+                                            <div className="flex flex-wrap gap-1.5 sm:gap-2">
                                                 {missingDates.map(d => (
                                                     <button
                                                         key={d}
@@ -7689,7 +7767,7 @@ const HQStoreDetail: React.FC<{
                                                         onClick={() => {
                                                             openEmailReminder(d);
                                                         }}
-                                                        className="min-h-11 rounded border border-red-200 bg-white px-3 py-2 text-xs font-bold text-red-600 shadow-sm transition hover:bg-red-50"
+                                                        className="min-h-10 rounded-lg border border-red-200 bg-white px-2.5 py-2 text-xs font-bold text-red-600 shadow-sm transition hover:bg-red-50 sm:min-h-11 sm:px-3"
                                                         title="Send email reminder"
                                                     >
                                                         {d}
@@ -7701,12 +7779,12 @@ const HQStoreDetail: React.FC<{
                                                         setCalendarMonth(new Date(new Date().getFullYear(), new Date().getMonth(), 1));
                                                         setShowMissingCalendar(true);
                                                     }}
-                                                    className="min-h-11 rounded border border-red-200 bg-white px-3 py-2 text-xs font-bold text-red-700 shadow-sm transition hover:bg-red-50"
+                                                    className="min-h-10 rounded-lg border border-red-200 bg-white px-2.5 py-2 text-xs font-bold text-red-700 shadow-sm transition hover:bg-red-50 sm:min-h-11 sm:px-3"
                                                 >
                                                     View Older Dates
                                                 </button>
                                             </div>
-                                            <div className="mt-2 text-xs text-red-500">
+                                            <div className="mt-2 hidden text-xs text-red-500 sm:block">
                                                 Tip: Click a date to choose recipients and open an email draft.
                                             </div>
                                             {emailInfo && (
@@ -7721,44 +7799,47 @@ const HQStoreDetail: React.FC<{
                         </div>
                     </div>
 
-                    <div className="bg-white p-6 rounded-2xl shadow-sm border">
-                        <h2 className="text-xl font-bold mb-4">Store Performance</h2>
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
-                            <div className="rounded-xl border border-gray-200 bg-gray-50 p-3">
-                                <div className="text-[11px] font-bold uppercase text-gray-500">Monthly Sales</div>
+                    <div className="rounded-2xl border bg-white p-4 shadow-sm sm:p-6">
+                        <h2 className="mb-3 text-lg font-bold sm:mb-4 sm:text-xl">Store Performance</h2>
+                        <div className="mb-3 grid grid-cols-3 gap-2 sm:mb-4 sm:gap-3">
+                            <div className="min-w-0 rounded-xl border border-gray-200 bg-gray-50 p-2 sm:p-3">
+                                <div className="text-[10px] font-bold uppercase text-gray-500 sm:text-[11px]"><span className="sm:hidden">Month</span><span className="hidden sm:inline">Monthly Sales</span></div>
                                 <div className="text-[11px] text-gray-500 mt-0.5">{performanceSummary.monthly.label}</div>
-                                <div className="mt-1 text-lg font-extrabold text-gray-900">{performanceSummary.formatMoney(performanceSummary.monthly.value)}</div>
+                                <div className="mt-1 break-words text-sm font-extrabold text-gray-900 sm:text-lg">{performanceSummary.formatMoney(performanceSummary.monthly.value)}</div>
                                 {store.currency !== 'JPY' && (
-                                    <div className="text-xs text-gray-500 mt-1">{performanceSummary.formatJPY(performanceSummary.monthly.value) ?? 'JPY N/A'}</div>
+                                    <div className="mt-1 text-[10px] text-gray-500 sm:text-xs">{performanceSummary.formatJPY(performanceSummary.monthly.value) ?? 'JPY N/A'}</div>
                                 )}
-                                <div className={`mt-2 text-xs font-bold ${deltaToneClass(performanceSummary.monthly.deltaPct)}`}>
-                                    vs {performanceSummary.monthly.baselineLabel} {formatDeltaText(performanceSummary.monthly.deltaPct)}
+                                <div className={`mt-1 text-[10px] font-bold sm:mt-2 sm:text-xs ${deltaToneClass(performanceSummary.monthly.deltaPct)}`}>
+                                    <span className="sm:hidden">{formatDeltaText(performanceSummary.monthly.deltaPct)}</span>
+                                    <span className="hidden sm:inline">vs {performanceSummary.monthly.baselineLabel} {formatDeltaText(performanceSummary.monthly.deltaPct)}</span>
                                 </div>
                             </div>
-                            <div className="rounded-xl border border-gray-200 bg-gray-50 p-3">
-                                <div className="text-[11px] font-bold uppercase text-gray-500">Weekly Sales (Last 7 Days)</div>
+                            <div className="min-w-0 rounded-xl border border-gray-200 bg-gray-50 p-2 sm:p-3">
+                                <div className="text-[10px] font-bold uppercase text-gray-500 sm:text-[11px]"><span className="sm:hidden">7 Days</span><span className="hidden sm:inline">Weekly Sales (Last 7 Days)</span></div>
                                 <div className="text-[11px] text-gray-500 mt-0.5">{performanceSummary.weekly.label}</div>
-                                <div className="mt-1 text-lg font-extrabold text-gray-900">{performanceSummary.formatMoney(performanceSummary.weekly.value)}</div>
+                                <div className="mt-1 break-words text-sm font-extrabold text-gray-900 sm:text-lg">{performanceSummary.formatMoney(performanceSummary.weekly.value)}</div>
                                 {store.currency !== 'JPY' && (
-                                    <div className="text-xs text-gray-500 mt-1">{performanceSummary.formatJPY(performanceSummary.weekly.value) ?? 'JPY N/A'}</div>
+                                    <div className="mt-1 text-[10px] text-gray-500 sm:text-xs">{performanceSummary.formatJPY(performanceSummary.weekly.value) ?? 'JPY N/A'}</div>
                                 )}
-                                <div className={`mt-2 text-xs font-bold ${deltaToneClass(performanceSummary.weekly.deltaPct)}`}>
-                                    vs {performanceSummary.weekly.baselineLabel} {formatDeltaText(performanceSummary.weekly.deltaPct)}
+                                <div className={`mt-1 text-[10px] font-bold sm:mt-2 sm:text-xs ${deltaToneClass(performanceSummary.weekly.deltaPct)}`}>
+                                    <span className="sm:hidden">{formatDeltaText(performanceSummary.weekly.deltaPct)}</span>
+                                    <span className="hidden sm:inline">vs {performanceSummary.weekly.baselineLabel} {formatDeltaText(performanceSummary.weekly.deltaPct)}</span>
                                 </div>
                             </div>
-                            <div className="rounded-xl border border-gray-200 bg-gray-50 p-3">
-                                <div className="text-[11px] font-bold uppercase text-gray-500">YoY (This Month)</div>
+                            <div className="min-w-0 rounded-xl border border-gray-200 bg-gray-50 p-2 sm:p-3">
+                                <div className="text-[10px] font-bold uppercase text-gray-500 sm:text-[11px]"><span className="sm:hidden">YoY</span><span className="hidden sm:inline">YoY (This Month)</span></div>
                                 <div className="text-[11px] text-gray-500 mt-0.5">{performanceSummary.yoy.label}</div>
-                                <div className="mt-1 text-lg font-extrabold text-gray-900">{performanceSummary.formatMoney(performanceSummary.yoy.value)}</div>
+                                <div className="mt-1 break-words text-sm font-extrabold text-gray-900 sm:text-lg">{performanceSummary.formatMoney(performanceSummary.yoy.value)}</div>
                                 {store.currency !== 'JPY' && (
-                                    <div className="text-xs text-gray-500 mt-1">{performanceSummary.formatJPY(performanceSummary.yoy.value) ?? 'JPY N/A'}</div>
+                                    <div className="mt-1 text-[10px] text-gray-500 sm:text-xs">{performanceSummary.formatJPY(performanceSummary.yoy.value) ?? 'JPY N/A'}</div>
                                 )}
-                                <div className={`mt-2 text-xs font-bold ${deltaToneClass(performanceSummary.yoy.deltaPct)}`}>
-                                    vs {performanceSummary.yoy.baselineLabel} {formatDeltaText(performanceSummary.yoy.deltaPct)}
+                                <div className={`mt-1 text-[10px] font-bold sm:mt-2 sm:text-xs ${deltaToneClass(performanceSummary.yoy.deltaPct)}`}>
+                                    <span className="sm:hidden">{formatDeltaText(performanceSummary.yoy.deltaPct)}</span>
+                                    <span className="hidden sm:inline">vs {performanceSummary.yoy.baselineLabel} {formatDeltaText(performanceSummary.yoy.deltaPct)}</span>
                                 </div>
                             </div>
                         </div>
-                        <div className="h-64 bg-gray-50 rounded-xl p-2">
+                        <div className="h-52 rounded-xl bg-gray-50 p-1 sm:h-64 sm:p-2">
                             {monthlyRevenueData.every(d => d.value === 0) ? (
                                 <div className="h-full flex items-center justify-center text-gray-400">
                                     <BarChart3 className="w-8 h-8 mb-2" />
@@ -7799,16 +7880,16 @@ const HQStoreDetail: React.FC<{
             )}
 
             {detailSection === 'sales' && (
-            <div className="bg-white p-6 rounded-2xl shadow-sm border mb-8">
-                <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                    <h2 className="text-xl font-bold flex items-center gap-2">
+            <div className="mb-6 rounded-2xl border bg-white p-4 shadow-sm sm:mb-8 sm:p-6">
+                <div className="mb-4 flex flex-col gap-3 sm:mb-6 sm:flex-row sm:items-center sm:justify-between">
+                    <h2 className="flex items-center gap-2 text-lg font-bold sm:text-xl">
                         <ClipboardList className="w-5 h-5"/> Sales History
                     </h2>
-                    <div className="flex flex-wrap items-center gap-3">
+                    <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 sm:flex sm:flex-wrap sm:gap-3">
                         <select
                             value={salesMonthFilter}
                             onChange={(e) => setSalesMonthFilter(e.target.value)}
-                            className="min-h-11 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-semibold"
+                            className="min-h-11 min-w-0 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-semibold"
                         >
                             <option value="all">All Months</option>
                             {salesMonthOptions.map((monthKey) => (
@@ -7817,19 +7898,19 @@ const HQStoreDetail: React.FC<{
                                 </option>
                             ))}
                         </select>
-                        <span className="text-xs text-gray-400">Showing {salesLookbackLabel} data</span>
+                        <span className="order-3 col-span-2 text-[11px] text-gray-400 sm:order-none sm:col-span-1 sm:text-xs">Showing {salesLookbackLabel} data</span>
                         <button
                             type="button"
                             onClick={onLoadMoreSales}
-                            className="min-h-11 rounded-full border border-gray-200 px-3 py-2 text-xs font-bold transition hover:bg-gray-50"
+                            className="min-h-11 rounded-lg border border-gray-200 px-3 py-2 text-xs font-bold transition hover:bg-gray-50"
                         >
                             Load more
                         </button>
                     </div>
                 </div>
-                <div className="overflow-x-auto">
-                    <table className="w-full text-sm text-left">
-                        <thead className="bg-gray-50 text-gray-500 font-bold uppercase text-xs">
+                <div className="md:overflow-x-auto">
+                    <table className="block w-full text-left text-sm md:table">
+                        <thead className="hidden bg-gray-50 text-xs font-bold uppercase text-gray-500 md:table-header-group">
                             <tr>
                                 <th className="p-4 rounded-l-lg">Date</th>
                                 <th className="p-4 text-right">Total Sales</th>
@@ -7838,12 +7919,12 @@ const HQStoreDetail: React.FC<{
                                 <th className="p-4 text-center rounded-r-lg">Receipt</th>
                             </tr>
                         </thead>
-                        <tbody className="divide-y divide-gray-50">
+                        <tbody className="block space-y-3 md:table-row-group md:space-y-0 md:divide-y md:divide-gray-50">
                             {visibleStoreSales.map(sale => (
                                 <React.Fragment key={sale.id}>
-                                    <tr className="hover:bg-gray-50 transition">
-                                        <td className="p-4 font-medium">{sale.date}</td>
-                                        <td className="p-4 text-right font-bold font-mono">
+                                    <tr className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-3 rounded-xl border border-gray-200 p-4 shadow-sm transition hover:bg-gray-50 md:table-row md:rounded-none md:border-0 md:p-0 md:shadow-none">
+                                        <td className="col-start-1 row-start-1 whitespace-nowrap p-0 font-bold md:table-cell md:p-4 md:font-medium">{sale.date}</td>
+                                        <td className="col-start-2 row-start-1 p-0 text-right font-mono font-bold md:table-cell md:p-4">
                                             {sale.isClosed ? (
                                                 '-'
                                             ) : editingSaleAmountId === sale.id ? (
@@ -7888,19 +7969,19 @@ const HQStoreDetail: React.FC<{
                                                 </div>
                                             )}
                                         </td>
-                                        <td className="p-4 text-center">
+                                        <td className="col-start-1 row-start-2 p-0 text-left md:table-cell md:p-4 md:text-center">
                                             {sale.isClosed ? (
                                                 <span className="bg-gray-100 text-gray-600 px-2 py-1 rounded text-xs font-bold uppercase">Closed</span>
                                             ) : (
                                                 <span className="bg-emerald-100 text-emerald-700 px-2 py-1 rounded text-xs font-bold uppercase">Open</span>
                                             )}
                                         </td>
-                                        <td className="p-4 text-center">
-                                            <div className="flex items-center justify-center gap-2">
+                                        <td className="col-start-2 row-start-2 p-0 text-right md:table-cell md:p-4 md:text-center">
+                                            <div className="flex items-center justify-end gap-1.5 md:justify-center md:gap-2">
                                                 <button
                                                     type="button"
                                                     onClick={() => toggleSaleDetails(sale.id)}
-                                                    className="min-h-11 rounded-full border border-gray-200 px-3 py-2 text-xs font-bold text-gray-700 transition hover:bg-gray-50"
+                                                    className="min-h-10 rounded-lg border border-gray-200 px-3 py-2 text-xs font-bold text-gray-700 transition hover:bg-gray-50 md:min-h-11 md:rounded-full"
                                                 >
                                                     {expandedSales.has(sale.id) ? 'Hide' : 'View'}
                                                 </button>
@@ -7908,21 +7989,21 @@ const HQStoreDetail: React.FC<{
                                                     <button
                                                         type="button"
                                                         onClick={() => startEditSaleAmount(sale)}
-                                                        className="min-h-11 rounded-full border border-blue-200 px-3 py-2 text-xs font-bold text-blue-700 transition hover:bg-blue-50"
+                                                        className="min-h-10 rounded-lg border border-blue-200 px-3 py-2 text-xs font-bold text-blue-700 transition hover:bg-blue-50 md:min-h-11 md:rounded-full"
                                                     >
                                                         Edit
                                                     </button>
                                                 )}
                                             </div>
                                         </td>
-                                        <td className="p-4 text-center">
+                                        <td className="col-span-2 row-start-3 border-t border-gray-100 p-0 pt-2 text-left md:table-cell md:border-0 md:p-4 md:text-center">
                                             {sale.isClosed || !sale.hasReceipt ? (
                                                 <span className="text-gray-300 text-xs italic">No Image</span>
                                             ) : (
                                                 <button
                                                     onClick={() => openReceipt(sale.id)}
                                                     disabled={receiptLoadingId === sale.id}
-                                                    className="inline-flex min-h-11 items-center gap-1 rounded-full px-3 py-2 text-xs font-bold text-blue-600 transition hover:bg-blue-50 disabled:opacity-60"
+                                                    className="inline-flex min-h-10 items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-bold text-blue-600 transition hover:bg-blue-50 disabled:opacity-60 md:min-h-11 md:rounded-full md:px-3 md:py-2"
                                                 >
                                                     <ImageIcon className="w-3 h-3"/> {receiptLoadingId === sale.id ? 'Loading...' : 'View Receipt'}
                                                 </button>
@@ -7930,8 +8011,8 @@ const HQStoreDetail: React.FC<{
                                         </td>
                                     </tr>
                                     {expandedSales.has(sale.id) && (
-                                        <tr>
-                                            <td colSpan={5} className="p-4 bg-gray-50">
+                                        <tr className="block md:table-row">
+                                            <td colSpan={5} className="block rounded-xl bg-gray-50 p-4 md:table-cell md:rounded-none">
                                                 {sale.isClosed && sale.closedReason && (
                                                     <div className="mb-3 text-xs font-semibold text-gray-600">
                                                         Closure reason: {sale.closedReason}
@@ -8007,8 +8088,8 @@ const HQStoreDetail: React.FC<{
                                 </React.Fragment>
                             ))}
                             {visibleStoreSales.length === 0 && (
-                                <tr>
-                                    <td colSpan={5} className="p-8 text-center text-gray-400">No sales reports found.</td>
+                                <tr className="block md:table-row">
+                                    <td colSpan={5} className="block p-8 text-center text-gray-400 md:table-cell">No sales reports found.</td>
                                 </tr>
                             )}
                         </tbody>
@@ -8193,16 +8274,16 @@ const HQStoreDetail: React.FC<{
                     </div>
 
                     <div className="bg-white p-6 rounded-2xl shadow-sm border border-red-200">
-                        <h2 className="text-xl font-bold mb-2 text-red-700">Delete Empty Store</h2>
+                        <h2 className="text-xl font-bold mb-2 text-red-700">Remove Non-operating Store</h2>
                         <p className="text-xs text-red-600 mb-4">
-                            Use this only for mistakenly created stores with no data.
+                            Only test or held stores can be removed. A recovery snapshot is saved before all related data is deleted.
                         </p>
                         <button
                             type="button"
                             onClick={handleDeleteStore}
                             className="px-4 py-2 rounded-xl bg-red-600 text-white text-sm font-bold hover:bg-red-700"
                         >
-                            Delete Store
+                            Archive and Remove Store
                         </button>
                         {deleteError && <div className="mt-3 text-xs text-red-600">{deleteError}</div>}
                     </div>
@@ -8442,6 +8523,13 @@ const HQDashboard: React.FC<{
       courseCount: setMenus.filter((setMenu) => setMenu.storeId === store.id).length,
     };
   }), [menus, sales, setMenus, testStores]);
+  const [pendingOwnerAccounts, setPendingOwnerAccounts] = useState<{ email: string; name: string; userId: string }[]>([]);
+  const [pendingOwnerTargets, setPendingOwnerTargets] = useState<Record<string, string>>({});
+  const [pendingOwnerBusy, setPendingOwnerBusy] = useState<string | null>(null);
+  const [pendingOwnerError, setPendingOwnerError] = useState<string | null>(null);
+  const [pendingOwnerSuccess, setPendingOwnerSuccess] = useState<string | null>(null);
+  const [maintenanceDeleteBusy, setMaintenanceDeleteBusy] = useState<string | null>(null);
+  const [maintenanceDeleteError, setMaintenanceDeleteError] = useState<string | null>(null);
   const filteredStores = useMemo(
     () => selectedCountry === 'all'
       ? reportingStores
@@ -8464,6 +8552,74 @@ const HQDashboard: React.FC<{
       window.localStorage.setItem(HQ_LANGUAGE_STORAGE_KEY, locale);
     }
   }, []);
+
+  const refreshPendingOwnerAccounts = useCallback(async () => {
+    if (isLocalHqPreviewMode()) {
+      setPendingOwnerAccounts([]);
+      return;
+    }
+    try {
+      const rows = await loadPendingOwnerAccounts();
+      setPendingOwnerAccounts(rows);
+      setPendingOwnerError(null);
+    } catch (error) {
+      console.error('Failed to load pending owner accounts', error);
+      setPendingOwnerError(toErrorMessage(error, 'Failed to load pending accounts.'));
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshPendingOwnerAccounts();
+  }, [refreshPendingOwnerAccounts]);
+
+  const assignPendingOwner = useCallback(async (email: string) => {
+    const targetStoreId = pendingOwnerTargets[email];
+    if (!targetStoreId) {
+      setPendingOwnerError('Select an operating store first.');
+      return;
+    }
+    try {
+      setPendingOwnerBusy(email);
+      setPendingOwnerError(null);
+      setPendingOwnerSuccess(null);
+      await linkAccountToStore(email, targetStoreId);
+      const targetStore = reportingStores.find(store => store.id === targetStoreId);
+      setPendingOwnerSuccess(`${email} → ${targetStore?.name ?? targetStoreId}`);
+      setPendingOwnerTargets(prev => {
+        const next = { ...prev };
+        delete next[email];
+        return next;
+      });
+      await refreshPendingOwnerAccounts();
+    } catch (error) {
+      console.error('Failed to assign pending owner', error);
+      setPendingOwnerError(toErrorMessage(error, 'Failed to approve the account.'));
+    } finally {
+      setPendingOwnerBusy(null);
+    }
+  }, [pendingOwnerTargets, refreshPendingOwnerAccounts, reportingStores]);
+
+  const removeMaintenanceStore = useCallback(async (store: Store) => {
+    const confirmation = window.prompt(
+      `A recovery copy will be saved before this test/held store is removed.\n\nType the exact store name to continue:\n${store.name}`
+    );
+    if (confirmation === null) return;
+    if (confirmation.trim() !== store.name) {
+      setMaintenanceDeleteError('Store name did not match. Nothing was deleted.');
+      return;
+    }
+    try {
+      setMaintenanceDeleteBusy(store.id);
+      setMaintenanceDeleteError(null);
+      await onDeleteStore(store.id);
+      await refreshPendingOwnerAccounts();
+    } catch (error) {
+      console.error('Failed to remove non-operating store', error);
+      setMaintenanceDeleteError(toErrorMessage(error, 'Failed to remove the store.'));
+    } finally {
+      setMaintenanceDeleteBusy(null);
+    }
+  }, [onDeleteStore, refreshPendingOwnerAccounts]);
 
   useEffect(() => {
     if (!hqMonthOptions.includes(selectedMonthKey)) {
@@ -8503,6 +8659,9 @@ const HQDashboard: React.FC<{
       missingReports,
     };
   }), [hqCountries, reportingStores, sales, selectedMonthKey, fxRates]);
+  const selectedCountryPerformance = selectedCountry === 'all'
+    ? null
+    : countryPerformance.find((row) => row.country === selectedCountry) ?? null;
 
   const formatCountryLocalTotals = (totals: Record<string, number>) => {
     const entries = Object.entries(totals).sort(([a], [b]) => a.localeCompare(b));
@@ -8630,16 +8789,31 @@ const HQDashboard: React.FC<{
     setSelectedStore(store);
   }, [selectedMonthKey]);
 
-  const closeHqStore = useCallback(() => {
+  const replaceWithHqDashboard = useCallback(() => {
     if (typeof window !== 'undefined') {
-      const state = window.history.state as { screen?: string; storeId?: string } | null;
-      if (state?.screen === 'hq-detail') {
-        window.history.back();
-        return;
-      }
+      const url = new URL(window.location.href);
+      url.searchParams.delete('hs');
+      url.searchParams.delete('hm');
+      window.history.replaceState(
+        {
+          screen: 'hq',
+          selectedStoreId: null,
+          overlay: null,
+          settingsTab,
+        },
+        '',
+        `${url.pathname}${url.search}${url.hash}`
+      );
     }
+    setIsSettingsOpen(false);
+    setIsSalesAnalyticsOpen(false);
     setSelectedStore(null);
-  }, []);
+  }, [settingsTab]);
+
+  const closeHqStore = useCallback(() => {
+    replaceWithHqDashboard();
+    void refreshPendingOwnerAccounts();
+  }, [refreshPendingOwnerAccounts, replaceWithHqDashboard]);
 
   useEffect(() => {
     if (typeof window === 'undefined' || navRestoreRef.current) return;
@@ -8662,7 +8836,7 @@ const HQDashboard: React.FC<{
       ? null
       : hasAppHistory
         ? historyStoreId
-        : window.localStorage.getItem(HQ_SELECTED_STORE_STORAGE_KEY);
+        : null;
     if (persistedStoreId && stores.length === 0) return;
 
     const restoredStore = persistedStoreId
@@ -8721,6 +8895,10 @@ const HQDashboard: React.FC<{
         overlay?: string;
         settingsTab?: string;
       } | null;
+      if (selectedStore && (!state || state.screen !== 'hq')) {
+        replaceWithHqDashboard();
+        return;
+      }
       if (!state || (state.screen !== 'hq' && state.screen !== 'hq-detail')) {
         return;
       }
@@ -8745,7 +8923,7 @@ const HQDashboard: React.FC<{
     };
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
-  }, [stores]);
+  }, [replaceWithHqDashboard, selectedStore, stores]);
 
   useEffect(() => {
     if (!selectedStore) return;
@@ -8940,13 +9118,49 @@ const HQDashboard: React.FC<{
             fxSourceText={fxSourceText}
        />
 
-       <div className="mx-auto w-full max-w-7xl flex-1 space-y-6 overflow-y-auto p-4 sm:p-6 lg:space-y-8 lg:p-8">
+       <div className="mx-auto w-full max-w-7xl flex-1 space-y-4 overflow-y-auto p-3 sm:space-y-6 sm:p-6 lg:space-y-8 lg:p-8">
            <section className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-              <div className="p-6 border-b bg-gray-50">
+              <div className="p-3 sm:hidden">
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                      <div>
+                          <div className="text-[10px] font-black uppercase tracking-[0.14em] text-gray-400">Store review</div>
+                          <h2 className="mt-0.5 text-base font-extrabold">Choose month and country</h2>
+                      </div>
+                      <div className="shrink-0 text-xs font-bold text-gray-500">{filteredStores.length} stores</div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                      <label className="block min-w-0">
+                          <span className="mb-1 block text-[10px] font-black uppercase text-gray-500">Reporting month</span>
+                          <select
+                              value={selectedMonthKey}
+                              onChange={(event) => setSelectedMonthKey(event.target.value)}
+                              className="min-h-11 w-full rounded-xl border border-gray-200 bg-gray-50 px-2.5 py-2 text-sm font-extrabold"
+                          >
+                              {hqMonthOptions.map((monthKey) => (
+                                  <option key={monthKey} value={monthKey}>{formatMonthKeyLabel(monthKey)}</option>
+                              ))}
+                          </select>
+                      </label>
+                      <label className="block min-w-0">
+                          <span className="mb-1 block text-[10px] font-black uppercase text-gray-500">Country</span>
+                          <select
+                              value={selectedCountry}
+                              onChange={(event) => setSelectedCountry(event.target.value)}
+                              className="min-h-11 w-full rounded-xl border border-gray-200 bg-gray-50 px-2.5 py-2 text-sm font-extrabold"
+                          >
+                              <option value="all">All countries</option>
+                              {countryPerformance.map((row) => (
+                                  <option key={row.country} value={row.country}>{row.country}</option>
+                              ))}
+                          </select>
+                      </label>
+                  </div>
+              </div>
+              <div className="hidden border-b bg-gray-50 p-4 sm:block sm:p-6">
                   <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
                       <div>
                           <div className="text-xs font-black uppercase tracking-[0.18em] text-gray-400">Store review</div>
-                          <h2 className="text-2xl font-extrabold mt-1">Review stores by month</h2>
+                          <h2 className="mt-1 text-xl font-extrabold sm:text-2xl">Review stores by month</h2>
                           <p className="text-sm text-gray-500 mt-1">Select a month, then choose a country. The matching stores appear below.</p>
                       </div>
                       <label className="block min-w-[220px]">
@@ -8963,39 +9177,68 @@ const HQDashboard: React.FC<{
                       </label>
                   </div>
               </div>
-              <div className="p-4 sm:p-6">
+              <div className="hidden p-4 sm:block sm:p-6">
                   <div className="mb-3 text-xs font-black uppercase tracking-[0.14em] text-gray-500">2. Select country</div>
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                  <div className="sm:hidden">
+                      <select
+                          value={selectedCountry}
+                          onChange={(event) => setSelectedCountry(event.target.value)}
+                          className="min-h-12 w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm font-extrabold"
+                      >
+                          <option value="all">All countries · {reportingStores.length} stores</option>
+                          {countryPerformance.map((row) => (
+                              <option key={row.country} value={row.country}>{row.country} · {row.stores} store{row.stores === 1 ? '' : 's'}</option>
+                          ))}
+                      </select>
+                      <div className={`mt-2 rounded-xl border p-3 ${selectedCountry === 'all' ? 'border-black bg-black text-white' : 'border-gray-200 bg-gray-50 text-gray-950'}`}>
+                          <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                  <div className="text-xs font-bold opacity-60">{selectedCountry === 'all' ? 'All countries' : selectedCountryPerformance?.country}</div>
+                                  <div className="mt-1 text-xl font-extrabold">{selectedCountry === 'all' ? reportingStores.length : selectedCountryPerformance?.stores ?? 0} stores</div>
+                              </div>
+                              {selectedCountryPerformance && (
+                                  <span className={`rounded-full px-2 py-1 text-[9px] font-black ${selectedCountryPerformance.missingReports > 0 ? 'bg-red-100 text-red-700' : 'bg-emerald-100 text-emerald-700'}`}>
+                                      {selectedCountryPerformance.missingReports > 0 ? `${selectedCountryPerformance.missingReports} report days missing` : 'Reports complete'}
+                                  </span>
+                              )}
+                          </div>
+                          <div className="mt-2 text-xs font-bold">
+                              {selectedCountryPerformance ? formatCountryLocalTotals(selectedCountryPerformance.localTotals) : `JPY ${Math.round(metrics.totalSalesCurrentMonth).toLocaleString()}`}
+                          </div>
+                          {selectedCountryPerformance && <div className="mt-0.5 text-[11px] opacity-60">JPY {Math.round(selectedCountryPerformance.totalJPY).toLocaleString()}</div>}
+                      </div>
+                  </div>
+                  <div className="hidden gap-3 sm:grid sm:grid-cols-2 xl:grid-cols-4">
                       <button
                           type="button"
                           onClick={() => setSelectedCountry('all')}
-                          className={`min-h-[132px] rounded-xl border p-4 text-left transition ${
+                          className={`min-h-[108px] rounded-xl border p-3 text-left transition sm:min-h-[132px] sm:p-4 ${
                               selectedCountry === 'all'
                                   ? 'border-black bg-black text-white shadow-lg'
                                   : 'border-gray-200 bg-white hover:border-gray-400'
                           }`}
                       >
                           <div className="text-xs font-bold opacity-60 uppercase">All countries</div>
-                          <div className="text-2xl font-extrabold mt-1">{reportingStores.length} stores</div>
-                          <div className="text-xs mt-2 opacity-70">Network overview</div>
+                          <div className="mt-1 text-xl font-extrabold sm:text-2xl">{reportingStores.length} stores</div>
+                          <div className="mt-1.5 text-[11px] opacity-70 sm:mt-2 sm:text-xs">Network overview</div>
                       </button>
                       {countryPerformance.map((row) => (
                           <button
                               key={row.country}
                               type="button"
                               onClick={() => setSelectedCountry(row.country)}
-                              className={`min-h-[132px] rounded-xl border p-4 text-left transition ${
+                              className={`min-h-[108px] rounded-xl border p-3 text-left transition sm:min-h-[132px] sm:p-4 ${
                                   selectedCountry === row.country
                                       ? 'border-black bg-black text-white shadow-lg'
                                       : 'border-gray-200 bg-white hover:border-gray-400'
                               }`}
                           >
-                              <div className="flex min-w-0 items-start justify-between gap-2">
+                              <div className="flex min-w-0 flex-col items-start gap-1.5 sm:flex-row sm:justify-between sm:gap-2">
                                   <div className="min-w-0">
                                       <div className="font-extrabold">{row.country}</div>
                                       <div className="text-xs mt-0.5 opacity-60">{row.stores} store{row.stores === 1 ? '' : 's'}</div>
                                   </div>
-                                  <span className={`max-w-[112px] shrink-0 rounded-full px-2 py-1 text-right text-[10px] font-black leading-tight ${
+                                  <span className={`max-w-full shrink-0 rounded-full px-2 py-1 text-left text-[9px] font-black leading-tight sm:max-w-[112px] sm:text-right sm:text-[10px] ${
                                       selectedCountry === row.country
                                           ? 'bg-white/15 text-white'
                                           : row.missingReports > 0
@@ -9005,12 +9248,65 @@ const HQDashboard: React.FC<{
                                       {row.missingReports > 0 ? `${row.missingReports} report days missing` : 'Reports complete'}
                                   </span>
                               </div>
-                              <div className="text-sm font-bold mt-3">{formatCountryLocalTotals(row.localTotals)}</div>
-                              <div className="text-xs mt-1 opacity-60">JPY {Math.round(row.totalJPY).toLocaleString()}</div>
+                              <div className="mt-2 text-xs font-bold sm:mt-3 sm:text-sm">{formatCountryLocalTotals(row.localTotals)}</div>
+                              <div className="mt-0.5 text-[11px] opacity-60 sm:mt-1 sm:text-xs">JPY {Math.round(row.totalJPY).toLocaleString()}</div>
                           </button>
                       ))}
                   </div>
               </div>
+           </section>
+
+           <section>
+             <div className="mb-2 flex items-end justify-between gap-3 px-1">
+               <div>
+                 <div className="text-[10px] font-black uppercase tracking-[0.14em] text-gray-400">Select store</div>
+                 <h3 className="mt-0.5 text-lg font-extrabold">
+                   {selectedCountry === 'all' ? 'All Stores' : `${selectedCountry} Stores`}
+                 </h3>
+               </div>
+               <div className="text-xs font-bold text-gray-500">{filteredStores.length} stores</div>
+             </div>
+             <div className="grid overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm md:grid-cols-2 md:gap-3 md:overflow-visible md:border-0 md:bg-transparent md:shadow-none xl:grid-cols-3">
+               {filteredStores.map((store) => {
+                 const monthSales = dedupeSalesByStoreDate(sales)
+                   .filter((sale) => sale.storeId === store.id && extractMonthKey(sale.date) === selectedMonthKey);
+                 const localSales = monthSales.reduce((sum, sale) => sum + Number(sale.totalAmount || 0), 0);
+                 const salesJPY = convertToJPY(localSales, store.currency, fxRates);
+                 const reportStatus = getStoreMonthReportStatus(sales, store.id, selectedMonthKey);
+                 return (
+                   <button
+                     type="button"
+                     key={store.id}
+                     onClick={() => openHqStore(store)}
+                     className="grid min-h-[82px] w-full grid-cols-[36px_minmax(0,1fr)_auto] items-center gap-2.5 border-b border-gray-100 px-3 py-2.5 text-left last:border-b-0 active:bg-gray-50 md:rounded-xl md:border md:border-gray-200 md:bg-white md:shadow-sm md:last:border"
+                   >
+                     <span className="flex h-9 w-9 items-center justify-center rounded-full bg-gray-100 text-xs font-black text-gray-600">
+                       {store.country.substring(0, 2).toUpperCase()}
+                     </span>
+                     <span className="min-w-0">
+                       <span className="block truncate text-sm font-extrabold text-gray-950">{store.name}</span>
+                       <span className="mt-0.5 block truncate text-[11px] text-gray-500">{store.city}, {store.country}</span>
+                       <span className="mt-1 block text-xs font-bold text-gray-900">
+                         {store.currency} {Math.round(localSales).toLocaleString()}
+                         {store.currency !== 'JPY' && salesJPY !== null && (
+                           <span className="ml-1.5 font-medium text-gray-400">· JPY {Math.round(salesJPY).toLocaleString()}</span>
+                         )}
+                       </span>
+                     </span>
+                     <span className="flex min-w-[72px] flex-col items-end gap-1.5">
+                       <span className={`rounded-full px-2 py-1 text-[9px] font-black leading-tight ${
+                         reportStatus.missingDates.length > 0
+                           ? 'bg-red-100 text-red-700'
+                           : 'bg-emerald-100 text-emerald-700'
+                       }`}>
+                         {reportStatus.missingDates.length > 0 ? `${reportStatus.missingDates.length} days missing` : 'Complete'}
+                       </span>
+                       <ChevronRight className="h-4 w-4 text-gray-400" />
+                     </span>
+                   </button>
+                 );
+               })}
+             </div>
            </section>
 
            <details className="group overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
@@ -9162,7 +9458,7 @@ const HQDashboard: React.FC<{
            </details>
 
            {/* Store Grid (Clickable) */}
-           <div>
+           <div className="hidden">
               <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-2 mb-4">
                   <div>
                       <div className="text-xs font-black uppercase tracking-[0.18em] text-gray-400">Next: choose a store</div>
@@ -9236,13 +9532,13 @@ const HQDashboard: React.FC<{
              </div>
            </details>
 
-           {(testStoreSummaries.length > 0 || quarantinedStores.length > 0) && (
+           {(testStoreSummaries.length > 0 || quarantinedStores.length > 0 || pendingOwnerAccounts.length > 0 || pendingOwnerError) && (
              <details className="group overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
                <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-4 p-5 [&::-webkit-details-marker]:hidden">
                  <div className="min-w-0">
                    <div className="font-extrabold">Data management</div>
                    <div className="mt-1 text-xs text-gray-500">
-                     Test data {testStoreSummaries.length} · Held records {quarantinedStores.length}. Open only when maintenance is required.
+                     Test {testStoreSummaries.length} · Held {quarantinedStores.length} · Approval waiting {pendingOwnerAccounts.length}
                    </div>
                  </div>
                  <ChevronRight className="h-5 w-5 shrink-0 text-gray-400 transition group-open:rotate-90" />
@@ -9268,13 +9564,23 @@ const HQDashboard: React.FC<{
                                </div>
                                <div className="mt-2 font-extrabold">{summary.store.currency} {Math.round(summary.salesTotal).toLocaleString()}</div>
                              </div>
-                             <button
-                               type="button"
-                               onClick={() => openHqStore(summary.store, 'inventory', summary.monthKey)}
-                               className="min-h-11 rounded-xl bg-black px-4 py-2.5 text-sm font-extrabold text-white hover:bg-gray-800"
-                             >
-                               Open test cost analysis
-                             </button>
+                             <div className="flex flex-col gap-2 sm:items-end">
+                               <button
+                                 type="button"
+                                 onClick={() => openHqStore(summary.store, 'inventory', summary.monthKey)}
+                                 className="min-h-11 rounded-xl bg-black px-4 py-2.5 text-sm font-extrabold text-white hover:bg-gray-800"
+                               >
+                                 Open test cost analysis
+                               </button>
+                               <button
+                                 type="button"
+                                 onClick={() => void removeMaintenanceStore(summary.store)}
+                                 disabled={maintenanceDeleteBusy === summary.store.id}
+                                 className="min-h-11 rounded-xl border border-red-200 px-4 py-2.5 text-sm font-extrabold text-red-700 hover:bg-red-50 disabled:opacity-50"
+                               >
+                                 {maintenanceDeleteBusy === summary.store.id ? 'Removing…' : 'Archive and remove'}
+                               </button>
+                             </div>
                            </div>
                          </div>
                        ))}
@@ -9293,19 +9599,75 @@ const HQDashboard: React.FC<{
                      </div>
                      <div className="grid gap-3 lg:grid-cols-2">
                        {quarantinedStores.map((store) => (
-                         <button
-                           key={store.id}
-                           type="button"
-                           onClick={() => openHqStore(store)}
-                           className="min-h-11 rounded-xl border border-red-200 bg-white p-4 text-left hover:border-red-400"
-                         >
+                         <div key={store.id} className="rounded-xl border border-red-200 bg-white p-4">
                            <div className="font-extrabold">{store.name}</div>
                            <div className="mt-1 text-xs text-gray-500">{store.city}, {store.country} · {store.currency}</div>
                            <div className="mt-2 text-sm text-red-800">{store.dataQualityNote ?? 'HQ review required.'}</div>
-                         </button>
+                           <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+                             <button
+                               type="button"
+                               onClick={() => openHqStore(store)}
+                               className="min-h-11 rounded-xl bg-black px-4 py-2.5 text-sm font-extrabold text-white"
+                             >
+                               Open record
+                             </button>
+                             <button
+                               type="button"
+                               onClick={() => void removeMaintenanceStore(store)}
+                               disabled={maintenanceDeleteBusy === store.id}
+                               className="min-h-11 rounded-xl border border-red-200 px-4 py-2.5 text-sm font-extrabold text-red-700 hover:bg-red-50 disabled:opacity-50"
+                             >
+                               {maintenanceDeleteBusy === store.id ? 'Removing…' : 'Archive and remove'}
+                             </button>
+                           </div>
+                         </div>
                        ))}
                      </div>
                    </section>
+                 )}
+
+                 {(pendingOwnerAccounts.length > 0 || pendingOwnerError || pendingOwnerSuccess) && (
+                   <section>
+                     <div className="mb-3">
+                       <div className="text-xs font-black uppercase tracking-[0.14em] text-blue-700">Accounts waiting for HQ approval</div>
+                       <div className="mt-1 text-xs text-gray-500">
+                         An unlinked owner cannot choose a store themselves. Select the correct operating store here and approve it.
+                       </div>
+                     </div>
+                     <div className="space-y-3">
+                       {pendingOwnerAccounts.map(account => (
+                         <div key={account.userId} className="rounded-xl border border-blue-200 bg-white p-4">
+                           <div className="font-extrabold">{account.name || 'Owner account'}</div>
+                           <div className="mt-1 break-all text-sm text-gray-600">{account.email}</div>
+                           <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                             <select
+                               value={pendingOwnerTargets[account.email] ?? ''}
+                               onChange={(event) => setPendingOwnerTargets(prev => ({ ...prev, [account.email]: event.target.value }))}
+                               className="min-h-11 flex-1 rounded-xl border border-gray-200 bg-white px-3 text-sm font-bold"
+                             >
+                               <option value="">Select operating store</option>
+                               {reportingStores.map(store => (
+                                 <option key={store.id} value={store.id}>{store.name} · {store.city}, {store.country}</option>
+                               ))}
+                             </select>
+                             <button
+                               type="button"
+                               onClick={() => void assignPendingOwner(account.email)}
+                               disabled={pendingOwnerBusy === account.email || !pendingOwnerTargets[account.email]}
+                               className="min-h-11 rounded-xl bg-black px-4 py-2.5 text-sm font-extrabold text-white disabled:opacity-50"
+                             >
+                               {pendingOwnerBusy === account.email ? 'Approving…' : 'Approve and link'}
+                             </button>
+                           </div>
+                         </div>
+                       ))}
+                       {pendingOwnerSuccess && <div className="rounded-xl bg-emerald-50 p-3 text-sm font-bold text-emerald-800">Linked: {pendingOwnerSuccess}</div>}
+                       {pendingOwnerError && <div className="rounded-xl bg-red-50 p-3 text-sm font-bold text-red-800">{pendingOwnerError}</div>}
+                     </div>
+                   </section>
+                 )}
+                 {maintenanceDeleteError && (
+                   <div className="rounded-xl bg-red-50 p-3 text-sm font-bold text-red-800">{maintenanceDeleteError}</div>
                  )}
                </div>
              </details>
@@ -9351,6 +9713,14 @@ const StoreDashboard: React.FC<{
     const popLockRef = useRef(false);
     const mainContentRef = useRef<HTMLDivElement>(null);
     const ownerViewStorageKey = `${OWNER_VIEW_STORAGE_PREFIX}${store.id}`;
+    const ownerLanguageStorageKey = `${OWNER_LANGUAGE_STORAGE_PREFIX}${store.id}`;
+    const [ownerLocale, setOwnerLocale] = useState<OwnerLocale>(() => {
+        if (typeof window === 'undefined') return defaultOwnerLocaleForCountry(store.country);
+        const saved = window.localStorage.getItem(`${OWNER_LANGUAGE_STORAGE_PREFIX}${store.id}`);
+        return saved === 'en' || saved === 'ja' || saved === 'zh-CN' || saved === 'zh-TW' || saved === 'vi' || saved === 'ko'
+            ? saved
+            : defaultOwnerLocaleForCountry(store.country);
+    });
     const storeMenus = menus.filter(m => m.storeId === store.id);
     const storeSetMenus = setMenus.filter(sm => sm.storeId === store.id);
     const storeEmployees = employees.filter(e => e.storeId === store.id);
@@ -9390,6 +9760,21 @@ const StoreDashboard: React.FC<{
     useEffect(() => {
         setMenuSection('items');
     }, [store.id]);
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        const saved = window.localStorage.getItem(ownerLanguageStorageKey);
+        setOwnerLocale(
+            saved === 'en' || saved === 'ja' || saved === 'zh-CN' || saved === 'zh-TW' || saved === 'vi' || saved === 'ko'
+                ? saved
+                : defaultOwnerLocaleForCountry(store.country),
+        );
+    }, [ownerLanguageStorageKey, store.country]);
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        window.localStorage.setItem(ownerLanguageStorageKey, ownerLocale);
+    }, [ownerLanguageStorageKey, ownerLocale]);
 
     useEffect(() => {
         mainContentRef.current?.scrollTo({ top: 0, behavior: 'auto' });
@@ -9768,6 +10153,7 @@ const StoreDashboard: React.FC<{
     }, [storeMenus, storeSetMenus]);
 
     return (
+      <OwnerLanguageBoundary locale={ownerLocale}>
         <div className="min-h-screen bg-gray-50 flex flex-col">
             {editingMenu && (
                 <RecipeEditor
@@ -9890,7 +10276,7 @@ const StoreDashboard: React.FC<{
             )}
 
             <div className="bg-white border-b px-6 py-4 flex justify-between items-center sticky top-0 z-40">
-                <div className="flex items-center gap-4">
+                <div className="flex min-w-0 items-center gap-3 sm:gap-4" data-owner-i18n-skip="true">
                     <div className="w-10 h-10 bg-indigo-600 text-white rounded-xl flex items-center justify-center font-bold text-lg shadow-lg shadow-indigo-200">
                         {store.name.substring(0, 2).toUpperCase()}
                     </div>
@@ -9899,9 +10285,10 @@ const StoreDashboard: React.FC<{
                         <div className="text-xs text-gray-500 font-medium">{store.city}, {store.country}</div>
                     </div>
                 </div>
-                <div className="flex items-center gap-4">
+                <div className="flex items-center gap-2 sm:gap-4">
+                    <OwnerLanguageSwitch locale={ownerLocale} onChange={setOwnerLocale} />
                      <div className="text-right hidden md:block">
-                        <div className="font-bold text-sm">{user.name}</div>
+                        <div className="font-bold text-sm" data-owner-i18n-skip="true">{user.name}</div>
                         <div className="text-xs text-gray-500">Store Manager</div>
                      </div>
                     <button aria-label="Sign out" onClick={onLogout} className="flex h-11 w-11 items-center justify-center rounded-full transition hover:bg-gray-100"><LogOut className="w-5 h-5 text-gray-600" /></button>
@@ -9961,7 +10348,7 @@ const StoreDashboard: React.FC<{
                                 type="button"
                                 aria-label={item.aria}
                                 onClick={item.action}
-                                className={`flex min-w-0 flex-1 flex-col items-center gap-0.5 rounded-xl px-1 py-1.5 ${
+                                className={`flex min-h-11 min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-xl px-1 py-1 ${
                                     active ? 'bg-gray-100 text-black' : 'text-gray-400'
                                 }`}
                             >
@@ -10101,7 +10488,7 @@ const StoreDashboard: React.FC<{
     key={d}
     type="button"
     onClick={() => { setReportDate(d); setView('report'); }}
-    className="px-2 py-1 bg-red-200 text-red-800 text-xs font-bold rounded hover:bg-red-300 transition"
+    className="min-h-10 rounded-lg bg-red-200 px-3 py-2 text-xs font-bold text-red-800 transition hover:bg-red-300"
   >
     {d}
   </button>
@@ -10110,7 +10497,7 @@ const StoreDashboard: React.FC<{
                                           <button
                                             type="button"
                                             onClick={openOwnerMissingCalendar}
-                                            className="px-2 py-1 bg-white text-red-700 text-xs font-bold rounded border border-red-200 hover:bg-red-50 transition"
+                                            className="min-h-10 rounded-lg border border-red-200 bg-white px-3 py-2 text-xs font-bold text-red-700 transition hover:bg-red-50"
                                           >
                                             View Older Dates
                                           </button>
@@ -10418,6 +10805,7 @@ const StoreDashboard: React.FC<{
                 </div>
             </div>
         </div>
+      </OwnerLanguageBoundary>
     );
 };
 
@@ -11483,6 +11871,7 @@ if (localOwnerPreviewMode) {
         DEMO PREVIEW · Sample numbers only · Never use this screen to verify operating data
       </div>
       <StoreDashboard
+        key={previewStore.id}
         user={previewUser}
         store={previewStore}
         onLogout={() => {
@@ -11628,13 +12017,16 @@ if (!resolvedUser) {
                 await refreshAll();
               }}
               onDeleteStore={async (storeId) => {
-                setStores(prev => prev.filter(s => s.id !== storeId));
-                const { error } = await supabase.from('stores').delete().eq('id', storeId);
+                const target = stores.find(store => store.id === storeId);
+                if (!target) throw new Error('Store not found. Refresh and try again.');
+                const { error } = await supabase.rpc('purge_non_operating_store', {
+                  p_store_id: storeId,
+                  p_confirmation: target.name,
+                });
                 if (error) {
-                  await refreshAll();
                   throw error;
                 }
-                schedulePartialRefresh(['stores']);
+                await refreshAll();
               }}
               onUpdateMenu={async (m) => {
                 beginScopeMutation(['menus']);
@@ -11779,6 +12171,7 @@ if (myStore.reportingStatus === 'quarantined') {
 
   return (
       <StoreDashboard
+          key={myStore.id}
           user={user}
           store={myStore}
           onLogout={handleLogout}

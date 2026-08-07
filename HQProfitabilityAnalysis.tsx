@@ -530,14 +530,14 @@ const HQProfitabilityAnalysis: React.FC<Props> = ({
 
   return (
     <section className="overflow-hidden rounded-2xl border border-slate-300 bg-white shadow-sm">
-      <div className="border-b border-slate-200 bg-slate-950 p-5 text-white sm:p-6">
+      <div className="border-b border-slate-200 bg-slate-950 p-4 text-white sm:p-6">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <div className="flex items-center gap-2 text-xs font-black uppercase tracking-[0.18em] text-slate-400">
               <CircleGauge className="h-4 w-4" /> HQ profitability review
             </div>
-            <h2 className="mt-2 text-2xl font-black">What should each store improve?</h2>
-            <p className="mt-1 max-w-3xl text-sm text-slate-300">
+            <h2 className="mt-1.5 text-xl font-black sm:mt-2 sm:text-2xl">What should each store improve?</h2>
+            <p className="mt-1 max-w-3xl text-xs leading-5 text-slate-300 sm:text-sm">
               {monthLabel} · local currency for store action, JPY estimate for network comparison
             </p>
           </div>
@@ -545,7 +545,7 @@ const HQProfitabilityAnalysis: React.FC<Props> = ({
             type="button"
             onClick={() => void loadAnalysis()}
             disabled={loading}
-            className="inline-flex self-start items-center gap-2 rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-xs font-bold text-slate-200 hover:bg-slate-800 disabled:opacity-50"
+            className="inline-flex min-h-11 self-start items-center gap-2 rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-xs font-bold text-slate-200 hover:bg-slate-800 disabled:opacity-50"
           >
             <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
             Refresh
@@ -559,33 +559,33 @@ const HQProfitabilityAnalysis: React.FC<Props> = ({
         </div>
       ) : null}
 
-      <div className="p-5 sm:p-6">
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+      <div className="p-3 sm:p-6">
+        <div className="grid grid-cols-2 gap-2 sm:gap-3 xl:grid-cols-4">
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 sm:p-4">
             <div className="text-[11px] font-black uppercase tracking-wide text-slate-500">Analysis ready</div>
-            <div className="mt-2 text-2xl font-black text-slate-950">{metrics.ready} / {rows.length}</div>
-            <div className="mt-1 text-xs text-slate-500">Only completed months receive a final margin</div>
+            <div className="mt-1.5 text-lg font-black text-slate-950 sm:mt-2 sm:text-2xl">{metrics.ready} / {rows.length}</div>
+            <div className="mt-1 hidden text-xs text-slate-500 sm:block">Only completed months receive a final margin</div>
           </div>
-          <div className="rounded-xl border border-slate-200 bg-white p-4">
+          <div className="rounded-xl border border-slate-200 bg-white p-3 sm:p-4">
             <div className="text-[11px] font-black uppercase tracking-wide text-slate-500">Net sales</div>
-            <div className="mt-2 text-2xl font-black text-slate-950">JPY {formatAmount(metrics.netSalesJpy)}</div>
-            <div className="mt-1 text-xs text-slate-500">Selected stores with available FX</div>
+            <div className="mt-1.5 break-words text-lg font-black text-slate-950 sm:mt-2 sm:text-2xl">JPY {formatAmount(metrics.netSalesJpy)}</div>
+            <div className="mt-1 hidden text-xs text-slate-500 sm:block">Selected stores with available FX</div>
           </div>
-          <div className="rounded-xl border border-slate-200 bg-white p-4">
+          <div className="rounded-xl border border-slate-200 bg-white p-3 sm:p-4">
             <div className="text-[11px] font-black uppercase tracking-wide text-slate-500">Management profit</div>
-            <div className={`mt-2 text-2xl font-black ${metrics.managementProfitJpy < 0 ? 'text-red-700' : 'text-slate-950'}`}>
+            <div className={`mt-1.5 break-words text-lg font-black sm:mt-2 sm:text-2xl ${metrics.managementProfitJpy < 0 ? 'text-red-700' : 'text-slate-950'}`}>
               JPY {formatAmount(metrics.managementProfitJpy)}
             </div>
-            <div className="mt-1 text-xs text-slate-500">Ready stores only; not statutory profit</div>
+            <div className="mt-1 hidden text-xs text-slate-500 sm:block">Ready stores only; not statutory profit</div>
           </div>
-          <div className={`rounded-xl border p-4 ${
+          <div className={`rounded-xl border p-3 sm:p-4 ${
             metrics.actionNeeded > 0 ? 'border-amber-200 bg-amber-50' : 'border-teal-200 bg-teal-50'
           }`}>
             <div className="text-[11px] font-black uppercase tracking-wide text-slate-500">Target breaches</div>
-            <div className={`mt-2 text-2xl font-black ${metrics.actionNeeded > 0 ? 'text-amber-950' : 'text-teal-950'}`}>
+            <div className={`mt-1.5 text-lg font-black sm:mt-2 sm:text-2xl ${metrics.actionNeeded > 0 ? 'text-amber-950' : 'text-teal-950'}`}>
               {metrics.actionNeeded}
             </div>
-            <div className="mt-1 text-xs text-slate-600">Completed stores needing action</div>
+            <div className="mt-1 hidden text-xs text-slate-600 sm:block">Completed stores needing action</div>
           </div>
         </div>
 
@@ -593,16 +593,16 @@ const HQProfitabilityAnalysis: React.FC<Props> = ({
           <div className="py-16 text-center text-sm font-bold text-slate-500">Loading profitability analysis…</div>
         ) : (
           <>
-            <div className="mt-6 rounded-xl border border-slate-200 p-4">
+            <div className="mt-4 rounded-xl border border-slate-200 p-3 sm:mt-6 sm:p-4">
               <h3 className="text-sm font-black text-slate-950">First actions for HQ</h3>
               <p className="mt-1 text-xs text-slate-500">Highest-impact exception or missing step first.</p>
-              <div className="mt-4 grid gap-3 xl:grid-cols-3">
+              <div className="mt-3 grid gap-2 sm:mt-4 sm:gap-3 xl:grid-cols-3">
                 {topActions.length > 0 ? topActions.map((row, index) => (
                   <button
                     key={row.store.id}
                     type="button"
                     onClick={() => onOpenStore(row.store, row.priority.section)}
-                    className="flex min-h-24 w-full items-start gap-3 rounded-xl border border-slate-200 p-3 text-left hover:border-slate-400 hover:bg-slate-50"
+                    className="flex min-h-0 w-full items-start gap-2.5 rounded-xl border border-slate-200 p-3 text-left hover:border-slate-400 hover:bg-slate-50 sm:min-h-24 sm:gap-3"
                   >
                     <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-950 text-xs font-black text-white">
                       {index + 1}
@@ -610,7 +610,7 @@ const HQProfitabilityAnalysis: React.FC<Props> = ({
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-sm font-black text-slate-950">{row.store.name}</span>
                       <span className="mt-0.5 block text-xs font-bold text-slate-700">{row.priority.title}</span>
-                      <span className="mt-1 block text-[11px] leading-4 text-slate-500">{row.priority.detail}</span>
+                      <span className="mt-1 block max-h-8 overflow-hidden text-[11px] leading-4 text-slate-500 sm:max-h-none">{row.priority.detail}</span>
                     </span>
                     <ArrowRight className="mt-1 h-4 w-4 shrink-0 text-slate-400" />
                   </button>
@@ -625,8 +625,8 @@ const HQProfitabilityAnalysis: React.FC<Props> = ({
               </div>
             </div>
 
-            <details className="group mt-5 overflow-hidden rounded-xl border border-slate-200">
-              <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-3 bg-slate-50 px-4 py-3 [&::-webkit-details-marker]:hidden">
+            <details className="group mt-4 overflow-hidden rounded-xl border border-slate-200 sm:mt-5">
+              <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-3 bg-slate-50 px-3 py-3 sm:px-4 [&::-webkit-details-marker]:hidden">
                 <div className="flex items-center gap-2">
                   <BarChart3 className="h-4 w-4 text-slate-500" />
                   <span>
@@ -659,8 +659,8 @@ const HQProfitabilityAnalysis: React.FC<Props> = ({
               </div>
             </details>
 
-            <details className="group mt-6 overflow-hidden rounded-xl border border-slate-200">
-              <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-3 bg-slate-50 px-4 py-3 [&::-webkit-details-marker]:hidden">
+            <details className="group mt-4 overflow-hidden rounded-xl border border-slate-200 sm:mt-6">
+              <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-3 bg-slate-50 px-3 py-3 sm:px-4 [&::-webkit-details-marker]:hidden">
                 <span>
                   <span className="block text-sm font-black text-slate-950">All store results</span>
                   <span className="mt-0.5 block text-[11px] text-slate-500">Open the full store-by-store figures only when needed.</span>

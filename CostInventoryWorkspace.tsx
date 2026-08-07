@@ -1507,7 +1507,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
             type="button"
             aria-label="Reload cost and inventory"
             onClick={() => void loadData()}
-            className="rounded-xl border border-gray-200 bg-white p-2.5 text-gray-600 hover:bg-gray-50"
+            className="flex h-11 w-11 items-center justify-center rounded-xl border border-gray-200 bg-white text-gray-600 hover:bg-gray-50"
           >
             <RefreshCw className="h-4 w-4" />
           </button>
@@ -1528,7 +1528,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
               setActiveSection(key);
               event.currentTarget.closest('nav')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
             }}
-            className={`min-w-0 rounded-xl px-2 py-2.5 text-[11px] font-extrabold transition md:whitespace-nowrap md:px-5 md:text-sm ${
+            className={`min-h-11 min-w-0 rounded-xl px-2 py-2.5 text-[11px] font-extrabold transition md:whitespace-nowrap md:px-5 md:text-sm ${
               activeSection === key ? 'bg-black text-white' : 'text-gray-500 hover:bg-gray-50 hover:text-black'
             }`}
           >
@@ -1785,7 +1785,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                   type="button"
                   aria-expanded={showMonthlySettings}
                   onClick={() => setShowMonthlySettings((current) => !current)}
-                  className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-bold hover:bg-gray-50"
+                  className="min-h-11 rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-bold hover:bg-gray-50"
                 >
                   Monthly Settings {showMonthlySettings ? 'Close' : 'Open'}
                 </button>
@@ -2290,11 +2290,11 @@ const CostInventoryWorkspace: React.FC<Props> = ({
       )}
 
       {activeSection === 'purchases' && (
-        <>
-          <section className="rounded-2xl border border-gray-200 bg-white p-5">
+        <div className="flex flex-col gap-5">
+          <section className="order-2 rounded-2xl border border-gray-200 bg-white p-5">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div>
-                <h3 className="text-lg font-extrabold">1. Ingredient Purchase Setup</h3>
+                <h3 className="text-lg font-extrabold">2. Ingredient Purchase Setup</h3>
                 <p className="mt-1 text-sm text-gray-500">
                   Review each ingredient in one row and open the form only when changes are needed.
                 </p>
@@ -2316,14 +2316,14 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                     type="button"
                     disabled={!selectedIngredientId || savingKey !== null}
                     onClick={() => void addProfile(selectedIngredientId)}
-                    className="inline-flex w-full items-center justify-center gap-1 rounded-xl bg-black px-3 py-2 text-xs font-bold text-white disabled:opacity-40 sm:w-auto"
+                    className="inline-flex min-h-11 w-full items-center justify-center gap-1 rounded-xl bg-black px-3 py-2 text-xs font-bold text-white disabled:opacity-40 sm:w-auto"
                   >
                     <Plus className="h-4 w-4" /> Add Purchase Setup
                   </button>
                   <button
                     type="button"
                     onClick={() => setShowNewIngredient((current) => !current)}
-                    className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-bold sm:w-auto"
+                    className="min-h-11 w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-bold sm:w-auto"
                   >
                     Add New Ingredient
                   </button>
@@ -2386,7 +2386,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                         <div className="mt-1 text-[11px] text-gray-500">{CATEGORY_LABELS[profile.category]} · {profile.purchaseUnit} · {formatAmount(profile.contentQuantity, 3)} {ingredient?.unit ?? ''}</div>
                       </div>
                       {editable && (
-                        <button type="button" aria-expanded={expanded} onClick={() => setExpandedProfileId(expanded ? null : profile.ingredientId)} className="shrink-0 rounded-lg border border-gray-200 px-3 py-2 text-xs font-bold">
+                        <button type="button" aria-expanded={expanded} onClick={() => setExpandedProfileId(expanded ? null : profile.ingredientId)} className="min-h-11 shrink-0 rounded-lg border border-gray-200 px-3 py-2 text-xs font-bold">
                           {expanded ? 'Close' : 'Edit'}
                         </button>
                       )}
@@ -2539,10 +2539,10 @@ const CostInventoryWorkspace: React.FC<Props> = ({
             </div>
           </section>
 
-          <section className="rounded-2xl border border-gray-200 bg-white p-5">
+          <section className="order-1 rounded-2xl border border-gray-200 bg-white p-5">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div>
-                <h3 className="text-lg font-extrabold">2. Monthly Purchases</h3>
+                <h3 className="text-lg font-extrabold">1. Monthly Purchases</h3>
                 <p className="mt-1 text-sm text-gray-500">Enter package count and invoice total; base-unit quantity is calculated automatically.</p>
               </div>
               {editable && (
@@ -2550,7 +2550,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                   type="button"
                   disabled={activeProfiles.length === 0}
                   onClick={() => setShowPurchaseForm((current) => !current)}
-                  className="inline-flex w-full items-center justify-center gap-1 rounded-xl bg-black px-4 py-2.5 text-xs font-bold text-white disabled:opacity-40 sm:w-auto"
+                  className="inline-flex min-h-11 w-full items-center justify-center gap-1 rounded-xl bg-black px-4 py-2.5 text-xs font-bold text-white disabled:opacity-40 sm:w-auto"
                 >
                   <Plus className="h-4 w-4" /> Add Purchase
                 </button>
@@ -2676,7 +2676,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                     </div>
                     <div className="mt-3 flex items-end justify-between gap-3 border-t border-gray-100 pt-3">
                       <div className="min-w-0 text-xs text-gray-500"><div>{formatAmount(purchase.baseQuantity, 3)} {ingredient?.unit ?? ''} total</div><div className="mt-1 truncate">{[purchase.supplier, purchase.notes].filter(Boolean).join(' · ') || 'No optional note'}</div></div>
-                      {editable && <button type="button" aria-label={`Delete ${purchase.purchaseDate} ${ingredient?.name ?? purchase.ingredientId} purchase`} disabled={savingKey !== null} onClick={() => void deletePurchase(purchase)} className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-red-100 px-3 py-2 text-xs font-bold text-red-600 disabled:opacity-30"><Trash2 className="h-4 w-4" /> Delete</button>}
+                      {editable && <button type="button" aria-label={`Delete ${purchase.purchaseDate} ${ingredient?.name ?? purchase.ingredientId} purchase`} disabled={savingKey !== null} onClick={() => void deletePurchase(purchase)} className="inline-flex min-h-11 shrink-0 items-center gap-1 rounded-lg border border-red-100 px-3 py-2 text-xs font-bold text-red-600 disabled:opacity-30"><Trash2 className="h-4 w-4" /> Delete</button>}
                     </div>
                   </div>
                 );
@@ -2732,7 +2732,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
               </table>
             </div>
           </section>
-        </>
+        </div>
       )}
 
       {activeSection === 'inventory' && (

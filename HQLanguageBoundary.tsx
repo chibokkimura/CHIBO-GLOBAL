@@ -55,6 +55,7 @@ const EXACT_JA: Record<string, string> = {
   'Choose a country and reporting month before opening a store.': '国と対象月を選択してから店舗を開いてください。',
   'Scroll sideways to view every country →': '横にスクロールするとすべての国を確認できます →',
   'Store review': '店舗確認',
+  'Choose month and country': '対象月と国を選択',
   'Review stores by month': '対象月の店舗状況を確認',
   'Select a month, then choose a country. The matching stores appear below.': '対象月を選び、次に国を選択してください。該当する店舗が下に表示されます。',
   '1. Select month': '1. 対象月を選択',
@@ -104,8 +105,23 @@ const EXACT_JA: Record<string, string> = {
   'Sales reporting detail & Excel': '売上報告の詳細・Excel出力',
   'Supply chain setup': '在庫基準設定',
   'Data management': 'データ管理',
+  Test: 'テスト',
+  Held: '保留',
+  'Approval waiting': '承認待ち',
   'Test workspaces': 'テスト環境',
   'Held records': '保留データ',
+  'Accounts waiting for HQ approval': '本部承認待ちのアカウント',
+  'An unlinked owner cannot choose a store themselves. Select the correct operating store here and approve it.': '未連携のオーナーは自分で店舗を選択できません。ここで正しい運営店舗を選び、承認してください。',
+  'Select operating store': '運営店舗を選択',
+  'Approve and link': '承認して連携',
+  'Approving…': '承認中…',
+  'Open record': 'データを開く',
+  'Archive and remove': '保管して削除',
+  'Removing…': '削除中…',
+  'Remove Non-operating Store': '非運営店舗を削除',
+  'Only test or held stores can be removed. A recovery snapshot is saved before all related data is deleted.': 'テスト店舗または保留データのみ削除できます。関連データを削除する前に復旧用スナップショットを保存します。',
+  'Archive and Remove Store': '保管して店舗を削除',
+  'Linked:': '連携完了：',
   'Excluded from operating results.': '運用実績の集計対象外です。',
   'Preserved for review but excluded from HQ totals.': '確認用に保存されていますが、本部集計から除外されています。',
   'Open test cost analysis': 'テスト原価分析を開く',
@@ -143,6 +159,7 @@ const EXACT_JA: Record<string, string> = {
   'Management view only · incomplete months are never treated as zero profit': '経営管理用・未完了の月を利益ゼロとして扱いません',
   'Open the store-by-store local currency, JPY and royalty table when needed.': '必要な場合に店舗別の現地通貨・円換算・ロイヤルティ表を開いてください。',
   'Next: choose a store': '次に店舗を選択',
+  'Select store': '店舗を選択',
   'NEXT: CHOOSE A STORE': '次に店舗を選択',
   'All Stores': 'すべての店舗',
   'Open monthly detail': '月次詳細を開く',
@@ -195,6 +212,9 @@ const EXACT_JA: Record<string, string> = {
   'Linked Accounts:': '連携アカウント：',
   Owner: 'オーナー',
   'Linked Accounts': '連携アカウント',
+  'Account information': 'アカウント情報',
+  'Store settings': '店舗設定',
+  'Royalty (%)': 'ロイヤルティ率',
   'Linked Accounts: —': '連携アカウント：なし',
   'Royalty Rate (%)': 'ロイヤルティ率（%）',
   'Test workspace': 'テスト環境',
@@ -228,6 +248,9 @@ const EXACT_JA: Record<string, string> = {
   'Send email reminder': '督促メールを作成',
   'Store Performance': '店舗実績',
   'Monthly Sales': '月間売上',
+  Month: '月間',
+  '7 Days': '7日間',
+  YoY: '前年比',
   'Weekly Sales (Last 7 Days)': '直近7日間の売上',
   'YoY (This Month)': '前年同月比',
   'No sales data for the last 12 months': '直近12か月の売上データがありません',
@@ -267,13 +290,16 @@ const EXACT_JA: Record<string, string> = {
   'Loading...': '読込中…',
   'Sales Reporting Completeness': '売上報告の完了状況',
   'HQ STORE REVIEW': '本部 店舗月次確認',
+  'HQ store review': '本部 店舗月次確認',
   'Monthly Performance Review': '月次実績確認',
   'Review sales reporting completeness and the store submission before approval.': '承認前に売上報告の完了状況と店舗提出内容を確認します。',
   'REPORTED SALES': '報告売上',
+  'Reported sales': '報告済み売上',
   'Through the latest completed day': '直近の完了日まで',
   'RECEIPT IMAGES': 'レシート画像',
   'Attached to open-day reports': '営業日の報告に添付',
   'REVIEW STATUS': '確認状態',
+  'Review status': '確認状態',
   'Waiting for completion': '入力完了待ち',
   'This store is not ready for approval': 'この店舗はまだ承認できません',
   'Monthly labor and operating totals are incomplete': '月間人件費・運営費が未入力です',
@@ -308,6 +334,8 @@ const EXACT_JA: Record<string, string> = {
   'Monthly note': '月次メモ',
   'HQ reviews the totals entered by the store.': '本部が店舗入力の合計を確認します。',
   'File Import History': 'ファイル取込履歴',
+  'File Import': 'ファイル取込',
+  'Original file': '元ファイル',
   'Open only when a CSV/XLS/XLSX file is available': 'CSV・XLS・XLSXがある場合のみ開いてください',
   'Management view for improving store operations. This is not a statutory accounting statement.': '店舗運営改善のための管理資料です。法定会計書類ではありません。',
   'Monthly management profit is ready': '月次管理利益を確認できます',
@@ -315,6 +343,12 @@ const EXACT_JA: Record<string, string> = {
   'Sales tax removed': '売上税を除外',
   'Actual inventory method': '実地棚卸方式',
   'Monthly amount breakdown': '月間金額内訳',
+  'Food cost': '原価率',
+  'Labor cost': '人件費率',
+  'Management margin': '管理利益率',
+  'Sales-linked fees': '売上連動手数料',
+  'Monthly entered total': '店舗入力の月間合計',
+  'Guest count not entered': '客数未入力',
   'Actual food cost': '実際原価',
   'HQ default rate': '本部初期値',
   'Rent + common area fee': '賃料・共益費',
@@ -322,6 +356,8 @@ const EXACT_JA: Record<string, string> = {
   'Store productivity': '店舗生産性',
   'SALES / GUEST': '客単価',
   'SALES / LABOR HOUR': '労働1時間当たり売上',
+  'Sales / guest': '客単価',
+  'Sales / labor hour': '労働1時間当たり売上',
   'Target reading': '目標比較',
   Labor: '人件費',
   'Prime cost': '主要コスト',
@@ -459,8 +495,15 @@ const EXACT_JA: Record<string, string> = {
 };
 
 const DYNAMIC_JA: Array<[RegExp, (...matches: string[]) => string]> = [
+  [/^Test (\d+) · Held (\d+) · Approval waiting (\d+)$/, (_all, test, held, pending) => `テスト ${test}件・保留 ${held}件・承認待ち ${pending}件`],
+  [/^Linked: (.+)$/, (_all, value) => `連携完了：${value}`],
   [/^Test data (\d+) · Held records (\d+)\. Open only when maintenance is required\.$/, (_all, tests, held) => `テストデータ ${tests}件・保留データ ${held}件。メンテナンス時のみ開いてください。`],
+  [/^(.+) ·$/, (_all, value) => `${translateCore(value)}・`],
+  [/^All countries · (\d+) stores$/, (_all, count) => `すべての国・${count}店舗`],
+  [/^(.+) · (\d+) stores?$/, (_all, country, count) => `${translateCore(country)}・${count}店舗`],
   [/^(\d+) report days missing$/, (_all, count) => `日次報告 未提出 ${count}日`],
+  [/^(\d+) days missing$/, (_all, count) => `未提出 ${count}日`],
+  [/^(.+) Stores$/, (_all, country) => `${translateCore(country)}の店舗`],
   [/^(\d+) daily report\(s\) missing$/, (_all, count) => `日次報告 未提出 ${count}日`],
   [/^(\d+) stores?$/, (_all, count) => `${count}店舗`],
   [/^(\d+) stores? · (.+)$/, (_all, count, value) => `${count}店舗・${translateCore(value)}`],
@@ -481,7 +524,9 @@ const DYNAMIC_JA: Array<[RegExp, (...matches: string[]) => string]> = [
   [/^(\d+)\/(\d+) ingredient counts complete$/, (_all, complete, total) => `食材棚卸 ${complete}/${total}完了`],
   [/^(\d+) item\(s\) still block the variance analysis$/, (_all, count) => `差異分析にはあと${count}件の設定が必要です`],
   [/^Inventory Close (.+)$/, (_all, value) => `棚卸締め ${value}`],
-  [/^(\d+) guests$/, (_all, count) => `${count}名`],
+  [/^Close (\d+\/\d+)$/, (_all, value) => `棚卸 ${value}`],
+  [/^([\d,]+) guests$/, (_all, count) => `${count}名`],
+  [/^Royalty \((.+)\)$/, (_all, rate) => `ロイヤルティ（${rate}）`],
   [/^(\d+) hours$/, (_all, count) => `${count}時間`],
   [/^(.+) pt above target$/, (_all, value) => `目標を${value}ポイント上回っています`],
   [/^Open the graph for (\d+) analysis-ready stores\.$/, (_all, count) => `分析可能な${count}店舗のグラフを開きます。`],
@@ -517,6 +562,13 @@ function translateCore(value: string): string {
     if (match) return replacer(...match);
   }
   return value;
+}
+
+// The owner workspace uses the same Japanese business terminology as HQ.
+// Exporting this small adapter keeps both surfaces consistent without exposing
+// the translation tables or coupling the owner UI to HQ markup.
+export function translateJapaneseUiText(value: string): string {
+  return translateCore(value);
 }
 
 function translateTextNode(value: string): string {
@@ -676,7 +728,7 @@ export const HQLanguageSwitch: React.FC<{
       type="button"
       onClick={() => onChange('ja')}
       aria-pressed={locale === 'ja'}
-      className={`min-h-9 rounded-full px-3 text-xs font-extrabold transition ${
+      className={`min-h-11 rounded-full px-3 text-xs font-extrabold transition ${
         locale === 'ja' ? 'bg-black text-white' : 'text-gray-500 hover:bg-gray-100'
       }`}
     >
@@ -686,7 +738,7 @@ export const HQLanguageSwitch: React.FC<{
       type="button"
       onClick={() => onChange('en')}
       aria-pressed={locale === 'en'}
-      className={`min-h-9 rounded-full px-3 text-xs font-extrabold transition ${
+      className={`min-h-11 rounded-full px-3 text-xs font-extrabold transition ${
         locale === 'en' ? 'bg-black text-white' : 'text-gray-500 hover:bg-gray-100'
       }`}
     >
