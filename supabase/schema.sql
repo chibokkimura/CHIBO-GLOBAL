@@ -1235,6 +1235,43 @@ $$;
 revoke all on function public.list_pending_owner_accounts() from public, anon;
 grant execute on function public.list_pending_owner_accounts() to authenticated, service_role;
 
+create or replace function public.list_owner_account_assignments()
+returns table (
+  user_id uuid,
+  email text,
+  name text,
+  store_id text,
+  store_name text,
+  reporting_status text
+)
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+begin
+  if not public.is_hq() then
+    raise exception 'Not authorized';
+  end if;
+
+  return query
+  select
+    u.user_id,
+    u.email,
+    u.name,
+    u.store_id,
+    s.name,
+    s.reporting_status
+  from public.app_users u
+  left join public.stores s on s.id = u.store_id
+  where u.role = 'OWNER'
+  order by (u.store_id is null) desc, lower(u.email);
+end;
+$$;
+
+revoke all on function public.list_owner_account_assignments() from public, anon;
+grant execute on function public.list_owner_account_assignments() to authenticated, service_role;
+
 create or replace function public.link_account_to_store(
   p_email text,
   p_store_id text
@@ -1259,9 +1296,9 @@ begin
     select 1
     from public.stores s
     where s.id = p_store_id
-      and coalesce(s.reporting_status, 'active') = 'active'
+      and coalesce(s.reporting_status, 'active') in ('active', 'test')
   ) then
-    raise exception 'Only an active operating store can receive an owner account.';
+    raise exception 'Only an operating or test store can receive an owner account.';
   end if;
 
   update public.app_users

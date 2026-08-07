@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useDeferredValue, useRef } from 'react';
 import { User, Store, Menu, SetMenu, Sale, Employee, UserRole, Ingredient, SaleItem, SaleSetItem, RecipeItem } from './types';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, LineChart, Line, ComposedChart, Cell
@@ -502,13 +502,27 @@ async function unlinkAccountFromStore(email: string, storeId: string) {
   if (error) throw error;
 }
 
-async function loadPendingOwnerAccounts(): Promise<{ email: string; name: string; userId: string }[]> {
-  const { data, error } = await supabase.rpc('list_pending_owner_accounts');
+type OwnerAccountAssignment = {
+  email: string;
+  name: string;
+  userId: string;
+  storeId: string | null;
+  storeName: string | null;
+  reportingStatus: Store['reportingStatus'] | null;
+};
+
+const UNLINKED_STORE_TARGET = '__UNLINKED__';
+
+async function loadOwnerAccountAssignments(): Promise<OwnerAccountAssignment[]> {
+  const { data, error } = await supabase.rpc('list_owner_account_assignments');
   if (error) throw error;
   return (data ?? []).map((row: any) => ({
     email: row.email,
     name: row.name,
     userId: row.user_id,
+    storeId: row.store_id ?? null,
+    storeName: row.store_name ?? null,
+    reportingStatus: row.reporting_status ?? null,
   }));
 }
 
@@ -8523,11 +8537,13 @@ const HQDashboard: React.FC<{
       courseCount: setMenus.filter((setMenu) => setMenu.storeId === store.id).length,
     };
   }), [menus, sales, setMenus, testStores]);
-  const [pendingOwnerAccounts, setPendingOwnerAccounts] = useState<{ email: string; name: string; userId: string }[]>([]);
-  const [pendingOwnerTargets, setPendingOwnerTargets] = useState<Record<string, string>>({});
-  const [pendingOwnerBusy, setPendingOwnerBusy] = useState<string | null>(null);
-  const [pendingOwnerError, setPendingOwnerError] = useState<string | null>(null);
-  const [pendingOwnerSuccess, setPendingOwnerSuccess] = useState<string | null>(null);
+  const [ownerAccountAssignments, setOwnerAccountAssignments] = useState<OwnerAccountAssignment[]>([]);
+  const [ownerAccountTargets, setOwnerAccountTargets] = useState<Record<string, string>>({});
+  const [ownerAccountBusy, setOwnerAccountBusy] = useState<string | null>(null);
+  const [ownerAccountError, setOwnerAccountError] = useState<string | null>(null);
+  const [ownerAccountSuccess, setOwnerAccountSuccess] = useState<string | null>(null);
+  const [ownerAccountSearch, setOwnerAccountSearch] = useState('');
+  const deferredOwnerAccountSearch = useDeferredValue(ownerAccountSearch);
   const [maintenanceDeleteBusy, setMaintenanceDeleteBusy] = useState<string | null>(null);
   const [maintenanceDeleteError, setMaintenanceDeleteError] = useState<string | null>(null);
   const filteredStores = useMemo(
@@ -8553,51 +8569,72 @@ const HQDashboard: React.FC<{
     }
   }, []);
 
-  const refreshPendingOwnerAccounts = useCallback(async () => {
+  const accountAssignmentStores = useMemo(
+    () => [...reportingStores, ...testStores].sort((left, right) => left.name.localeCompare(right.name)),
+    [reportingStores, testStores],
+  );
+  const pendingOwnerCount = useMemo(
+    () => ownerAccountAssignments.filter(account => !account.storeId).length,
+    [ownerAccountAssignments],
+  );
+  const visibleOwnerAccountAssignments = useMemo(() => {
+    const query = deferredOwnerAccountSearch.trim().toLowerCase();
+    if (!query) return ownerAccountAssignments;
+    return ownerAccountAssignments.filter(account => (
+      account.email.toLowerCase().includes(query)
+      || account.name.toLowerCase().includes(query)
+      || (account.storeName ?? '').toLowerCase().includes(query)
+    ));
+  }, [deferredOwnerAccountSearch, ownerAccountAssignments]);
+
+  const refreshOwnerAccountAssignments = useCallback(async () => {
     if (isLocalHqPreviewMode()) {
-      setPendingOwnerAccounts([]);
+      setOwnerAccountAssignments([]);
       return;
     }
     try {
-      const rows = await loadPendingOwnerAccounts();
-      setPendingOwnerAccounts(rows);
-      setPendingOwnerError(null);
+      const rows = await loadOwnerAccountAssignments();
+      setOwnerAccountAssignments(rows);
+      setOwnerAccountError(null);
     } catch (error) {
-      console.error('Failed to load pending owner accounts', error);
-      setPendingOwnerError(toErrorMessage(error, 'Failed to load pending accounts.'));
+      console.error('Failed to load owner account assignments', error);
+      setOwnerAccountError(toErrorMessage(error, 'Failed to load owner accounts.'));
     }
   }, []);
 
   useEffect(() => {
-    void refreshPendingOwnerAccounts();
-  }, [refreshPendingOwnerAccounts]);
+    void refreshOwnerAccountAssignments();
+  }, [refreshOwnerAccountAssignments]);
 
-  const assignPendingOwner = useCallback(async (email: string) => {
-    const targetStoreId = pendingOwnerTargets[email];
-    if (!targetStoreId) {
-      setPendingOwnerError('Select an operating store first.');
-      return;
-    }
+  const applyOwnerAccountAssignment = useCallback(async (account: OwnerAccountAssignment) => {
+    const currentTarget = account.storeId ?? UNLINKED_STORE_TARGET;
+    const targetStoreId = ownerAccountTargets[account.email] ?? currentTarget;
+    if (targetStoreId === currentTarget) return;
     try {
-      setPendingOwnerBusy(email);
-      setPendingOwnerError(null);
-      setPendingOwnerSuccess(null);
-      await linkAccountToStore(email, targetStoreId);
-      const targetStore = reportingStores.find(store => store.id === targetStoreId);
-      setPendingOwnerSuccess(`${email} → ${targetStore?.name ?? targetStoreId}`);
-      setPendingOwnerTargets(prev => {
+      setOwnerAccountBusy(account.email);
+      setOwnerAccountError(null);
+      setOwnerAccountSuccess(null);
+      if (targetStoreId === UNLINKED_STORE_TARGET) {
+        if (account.storeId) await unlinkAccountFromStore(account.email, account.storeId);
+        setOwnerAccountSuccess(`${account.email} → Unlinked`);
+      } else {
+        await linkAccountToStore(account.email, targetStoreId);
+        const targetStore = accountAssignmentStores.find(store => store.id === targetStoreId);
+        setOwnerAccountSuccess(`${account.email} → ${targetStore?.name ?? targetStoreId}`);
+      }
+      setOwnerAccountTargets(prev => {
         const next = { ...prev };
-        delete next[email];
+        delete next[account.email];
         return next;
       });
-      await refreshPendingOwnerAccounts();
+      await refreshOwnerAccountAssignments();
     } catch (error) {
-      console.error('Failed to assign pending owner', error);
-      setPendingOwnerError(toErrorMessage(error, 'Failed to approve the account.'));
+      console.error('Failed to update owner account assignment', error);
+      setOwnerAccountError(toErrorMessage(error, 'Failed to update the account connection.'));
     } finally {
-      setPendingOwnerBusy(null);
+      setOwnerAccountBusy(null);
     }
-  }, [pendingOwnerTargets, refreshPendingOwnerAccounts, reportingStores]);
+  }, [accountAssignmentStores, ownerAccountTargets, refreshOwnerAccountAssignments]);
 
   const removeMaintenanceStore = useCallback(async (store: Store) => {
     const confirmation = window.prompt(
@@ -8612,14 +8649,14 @@ const HQDashboard: React.FC<{
       setMaintenanceDeleteBusy(store.id);
       setMaintenanceDeleteError(null);
       await onDeleteStore(store.id);
-      await refreshPendingOwnerAccounts();
+      await refreshOwnerAccountAssignments();
     } catch (error) {
       console.error('Failed to remove non-operating store', error);
       setMaintenanceDeleteError(toErrorMessage(error, 'Failed to remove the store.'));
     } finally {
       setMaintenanceDeleteBusy(null);
     }
-  }, [onDeleteStore, refreshPendingOwnerAccounts]);
+  }, [onDeleteStore, refreshOwnerAccountAssignments]);
 
   useEffect(() => {
     if (!hqMonthOptions.includes(selectedMonthKey)) {
@@ -8812,8 +8849,8 @@ const HQDashboard: React.FC<{
 
   const closeHqStore = useCallback(() => {
     replaceWithHqDashboard();
-    void refreshPendingOwnerAccounts();
-  }, [refreshPendingOwnerAccounts, replaceWithHqDashboard]);
+    void refreshOwnerAccountAssignments();
+  }, [refreshOwnerAccountAssignments, replaceWithHqDashboard]);
 
   useEffect(() => {
     if (typeof window === 'undefined' || navRestoreRef.current) return;
@@ -9532,13 +9569,12 @@ const HQDashboard: React.FC<{
              </div>
            </details>
 
-           {(testStoreSummaries.length > 0 || quarantinedStores.length > 0 || pendingOwnerAccounts.length > 0 || pendingOwnerError) && (
-             <details className="group overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
+           <details className="group overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
                <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-4 p-5 [&::-webkit-details-marker]:hidden">
                  <div className="min-w-0">
                    <div className="font-extrabold">Data management</div>
                    <div className="mt-1 text-xs text-gray-500">
-                     Test {testStoreSummaries.length} · Held {quarantinedStores.length} · Approval waiting {pendingOwnerAccounts.length}
+                     {`Test ${testStoreSummaries.length} · Held ${quarantinedStores.length} · Approval waiting ${pendingOwnerCount}`}
                    </div>
                  </div>
                  <ChevronRight className="h-5 w-5 shrink-0 text-gray-400 transition group-open:rotate-90" />
@@ -9626,52 +9662,90 @@ const HQDashboard: React.FC<{
                    </section>
                  )}
 
-                 {(pendingOwnerAccounts.length > 0 || pendingOwnerError || pendingOwnerSuccess) && (
-                   <section>
-                     <div className="mb-3">
-                       <div className="text-xs font-black uppercase tracking-[0.14em] text-blue-700">Accounts waiting for HQ approval</div>
+                 <section>
+                   <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                     <div>
+                       <div className="text-xs font-black uppercase tracking-[0.14em] text-blue-700">Owner account connections</div>
                        <div className="mt-1 text-xs text-gray-500">
-                         An unlinked owner cannot choose a store themselves. Select the correct operating store here and approve it.
+                         Connect, move, or unlink an owner account here. Unlinking never deletes the account or its data.
                        </div>
                      </div>
-                     <div className="space-y-3">
-                       {pendingOwnerAccounts.map(account => (
+                     <input
+                       type="search"
+                       value={ownerAccountSearch}
+                       onChange={(event) => setOwnerAccountSearch(event.target.value)}
+                       placeholder="Search name, email, or store"
+                       className="min-h-11 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm sm:max-w-xs"
+                     />
+                   </div>
+                   <div className="space-y-3">
+                     {visibleOwnerAccountAssignments.map(account => {
+                       const currentTarget = account.storeId ?? UNLINKED_STORE_TARGET;
+                       const selectedTarget = ownerAccountTargets[account.email] ?? currentTarget;
+                       const hasChange = selectedTarget !== currentTarget;
+                       return (
                          <div key={account.userId} className="rounded-xl border border-blue-200 bg-white p-4">
-                           <div className="font-extrabold">{account.name || 'Owner account'}</div>
-                           <div className="mt-1 break-all text-sm text-gray-600">{account.email}</div>
+                           <div className="flex flex-wrap items-start justify-between gap-2">
+                             <div className="min-w-0">
+                               <div className="font-extrabold">{account.name || 'Owner account'}</div>
+                               <div className="mt-1 break-all text-sm text-gray-600">{account.email}</div>
+                             </div>
+                             <span className={`rounded-full px-2.5 py-1 text-xs font-black ${
+                               account.storeId
+                                 ? account.reportingStatus === 'test'
+                                   ? 'bg-amber-100 text-amber-800'
+                                   : 'bg-emerald-100 text-emerald-800'
+                                 : 'bg-blue-100 text-blue-800'
+                             }`}>
+                               {account.storeId ? account.storeName ?? account.storeId : 'Approval waiting'}
+                             </span>
+                           </div>
                            <div className="mt-3 flex flex-col gap-2 sm:flex-row">
                              <select
-                               value={pendingOwnerTargets[account.email] ?? ''}
-                               onChange={(event) => setPendingOwnerTargets(prev => ({ ...prev, [account.email]: event.target.value }))}
+                               value={selectedTarget}
+                               onChange={(event) => setOwnerAccountTargets(prev => ({ ...prev, [account.email]: event.target.value }))}
                                className="min-h-11 flex-1 rounded-xl border border-gray-200 bg-white px-3 text-sm font-bold"
+                               aria-label={`Store connection for ${account.email}`}
                              >
-                               <option value="">Select operating store</option>
-                               {reportingStores.map(store => (
-                                 <option key={store.id} value={store.id}>{store.name} · {store.city}, {store.country}</option>
-                               ))}
+                               <option value={UNLINKED_STORE_TARGET}>Unlinked / approval waiting</option>
+                               <optgroup label="Test workspaces">
+                                 {testStores.map(store => (
+                                   <option key={store.id} value={store.id}>{store.name} · TEST</option>
+                                 ))}
+                               </optgroup>
+                               <optgroup label="Operating stores">
+                                 {reportingStores.map(store => (
+                                   <option key={store.id} value={store.id}>{store.name} · {store.city}, {store.country}</option>
+                                 ))}
+                               </optgroup>
                              </select>
                              <button
                                type="button"
-                               onClick={() => void assignPendingOwner(account.email)}
-                               disabled={pendingOwnerBusy === account.email || !pendingOwnerTargets[account.email]}
-                               className="min-h-11 rounded-xl bg-black px-4 py-2.5 text-sm font-extrabold text-white disabled:opacity-50"
+                               onClick={() => void applyOwnerAccountAssignment(account)}
+                               disabled={ownerAccountBusy === account.email || !hasChange}
+                               className="min-h-11 rounded-xl bg-black px-4 py-2.5 text-sm font-extrabold text-white disabled:opacity-40"
                              >
-                               {pendingOwnerBusy === account.email ? 'Approving…' : 'Approve and link'}
+                               {ownerAccountBusy === account.email ? 'Applying…' : 'Apply connection'}
                              </button>
                            </div>
                          </div>
-                       ))}
-                       {pendingOwnerSuccess && <div className="rounded-xl bg-emerald-50 p-3 text-sm font-bold text-emerald-800">Linked: {pendingOwnerSuccess}</div>}
-                       {pendingOwnerError && <div className="rounded-xl bg-red-50 p-3 text-sm font-bold text-red-800">{pendingOwnerError}</div>}
-                     </div>
-                   </section>
-                 )}
+                       );
+                     })}
+                     {ownerAccountAssignments.length === 0 && !ownerAccountError && (
+                       <div className="rounded-xl border border-dashed border-gray-300 bg-white p-4 text-sm text-gray-500">No owner accounts found.</div>
+                     )}
+                     {ownerAccountAssignments.length > 0 && visibleOwnerAccountAssignments.length === 0 && (
+                       <div className="rounded-xl border border-dashed border-gray-300 bg-white p-4 text-sm text-gray-500">No matching owner accounts.</div>
+                     )}
+                     {ownerAccountSuccess && <div className="rounded-xl bg-emerald-50 p-3 text-sm font-bold text-emerald-800">Updated: {ownerAccountSuccess}</div>}
+                     {ownerAccountError && <div className="rounded-xl bg-red-50 p-3 text-sm font-bold text-red-800">{ownerAccountError}</div>}
+                   </div>
+                 </section>
                  {maintenanceDeleteError && (
                    <div className="rounded-xl bg-red-50 p-3 text-sm font-bold text-red-800">{maintenanceDeleteError}</div>
                  )}
                </div>
              </details>
-           )}
        </div>
     </div>
     </HQLanguageBoundary>
