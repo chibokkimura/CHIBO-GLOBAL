@@ -56,6 +56,7 @@ type Props = {
   mode: 'owner' | 'hq';
   onOpenSalesReport?: (date: string) => void;
   onOpenInventory?: () => void;
+  initialOwnerStep?: 1 | 2 | 3;
 };
 
 const DEFAULT_TASKS = [
@@ -202,6 +203,7 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
   mode,
   onOpenSalesReport,
   onOpenInventory,
+  initialOwnerStep = 1,
 }) => {
   const preview = isLocalPreview();
   const [monthKey, setMonthKey] = useState(initialMonthKey);
@@ -216,6 +218,7 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
   const [showAllMissingDates, setShowAllMissingDates] = useState(false);
   const [showAllMissingReceipts, setShowAllMissingReceipts] = useState(false);
   const [submissionAttempted, setSubmissionAttempted] = useState(false);
+  const [ownerFocusStep, setOwnerFocusStep] = useState<1 | 2 | 3>(initialOwnerStep);
   const [profitabilityRefreshKey, setProfitabilityRefreshKey] = useState(0);
   const [profitabilityProgress, setProfitabilityProgress] = useState<ProfitabilityProgress>(
     EMPTY_PROFITABILITY_PROGRESS,
@@ -229,7 +232,8 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
     setShowAllMissingDates(false);
     setShowAllMissingReceipts(false);
     setSubmissionAttempted(false);
-  }, [monthKey, store.id]);
+    setOwnerFocusStep(initialOwnerStep);
+  }, [initialOwnerStep, monthKey, store.id]);
 
   const { start: monthStart, end: monthEnd } = useMemo(() => monthBounds(monthKey), [monthKey]);
   const monthSales = useMemo(
@@ -517,6 +521,14 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
     && confirmationComplete
     && submittedToHq;
 
+  useEffect(() => {
+    if (mode !== 'owner' || loading) return;
+    setOwnerFocusStep((current) => {
+      if (current !== 1 || !stepOneComplete) return current;
+      return stepTwoComplete ? 3 : 2;
+    });
+  }, [loading, mode, monthKey, stepOneComplete, stepTwoComplete]);
+
   const refreshProfitability = useCallback((monthlyInputsComplete?: boolean) => {
     if (preview) {
       if (monthlyInputsComplete !== undefined) {
@@ -610,14 +622,8 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
                       ? 'Sales, labor and operating totals are ready'
                       : 'Enter labor, fees, utilities and other monthly totals',
                 complete: stepOneComplete,
-                active: !stepOneComplete,
-                action: () => {
-                  if (!reportingComplete && missingDates[0] && onOpenSalesReport) {
-                    onOpenSalesReport(missingDates[0]);
-                    return;
-                  }
-                  document.getElementById('monthly-totals')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                },
+                active: ownerFocusStep === 1,
+                action: () => setOwnerFocusStep(1),
               },
               {
                 number: 2,
@@ -626,8 +632,8 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
                   ? 'Opening and closing inventory counts are complete'
                   : 'Enter purchases and finish the closing stock count',
                 complete: stepTwoComplete,
-                active: stepOneComplete && !stepTwoComplete,
-                action: () => onOpenInventory?.(),
+                active: ownerFocusStep === 2,
+                action: () => setOwnerFocusStep(2),
               },
               {
                 number: 3,
@@ -644,8 +650,8 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
                       ? 'Waiting for HQ store settings before final profit'
                       : 'Available after totals and inventory are complete',
                 complete: stepThreeComplete,
-                active: stepOneComplete && stepTwoComplete && !stepThreeComplete,
-                action: () => document.getElementById('monthly-result')?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
+                active: ownerFocusStep === 3,
+                action: () => setOwnerFocusStep(3),
               },
             ].map((step) => (
               <button
@@ -687,7 +693,7 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
         </section>
       ) : null}
 
-      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+      <div className={`grid grid-cols-2 gap-3 xl:grid-cols-4 ${mode === 'owner' && ownerFocusStep !== 1 ? 'hidden' : ''}`}>
         <div className="rounded-2xl border border-gray-200 bg-white p-4 sm:p-5">
           <div className="flex items-center justify-between text-[10px] font-bold uppercase text-gray-500 sm:text-xs">
             Reported sales <CircleDollarSign className="h-4 w-4" />
@@ -734,7 +740,7 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
         role={submissionAttempted && warnings.length > 0 ? 'alert' : undefined}
         className={`scroll-mt-24 rounded-2xl border p-5 ${
           warnings.length ? 'border-red-200 bg-red-50' : 'border-emerald-200 bg-emerald-50'
-        } ${submissionAttempted && warnings.length > 0 ? 'ring-2 ring-red-400 ring-offset-2' : ''}`}
+        } ${submissionAttempted && warnings.length > 0 ? 'ring-2 ring-red-400 ring-offset-2' : ''} ${mode === 'owner' && ownerFocusStep !== 3 ? 'hidden' : ''}`}
       >
         <div className="flex items-start gap-3">
           {warnings.length
@@ -762,7 +768,7 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
       <CollapsibleDetails
         key={`sales-checks-${store.id}-${monthKey}-${reportingComplete && receiptsComplete ? 'complete' : 'open'}`}
         initialOpen={!reportingComplete || !receiptsComplete}
-        className="group rounded-2xl border border-gray-200 bg-white"
+        className={`group rounded-2xl border border-gray-200 bg-white ${mode === 'owner' && ownerFocusStep !== 1 ? 'hidden' : ''}`}
       >
         <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-3 p-5 [&::-webkit-details-marker]:hidden">
           <div>
@@ -900,7 +906,7 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
         id="monthly-totals"
         key={`monthly-totals-${store.id}-${monthKey}-${profitabilityProgress.operatingInputsComplete ? 'complete' : 'open'}`}
         initialOpen={!profitabilityProgress.operatingInputsComplete}
-        className="group scroll-mt-24 rounded-2xl border border-gray-200 bg-white"
+        className={`group scroll-mt-24 rounded-2xl border border-gray-200 bg-white ${mode === 'owner' && ownerFocusStep !== 1 ? 'hidden' : ''}`}
       >
         <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-3 p-5 [&::-webkit-details-marker]:hidden">
           <div>
@@ -928,7 +934,7 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
         </div>
       </CollapsibleDetails>
 
-      <CollapsibleDetails className="group rounded-2xl border border-gray-200 bg-white">
+      <CollapsibleDetails className={`group rounded-2xl border border-gray-200 bg-white ${mode === 'owner' && ownerFocusStep !== 1 ? 'hidden' : ''}`}>
         <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-3 p-5 [&::-webkit-details-marker]:hidden">
           <div>
             <div className="font-extrabold">{mode === 'hq' ? '4. File Import History' : 'Optional: import a POS, attendance or cost file'}</div>
@@ -949,7 +955,25 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
         </div>
       </CollapsibleDetails>
 
-      {mode === 'owner' ? (
+      {mode === 'owner' && ownerFocusStep === 1 ? (
+        <section className="rounded-2xl border border-gray-200 bg-white p-5">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <div className="font-extrabold">Next: monthly purchases and inventory</div>
+              <p className="mt-1 text-xs text-gray-500">You can save the current totals as a draft and continue with inventory at any time.</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setOwnerFocusStep(2)}
+              className="min-h-11 shrink-0 rounded-xl bg-black px-4 py-2.5 text-sm font-black text-white hover:bg-gray-800"
+            >
+              Continue to Step 2
+            </button>
+          </div>
+        </section>
+      ) : null}
+
+      {mode === 'owner' && ownerFocusStep === 2 ? (
         <section className="rounded-2xl border border-slate-300 bg-white p-5">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
@@ -967,13 +991,21 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
               disabled={!onOpenInventory}
               className="min-h-11 shrink-0 rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-black text-white hover:bg-slate-800 disabled:opacity-40"
             >
-              {stepTwoComplete ? 'Review Inventory' : 'Open Cost & Inventory'}
+              {stepTwoComplete ? 'Review Inventory' : 'Open Purchases & Inventory'}
+            </button>
+          </div>
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-gray-100 pt-4">
+            <button type="button" onClick={() => setOwnerFocusStep(1)} className="min-h-11 rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-bold">
+              Back to Step 1
+            </button>
+            <button type="button" onClick={() => setOwnerFocusStep(3)} className="min-h-11 rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-bold">
+              Review Step 3
             </button>
           </div>
         </section>
       ) : null}
 
-      <div id="monthly-result" className="scroll-mt-24">
+      <div id="monthly-result" className={`scroll-mt-24 ${mode === 'owner' && ownerFocusStep !== 3 ? 'hidden' : ''}`}>
         <MonthlyProfitabilitySummaryPanel
           store={store}
           monthStart={monthStart}
@@ -987,7 +1019,7 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
       <CollapsibleDetails
         key={`store-confirmation-${store.id}-${monthKey}-${confirmationComplete ? 'complete' : 'open'}`}
         initialOpen={!confirmationComplete}
-        className="group rounded-2xl border border-gray-200 bg-white"
+        className={`group rounded-2xl border border-gray-200 bg-white ${mode === 'owner' && ownerFocusStep !== 3 ? 'hidden' : ''}`}
       >
         <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-3 p-5 [&::-webkit-details-marker]:hidden">
           <div>
@@ -1042,7 +1074,7 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
         </div>
       </CollapsibleDetails>
 
-      <section className="rounded-2xl border border-gray-200 bg-white p-5">
+      <section className={`rounded-2xl border border-gray-200 bg-white p-5 ${mode === 'owner' && ownerFocusStep !== 3 ? 'hidden' : ''}`}>
         <h3 className="font-extrabold">
           {mode === 'hq' ? '7. Notes & Approval' : 'Submit the completed month to HQ'}
         </h3>
@@ -1138,15 +1170,6 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
           </div>
         ) : null}
       </section>
-
-      <div className="rounded-2xl border border-blue-200 bg-blue-50 p-5">
-        <div className="font-extrabold text-blue-900">Continue in Cost & Inventory</div>
-        <p className="mt-1 text-sm text-blue-800">
-          Enter ingredient purchase packs, monthly purchases, waste/adjustments, and opening and closing stock in Cost & Inventory.
-          Once those counts are complete, the system calculates actual food cost and compares it with menu and course recipes,
-          theoretical usage, and the ingredients that need investigation.
-        </p>
-      </div>
 
       {lockedForOwner && (
         <div className="rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm font-bold text-blue-800">

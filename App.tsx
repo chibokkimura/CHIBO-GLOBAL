@@ -4905,7 +4905,7 @@ const MenuManager: React.FC<{
             id: createLocalEntityId('M'),
             storeId: store.id,
             category: '',
-            name: 'New Item',
+            name: '',
             price: 0,
             recipe: []
           })}
@@ -4943,7 +4943,7 @@ const MenuManager: React.FC<{
                 <div className="font-bold text-lg">{store.currency} {menu.price.toLocaleString()}</div>
              </div>
              <div className="mt-4 pt-4 border-t text-xs text-gray-500 flex items-center gap-1">
-                 <Layers className="w-3 h-3"/> {menu.recipe.length} ingredients configured
+                 <Layers className="w-3 h-3"/> {`${menu.recipe.length} ingredients configured`}
              </div>
           </div>
         ))}
@@ -5038,7 +5038,7 @@ const SetMenuEditor: React.FC<{
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200">
             <div className="flex max-h-[calc(100dvh-2rem)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl" onClick={(e) => e.stopPropagation()}>
                 <div className="flex items-center justify-between gap-3 border-b bg-gray-50 p-4 sm:p-6">
-                    <h2 className="min-w-0 text-lg font-bold sm:text-2xl">Edit Set Menu: {setMenu.name || 'New Set Menu'}</h2>
+                    <h2 className="min-w-0 text-lg font-bold sm:text-2xl">{`Edit Set Menu: ${setMenu.name || 'New Set Menu'}`}</h2>
                     <button type="button" aria-label="Close set menu editor" onClick={onBack} className="shrink-0 rounded-full p-2 transition hover:bg-gray-200"><X className="w-6 h-6" /></button>
                 </div>
                 <div className="p-6 overflow-y-auto space-y-6">
@@ -5169,7 +5169,7 @@ const SetMenuManager: React.FC<{
                     onClick={() => onCreate({
                         id: createLocalEntityId('SM'),
                         storeId: store.id,
-                        name: 'New Set Menu',
+                        name: '',
                         price: 0,
                         items: [],
                     })}
@@ -5184,7 +5184,7 @@ const SetMenuManager: React.FC<{
                         <div className="flex justify-between items-start gap-3">
                             <div>
                                 <h3 className="font-bold text-lg">{setMenu.name}</h3>
-                                <div className="text-xs text-gray-500 mt-1">{setMenu.items.length} component menu(s)</div>
+                                <div className="text-xs text-gray-500 mt-1">{`${setMenu.items.length} component menu(s)`}</div>
                             </div>
                             <div className="font-bold text-lg">{store.currency} {setMenu.price.toLocaleString()}</div>
                         </div>
@@ -5347,7 +5347,7 @@ const RecipeEditor: React.FC<{
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200">
             <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
                 <div className="p-6 border-b flex justify-between items-center bg-gray-50">
-                    <h2 className="text-2xl font-bold">Edit Item: {menu.name}</h2>
+                    <h2 className="text-2xl font-bold">{`Edit Item: ${menu.name || 'New Item'}`}</h2>
                     <button onClick={onBack} className="p-2 hover:bg-gray-200 rounded-full transition"><X className="w-6 h-6"/></button>
                 </div>
 
@@ -5601,6 +5601,7 @@ const StaffEditor: React.FC<{
     const [editedEmp, setEditedEmp] = useState(employee);
     const [imageError, setImageError] = useState<string | null>(null);
     const [formError, setFormError] = useState<string | null>(null);
+    const staffImageInputRef = useRef<HTMLInputElement | null>(null);
 
     const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
@@ -5626,18 +5627,26 @@ const StaffEditor: React.FC<{
                 <div className="p-6 space-y-6">
                     {/* Image Upload */}
                     <div className="flex justify-center">
-                        <div className="relative group cursor-pointer">
-                            <input type="file" accept="image/*" onChange={handleImageUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
-                            <div className="w-32 h-32 rounded-full bg-gray-100 border-4 border-white shadow-lg overflow-hidden flex items-center justify-center">
-                                {editedEmp.imageUrl ? (
-                                    <img src={editedEmp.imageUrl} alt="Staff" className="w-full h-full object-cover" />
-                                ) : (
-                                    <UserIcon className="w-12 h-12 text-gray-300" />
-                                )}
-                            </div>
-                            <div className="absolute bottom-0 right-0 bg-black text-white p-2 rounded-full shadow-md z-20 pointer-events-none">
-                                <Camera className="w-4 h-4" />
-                            </div>
+                        <div className="flex flex-col items-center gap-3">
+                            <input ref={staffImageInputRef} type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
+                            <button
+                                type="button"
+                                onClick={() => staffImageInputRef.current?.click()}
+                                className="relative rounded-full focus:outline-none focus:ring-2 focus:ring-black focus:ring-offset-2"
+                                aria-label="Upload staff photo"
+                            >
+                                <div className="w-32 h-32 rounded-full bg-gray-100 border-4 border-white shadow-lg overflow-hidden flex items-center justify-center">
+                                    {editedEmp.imageUrl ? (
+                                        <img src={editedEmp.imageUrl} alt="Staff" className="w-full h-full object-cover" />
+                                    ) : (
+                                        <UserIcon className="w-12 h-12 text-gray-300" />
+                                    )}
+                                </div>
+                                <div className="absolute bottom-0 right-0 bg-black text-white p-2 rounded-full shadow-md pointer-events-none">
+                                    <Camera className="w-4 h-4" />
+                                </div>
+                            </button>
+                            <div className="text-xs font-bold text-gray-500">Upload staff photo</div>
                         </div>
                     </div>
                     <div className="text-center text-[10px] font-extrabold uppercase text-gray-400">Photo · Optional</div>
@@ -5905,6 +5914,7 @@ const HQStoreDetail: React.FC<{
         () => testMonthSales.reduce((sum, sale) => sum + Number(sale.totalAmount || 0), 0),
         [testMonthSales],
     );
+    const hasTestWorkspaceData = testMonthSales.length > 0 || storeMenus.length > 0 || storeSetMenus.length > 0;
     const [editingMenu, setEditingMenu] = useState<Menu | null>(null);
     const [editingSetMenu, setEditingSetMenu] = useState<SetMenu | null>(null);
     const [viewingReceipt, setViewingReceipt] = useState<string | null>(null);
@@ -7455,14 +7465,16 @@ const HQStoreDetail: React.FC<{
                                 Test workspace
                             </div>
                             <h2 className="mt-2 text-xl font-extrabold text-gray-950">
-                                Cost-analysis sample data is ready
+                                {hasTestWorkspaceData ? 'Test data is ready' : 'Safe workspace for owner-flow testing'}
                             </h2>
                             <p className="mt-1 text-sm text-amber-950/75">
-                                Open Cost &amp; Inventory to review actual cost, theoretical recipe cost, stock counts, and ingredient variances together.
+                                {hasTestWorkspaceData
+                                    ? 'Use the same sales, cost, inventory, menu, and month-close screens as an operating store.'
+                                    : 'Enter test data exactly as an owner would. This workspace never affects HQ operating totals.'}
                             </p>
                             <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
                                 <div className="rounded-xl border border-amber-200 bg-white/80 p-3">
-                                    <div className="text-[10px] font-bold uppercase text-gray-500">Sample month</div>
+                                    <div className="text-[10px] font-bold uppercase text-gray-500">Selected month</div>
                                     <div className="mt-1 font-extrabold">{formatMonthKeyLabel(defaultSalesMonthKey)}</div>
                                 </div>
                                 <div className="rounded-xl border border-amber-200 bg-white/80 p-3">
@@ -8552,6 +8564,11 @@ const HQDashboard: React.FC<{
       : reportingStores.filter((store) => store.country === selectedCountry),
     [reportingStores, selectedCountry],
   );
+  const testStoreIds = useMemo(() => new Set(testStores.map((store) => store.id)), [testStores]);
+  const directoryStores = useMemo(
+    () => selectedCountry === 'all' ? [...testStores, ...filteredStores] : filteredStores,
+    [filteredStores, selectedCountry, testStores],
+  );
   const navRestoreRef = useRef(false);
   const { rates: fxRates, status: fxStatus, sourceText: fxSourceText, refreshNow: refreshFxNow } = useFxRates();
   const convertHqAmountToJpy = useCallback(
@@ -9163,7 +9180,7 @@ const HQDashboard: React.FC<{
                           <div className="text-[10px] font-black uppercase tracking-[0.14em] text-gray-400">Store review</div>
                           <h2 className="mt-0.5 text-base font-extrabold">Choose month and country</h2>
                       </div>
-                      <div className="shrink-0 text-xs font-bold text-gray-500">{filteredStores.length} stores</div>
+                      <div className="shrink-0 text-xs font-bold text-gray-500">{directoryStores.length} stores</div>
                   </div>
                   <div className="grid grid-cols-2 gap-2">
                       <label className="block min-w-0">
@@ -9222,7 +9239,7 @@ const HQDashboard: React.FC<{
                           onChange={(event) => setSelectedCountry(event.target.value)}
                           className="min-h-12 w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm font-extrabold"
                       >
-                          <option value="all">All countries · {reportingStores.length} stores</option>
+                          <option value="all">All countries · {reportingStores.length} operating stores</option>
                           {countryPerformance.map((row) => (
                               <option key={row.country} value={row.country}>{row.country} · {row.stores} store{row.stores === 1 ? '' : 's'}</option>
                           ))}
@@ -9231,7 +9248,11 @@ const HQDashboard: React.FC<{
                           <div className="flex items-start justify-between gap-3">
                               <div className="min-w-0">
                                   <div className="text-xs font-bold opacity-60">{selectedCountry === 'all' ? 'All countries' : selectedCountryPerformance?.country}</div>
-                                  <div className="mt-1 text-xl font-extrabold">{selectedCountry === 'all' ? reportingStores.length : selectedCountryPerformance?.stores ?? 0} stores</div>
+                                  <div className="mt-1 text-xl font-extrabold">
+                                    {selectedCountry === 'all'
+                                      ? `${reportingStores.length} operating stores`
+                                      : `${selectedCountryPerformance?.stores ?? 0} stores`}
+                                  </div>
                               </div>
                               {selectedCountryPerformance && (
                                   <span className={`rounded-full px-2 py-1 text-[9px] font-black ${selectedCountryPerformance.missingReports > 0 ? 'bg-red-100 text-red-700' : 'bg-emerald-100 text-emerald-700'}`}>
@@ -9256,7 +9277,7 @@ const HQDashboard: React.FC<{
                           }`}
                       >
                           <div className="text-xs font-bold opacity-60 uppercase">All countries</div>
-                          <div className="mt-1 text-xl font-extrabold sm:text-2xl">{reportingStores.length} stores</div>
+                          <div className="mt-1 text-xl font-extrabold sm:text-2xl">{reportingStores.length} operating stores</div>
                           <div className="mt-1.5 text-[11px] opacity-70 sm:mt-2 sm:text-xs">Network overview</div>
                       </button>
                       {countryPerformance.map((row) => (
@@ -9301,27 +9322,43 @@ const HQDashboard: React.FC<{
                    {selectedCountry === 'all' ? 'All Stores' : `${selectedCountry} Stores`}
                  </h3>
                </div>
-               <div className="text-xs font-bold text-gray-500">{filteredStores.length} stores</div>
+               <div className="text-xs font-bold text-gray-500">
+                 {selectedCountry === 'all' && testStores.length > 0
+                   ? `${directoryStores.length} displayed · ${filteredStores.length} operating`
+                   : `${directoryStores.length} stores`}
+               </div>
              </div>
              <div className="grid overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm md:grid-cols-2 md:gap-3 md:overflow-visible md:border-0 md:bg-transparent md:shadow-none xl:grid-cols-3">
-               {filteredStores.map((store) => {
+               {directoryStores.map((store) => {
                  const monthSales = dedupeSalesByStoreDate(sales)
                    .filter((sale) => sale.storeId === store.id && extractMonthKey(sale.date) === selectedMonthKey);
                  const localSales = monthSales.reduce((sum, sale) => sum + Number(sale.totalAmount || 0), 0);
                  const salesJPY = convertToJPY(localSales, store.currency, fxRates);
                  const reportStatus = getStoreMonthReportStatus(sales, store.id, selectedMonthKey);
+                 const isTestWorkspace = testStoreIds.has(store.id);
                  return (
                    <button
                      type="button"
                      key={store.id}
                      onClick={() => openHqStore(store)}
-                     className="grid min-h-[82px] w-full grid-cols-[36px_minmax(0,1fr)_auto] items-center gap-2.5 border-b border-gray-100 px-3 py-2.5 text-left last:border-b-0 active:bg-gray-50 md:rounded-xl md:border md:border-gray-200 md:bg-white md:shadow-sm md:last:border"
+                     className={`grid min-h-[82px] w-full grid-cols-[36px_minmax(0,1fr)_auto] items-center gap-2.5 border-b px-3 py-2.5 text-left last:border-b-0 active:bg-gray-50 md:rounded-xl md:border md:shadow-sm md:last:border ${
+                       isTestWorkspace
+                         ? 'border-amber-200 bg-amber-50/60 md:border-amber-300'
+                         : 'border-gray-100 bg-white md:border-gray-200'
+                     }`}
                    >
-                     <span className="flex h-9 w-9 items-center justify-center rounded-full bg-gray-100 text-xs font-black text-gray-600">
+                     <span className={`flex h-9 w-9 items-center justify-center rounded-full text-xs font-black ${
+                       isTestWorkspace ? 'bg-amber-200 text-amber-900' : 'bg-gray-100 text-gray-600'
+                     }`}>
                        {store.country.substring(0, 2).toUpperCase()}
                      </span>
                      <span className="min-w-0">
-                       <span className="block truncate text-sm font-extrabold text-gray-950">{store.name}</span>
+                       <span className="flex min-w-0 items-center gap-2">
+                         <span className="truncate text-sm font-extrabold text-gray-950">{store.name}</span>
+                         {isTestWorkspace && (
+                           <span className="shrink-0 rounded-full bg-amber-200 px-2 py-0.5 text-[9px] font-black text-amber-900">TEST</span>
+                         )}
+                       </span>
                        <span className="mt-0.5 block truncate text-[11px] text-gray-500">{store.city}, {store.country}</span>
                        <span className="mt-1 block text-xs font-bold text-gray-900">
                          {store.currency} {Math.round(localSales).toLocaleString()}
@@ -9331,6 +9368,9 @@ const HQDashboard: React.FC<{
                        </span>
                      </span>
                      <span className="flex min-w-[72px] flex-col items-end gap-1.5">
+                       {isTestWorkspace && (
+                         <span className="rounded-full bg-amber-200 px-2 py-1 text-[9px] font-black leading-tight text-amber-900">Test store</span>
+                       )}
                        <span className={`rounded-full px-2 py-1 text-[9px] font-black leading-tight ${
                          reportStatus.missingDates.length > 0
                            ? 'bg-red-100 text-red-700'
@@ -9752,6 +9792,10 @@ const HQDashboard: React.FC<{
   );
 };
 
+type OwnerView = 'dashboard' | 'report' | 'month' | 'setup' | 'menu' | 'staff';
+type OwnerDetailReturnView = 'month' | 'setup';
+type OwnerCostWorkspaceSection = 'summary' | 'purchases' | 'inventory';
+
 const StoreDashboard: React.FC<{
   user: User;
   store: Store;
@@ -9776,9 +9820,13 @@ const StoreDashboard: React.FC<{
   onUpdateEmployees: (employees: Employee[]) => void;
   onAddIngredient: (ing: Ingredient) => Promise<void> | void;
 }> = ({ user, store, onLogout, sales, menus, setMenus, employees, ingredients, globalConfig, onAddSale, onUpdateMenu, onCreateMenu, onDeleteMenu, onUpdateSetMenu, onCreateSetMenu, onDeleteSetMenu, onUpdateEmployees, onAddIngredient }) => {
-    const [view, setView] = useState<'dashboard' | 'report' | 'month' | 'menu' | 'staff'>('dashboard');
+    const [view, setView] = useState<OwnerView>('dashboard');
     const [menuSection, setMenuSection] = useState<'items' | 'sets'>('items');
     const [ownerCostSection, setOwnerCostSection] = useState<'cost' | 'recipes'>('cost');
+    const [ownerDetailReturnView, setOwnerDetailReturnView] = useState<OwnerDetailReturnView>('setup');
+    const [ownerCostWorkspaceSection, setOwnerCostWorkspaceSection] = useState<OwnerCostWorkspaceSection>('summary');
+    const [reportReturnView, setReportReturnView] = useState<'dashboard' | 'month'>('dashboard');
+    const [ownerMonthStartStep, setOwnerMonthStartStep] = useState<1 | 2 | 3>(1);
     const [reportDate, setReportDate] = useState<string | null>(null);
     const [editingMenu, setEditingMenu] = useState<Menu | null>(null);
     const [editingSetMenu, setEditingSetMenu] = useState<SetMenu | null>(null);
@@ -10108,16 +10156,16 @@ const StoreDashboard: React.FC<{
         } | null;
         const fromHistory = historyState?.screen === 'owner'
             ? {
-                view: (historyState.view as 'dashboard' | 'report' | 'month' | 'menu' | 'staff' | undefined) ?? 'dashboard',
+                view: (historyState.view as OwnerView | undefined) ?? 'dashboard',
                 reportDate: (historyState.reportDate as string | null | undefined) ?? null,
                 menuSection: (historyState.menuSection as 'items' | 'sets' | undefined) ?? 'items',
             }
             : null;
-        const fromStorage = safeParseJson<{ view?: 'dashboard' | 'report' | 'month' | 'menu' | 'staff'; reportDate?: string | null; menuSection?: 'items' | 'sets' }>(
+        const fromStorage = safeParseJson<{ view?: OwnerView; reportDate?: string | null; menuSection?: 'items' | 'sets' }>(
             window.localStorage.getItem(ownerViewStorageKey)
         );
 
-        const normalizedUrlView = urlView === 'dashboard' || urlView === 'report' || urlView === 'month' || urlView === 'menu' || urlView === 'staff'
+        const normalizedUrlView = urlView === 'dashboard' || urlView === 'report' || urlView === 'month' || urlView === 'setup' || urlView === 'menu' || urlView === 'staff'
             ? urlView
             : null;
         const normalizedUrlMenuSection = urlMenuSection === 'sets' ? 'sets' : (urlMenuSection === 'items' ? 'items' : null);
@@ -10197,7 +10245,7 @@ const StoreDashboard: React.FC<{
         const onPopState = (e: PopStateEvent) => {
             const state = e.state as {
                 screen?: string;
-                view?: 'dashboard' | 'report' | 'month' | 'menu' | 'staff';
+                view?: OwnerView;
                 reportDate?: string | null;
                 menuSection?: 'items' | 'sets';
                 layer?: string;
@@ -10315,6 +10363,7 @@ const StoreDashboard: React.FC<{
                                             disabled={isFuture}
                                             onClick={() => {
                                                 if (!isMissing) return;
+                                                setReportReturnView('dashboard');
                                                 setReportDate(dateStr);
                                                 setView('report');
                                                 setShowMissingCalendar(false);
@@ -10386,10 +10435,17 @@ const StoreDashboard: React.FC<{
                     </button>
                     <div className="text-[10px] font-black uppercase tracking-[0.18em] text-gray-400 px-4 mb-2">Core tasks</div>
                     <div className="space-y-1">
-                        <NavButton active={view === 'report'} onClick={() => { setReportDate(todayDate); setView('report'); }} icon={FileText} label="Today's Sales Report" />
-                        <NavButton active={view === 'month'} onClick={() => setView('month')} icon={ClipboardList} label="Month Close" />
-                        <NavButton active={view === 'menu'} onClick={() => setView('menu')} icon={Package} label="Cost & Inventory" />
-                        <NavButton active={view === 'staff'} onClick={() => setView('staff')} icon={Users} label="Staff & Labor" />
+                        <NavButton active={view === 'report'} onClick={() => { setReportReturnView('dashboard'); setReportDate(todayDate); setView('report'); }} icon={FileText} label="Today's Sales Report" />
+                        <NavButton active={view === 'month'} onClick={() => { setOwnerMonthStartStep(1); setView('month'); }} icon={ClipboardList} label="Month Close" />
+                    </div>
+                    <div className="mb-2 mt-6 px-4 text-[10px] font-black uppercase tracking-[0.18em] text-gray-400">Store setup</div>
+                    <div className="space-y-1">
+                        <NavButton
+                            active={view === 'setup' || view === 'menu' || view === 'staff'}
+                            onClick={() => setView('setup')}
+                            icon={Settings}
+                            label="Store Setup"
+                        />
                     </div>
                     <div className="mt-auto p-4 bg-gray-50 rounded-xl">
                         <div className="text-xs font-bold text-gray-500 mb-2 uppercase">Your Performance</div>
@@ -10409,13 +10465,14 @@ const StoreDashboard: React.FC<{
                 <div className="fixed bottom-0 left-0 right-0 z-50 flex justify-around border-t bg-white px-1.5 py-1.5 xl:hidden">
                     {[
                         { key: 'dashboard', label: 'Home', aria: 'Store overview', icon: LayoutDashboard, action: () => setView('dashboard') },
-                        { key: 'report', label: 'Sales', aria: "Today's sales report", icon: FileText, action: () => { setReportDate(todayDate); setView('report'); } },
-                        { key: 'month', label: 'Month', aria: 'Month close', icon: ClipboardList, action: () => setView('month') },
-                        { key: 'menu', label: 'Cost', aria: 'Cost and inventory', icon: Package, action: () => setView('menu') },
-                        { key: 'staff', label: 'Staff', aria: 'Staff and labor', icon: Users, action: () => setView('staff') },
+                        { key: 'report', label: 'Sales', aria: "Today's sales report", icon: FileText, action: () => { setReportReturnView('dashboard'); setReportDate(todayDate); setView('report'); } },
+                        { key: 'month', label: 'Month', aria: 'Month close', icon: ClipboardList, action: () => { setOwnerMonthStartStep(1); setView('month'); } },
+                        { key: 'setup', label: 'Setup', aria: 'Store setup', icon: Settings, action: () => setView('setup') },
                     ].map((item) => {
                         const Icon = item.icon;
-                        const active = view === item.key;
+                        const active = item.key === 'setup'
+                            ? view === 'setup' || view === 'menu' || view === 'staff'
+                            : view === item.key;
                         return (
                             <button
                                 key={item.key}
@@ -10446,7 +10503,7 @@ const StoreDashboard: React.FC<{
                             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                                 <button
                                     type="button"
-                                    onClick={() => { setReportDate(todayDate); setView('report'); }}
+                                    onClick={() => { setReportReturnView('dashboard'); setReportDate(todayDate); setView('report'); }}
                                     className={`rounded-2xl border p-6 text-left transition hover:-translate-y-0.5 hover:shadow-md ${
                                         todayReport ? 'bg-white border-emerald-200' : 'bg-red-50 border-red-200'
                                     }`}
@@ -10474,7 +10531,7 @@ const StoreDashboard: React.FC<{
 
                                 <button
                                     type="button"
-                                    onClick={() => setView('month')}
+                                    onClick={() => { setOwnerMonthStartStep(1); setView('month'); }}
                                     className={`rounded-2xl border p-6 text-left transition hover:-translate-y-0.5 hover:shadow-md ${
                                         currentMonthReportStatus.missingDates.length > 0 ? 'bg-amber-50 border-amber-200' : 'bg-white border-emerald-200'
                                     }`}
@@ -10502,50 +10559,25 @@ const StoreDashboard: React.FC<{
                                 </button>
                             </div>
 
-                            <div>
-                                <div className="text-xs font-black uppercase tracking-[0.18em] text-gray-400">Setup & maintenance</div>
-                                <p className="mt-1 text-sm text-gray-500">Open these only when ingredients, recipes or staff records need updating.</p>
-                            </div>
-
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                <button
-                                    type="button"
-                                    onClick={() => { setOwnerCostSection('cost'); setView('menu'); }}
-                                    className={`rounded-2xl border p-5 text-left transition hover:-translate-y-0.5 hover:shadow-md ${
-                                        menusMissingRecipes.length > 0 || setsNeedingAttention.length > 0
-                                            ? 'bg-amber-50 border-amber-200'
-                                            : 'bg-white border-emerald-200'
-                                    }`}
-                                >
-                                    <div className="flex items-start justify-between gap-3">
-                                        <div className="p-2 rounded-xl bg-indigo-100 text-indigo-700"><Package className="w-5 h-5" /></div>
-                                        <span className="text-[10px] font-black uppercase px-2 py-1 rounded-full bg-gray-100 text-gray-700">
-                                            {recipeReadyCount}/{storeMenus.length} recipes
-                                        </span>
-                                    </div>
-                                    <div className="font-extrabold mt-4">Cost & Inventory</div>
-                                    <div className="text-xs text-gray-500 mt-1">{storeMenus.length} single items · {storeSetMenus.length} courses/sets</div>
-                                    <div className="text-xs font-bold mt-4 flex items-center gap-1">Manage costs, inventory and recipes <ChevronRight className="w-3 h-3" /></div>
-                                </button>
-
-                                <button
-                                    type="button"
-                                    onClick={() => setView('staff')}
-                                    className={`rounded-2xl border p-5 text-left transition hover:-translate-y-0.5 hover:shadow-md ${
-                                        storeEmployees.length > 0 ? 'bg-white border-emerald-200' : 'bg-amber-50 border-amber-200'
-                                    }`}
-                                >
-                                    <div className="flex items-start justify-between gap-3">
-                                        <div className="p-2 rounded-xl bg-sky-100 text-sky-700"><Users className="w-5 h-5" /></div>
-                                        <span className="text-[10px] font-black uppercase px-2 py-1 rounded-full bg-gray-100 text-gray-700">
-                                            {storeEmployees.length} staff
-                                        </span>
-                                    </div>
-                                    <div className="font-extrabold mt-4">Staff & Labor</div>
-                                    <div className="text-xs text-gray-500 mt-1">Keep the active staff list current.</div>
-                                    <div className="text-xs font-bold mt-4 flex items-center gap-1">Open staff records <ChevronRight className="w-3 h-3" /></div>
-                                </button>
-                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setView('setup')}
+                                className={`flex w-full items-center justify-between gap-4 rounded-2xl border p-5 text-left transition hover:-translate-y-0.5 hover:shadow-md ${
+                                    menusMissingRecipes.length > 0 || setsNeedingAttention.length > 0 || storeEmployees.length === 0
+                                        ? 'border-amber-200 bg-amber-50'
+                                        : 'border-gray-200 bg-white'
+                                }`}
+                            >
+                                <span className="flex min-w-0 items-center gap-3">
+                                    <span className="rounded-xl bg-gray-100 p-2 text-gray-800"><Settings className="h-5 w-5" /></span>
+                                    <span className="min-w-0">
+                                        <span className="block text-xs font-black uppercase tracking-[0.16em] text-gray-400">Only when something changes</span>
+                                        <span className="mt-1 block font-extrabold">Store Setup</span>
+                                        <span className="mt-1 block text-xs text-gray-500">Ingredients and purchase units · menus and recipes · staff records</span>
+                                    </span>
+                                </span>
+                                <ChevronRight className="h-5 w-5 shrink-0 text-gray-400" />
+                            </button>
 
                             {/* Missing Report Alert */}
                             {missingDates.length > 0 && (
@@ -10561,7 +10593,7 @@ const StoreDashboard: React.FC<{
   <button
     key={d}
     type="button"
-    onClick={() => { setReportDate(d); setView('report'); }}
+    onClick={() => { setReportReturnView('dashboard'); setReportDate(d); setView('report'); }}
     className="min-h-10 rounded-lg bg-red-200 px-3 py-2 text-xs font-bold text-red-800 transition hover:bg-red-300"
   >
     {d}
@@ -10689,7 +10721,7 @@ const StoreDashboard: React.FC<{
                                                 <div className="font-bold">{sale.isClosed ? 'Closed' : `${store.currency} ${formatMoneyDisplay(sale.totalAmount)}`}</div>
                                                 <button
                                                     type="button"
-                                                    onClick={() => { setReportDate(sale.date); setView('report'); }}
+                                                    onClick={() => { setReportReturnView('dashboard'); setReportDate(sale.date); setView('report'); }}
                                                     className="text-xs font-bold px-3 py-1 rounded-full border border-gray-200 hover:bg-white transition"
                                                 >
                                                     Edit
@@ -10709,12 +10741,18 @@ const StoreDashboard: React.FC<{
                             sales={sales}
                             initialMonthKey={dashboardMonthKey}
                             mode="owner"
+                            initialOwnerStep={ownerMonthStartStep}
                             onOpenSalesReport={(date) => {
+                                setOwnerMonthStartStep(1);
+                                setReportReturnView('month');
                                 setReportDate(date);
                                 setView('report');
                             }}
                             onOpenInventory={() => {
+                                setOwnerMonthStartStep(2);
+                                setOwnerDetailReturnView('month');
                                 setOwnerCostSection('cost');
+                                setOwnerCostWorkspaceSection('purchases');
                                 setView('menu');
                             }}
                         />
@@ -10731,39 +10769,104 @@ const StoreDashboard: React.FC<{
   onSave={async (sale) => {
     await Promise.resolve(onAddSale(sale));
     setReportDate(null);
-    setView('dashboard');
+    setView(reportReturnView);
   }}
   onCancel={() => {
     setReportDate(null);
-    setView('dashboard');
+    setView(reportReturnView);
   }}
 />
 
                     )}
 
+                    {view === 'setup' && (
+                        <div className="mx-auto max-w-5xl space-y-6">
+                            <div>
+                                <div className="text-xs font-black uppercase tracking-[0.18em] text-gray-400">Only when something changes</div>
+                                <h2 className="mt-1 text-2xl font-extrabold">Store Setup</h2>
+                                <p className="mt-1 text-sm text-gray-500">
+                                    Daily sales and month-end totals are entered elsewhere. Open only the setup item you need to add or change.
+                                </p>
+                            </div>
+
+                            <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">
+                                <div className="font-extrabold">First-time setup order</div>
+                                <div className="mt-2 grid gap-2 sm:grid-cols-3">
+                                    <div className="rounded-xl bg-white/80 p-3"><span className="font-black">1.</span> Ingredients &amp; purchase units</div>
+                                    <div className="rounded-xl bg-white/80 p-3"><span className="font-black">2.</span> Menus &amp; recipes</div>
+                                    <div className="rounded-xl bg-white/80 p-3"><span className="font-black">3.</span> Staff records</div>
+                                </div>
+                            </div>
+
+                            <div className="grid gap-4 md:grid-cols-3">
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setOwnerDetailReturnView('setup');
+                                        setOwnerCostSection('cost');
+                                        setOwnerCostWorkspaceSection('purchases');
+                                        setView('menu');
+                                    }}
+                                    className="rounded-2xl border border-gray-200 bg-white p-5 text-left transition hover:-translate-y-0.5 hover:shadow-md"
+                                >
+                                    <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-100 text-amber-800"><Package className="h-5 w-5" /></span>
+                                    <span className="mt-4 block font-extrabold">Ingredients &amp; Purchase Units</span>
+                                    <span className="mt-1 block text-xs leading-5 text-gray-500">Register pack, case or bottle size, price and supplier. Monthly purchases and inventory are available on the same screen.</span>
+                                    <span className="mt-4 flex items-center gap-1 text-xs font-bold">Open ingredient setup <ChevronRight className="h-3 w-3" /></span>
+                                </button>
+
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setOwnerDetailReturnView('setup');
+                                        setOwnerCostSection('recipes');
+                                        setView('menu');
+                                    }}
+                                    className={`rounded-2xl border p-5 text-left transition hover:-translate-y-0.5 hover:shadow-md ${
+                                        menusMissingRecipes.length > 0 || setsNeedingAttention.length > 0
+                                            ? 'border-amber-200 bg-amber-50'
+                                            : 'border-gray-200 bg-white'
+                                    }`}
+                                >
+                                    <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-100 text-indigo-800"><UtensilsCrossed className="h-5 w-5" /></span>
+                                    <span className="mt-4 block font-extrabold">Menus, Courses &amp; Recipes</span>
+                                    <span className="mt-1 block text-xs leading-5 text-gray-500">Register selling prices and the ingredient quantity used in one serving.</span>
+                                    <span className="mt-4 flex items-center gap-1 text-xs font-bold">{recipeReadyCount}/{storeMenus.length} recipes <ChevronRight className="h-3 w-3" /></span>
+                                </button>
+
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setOwnerDetailReturnView('setup');
+                                        setView('staff');
+                                    }}
+                                    className={`rounded-2xl border p-5 text-left transition hover:-translate-y-0.5 hover:shadow-md ${
+                                        storeEmployees.length > 0 ? 'border-gray-200 bg-white' : 'border-amber-200 bg-amber-50'
+                                    }`}
+                                >
+                                    <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-sky-100 text-sky-800"><Users className="h-5 w-5" /></span>
+                                    <span className="mt-4 block font-extrabold">Staff Records</span>
+                                    <span className="mt-1 block text-xs leading-5 text-gray-500">Maintain the active staff list. Monthly payroll and labor hours are entered in Month Close.</span>
+                                    <span className="mt-4 flex items-center gap-1 text-xs font-bold">{storeEmployees.length} staff <ChevronRight className="h-3 w-3" /></span>
+                                </button>
+                            </div>
+                        </div>
+                    )}
+
                     {view === 'menu' && (
                         <div className="space-y-6">
-                            <div className="sticky top-2 z-20 grid grid-cols-2 rounded-2xl border border-gray-200 bg-white p-1 shadow-sm">
+                            <div className="sticky top-2 z-20 flex items-center justify-between gap-3 rounded-2xl border border-gray-200 bg-white p-2 shadow-sm">
                                 <button
                                     type="button"
-                                    aria-pressed={ownerCostSection === 'cost'}
-                                    onClick={() => setOwnerCostSection('cost')}
-                                    className={`rounded-xl px-4 py-3 text-sm font-extrabold transition ${
-                                        ownerCostSection === 'cost' ? 'bg-black text-white' : 'text-gray-500 hover:bg-gray-50 hover:text-black'
-                                    }`}
+                                    onClick={() => setView(ownerDetailReturnView)}
+                                    className="inline-flex min-h-11 items-center gap-2 rounded-xl px-3 py-2 text-sm font-extrabold text-gray-700 hover:bg-gray-100"
                                 >
-                                    Cost, Purchases & Inventory
+                                    <ArrowLeft className="h-4 w-4" />
+                                    {ownerDetailReturnView === 'month' ? 'Back to Month Close' : 'Back to Store Setup'}
                                 </button>
-                                <button
-                                    type="button"
-                                    aria-pressed={ownerCostSection === 'recipes'}
-                                    onClick={() => setOwnerCostSection('recipes')}
-                                    className={`rounded-xl px-4 py-3 text-sm font-extrabold transition ${
-                                        ownerCostSection === 'recipes' ? 'bg-black text-white' : 'text-gray-500 hover:bg-gray-50 hover:text-black'
-                                    }`}
-                                >
-                                    Menus, Courses & Recipes
-                                </button>
+                                <span className="hidden pr-3 text-xs font-bold text-gray-400 sm:block">
+                                    {ownerCostSection === 'cost' ? 'Monthly purchases & inventory' : 'Menu & recipe setup'}
+                                </span>
                             </div>
 
                             {ownerCostSection === 'cost' && (
@@ -10776,6 +10879,7 @@ const StoreDashboard: React.FC<{
                                 initialMonthKey={dashboardMonthKey}
                                 mode="owner"
                                 onAddIngredient={onAddIngredient}
+                                initialSection={ownerCostWorkspaceSection}
                             />
                             )}
 
@@ -10822,7 +10926,7 @@ const StoreDashboard: React.FC<{
                                             menuSection === 'items' ? 'bg-black text-white' : 'text-gray-600 hover:bg-gray-100'
                                         }`}
                                     >
-                                        Single Items & Recipes ({storeMenus.length})
+                                        {`Single Items & Recipes (${storeMenus.length})`}
                                     </button>
                                     <button
                                         type="button"
@@ -10831,7 +10935,7 @@ const StoreDashboard: React.FC<{
                                             menuSection === 'sets' ? 'bg-black text-white' : 'text-gray-600 hover:bg-gray-100'
                                         }`}
                                     >
-                                        Courses & Sets ({storeSetMenus.length})
+                                        {`Courses & Sets (${storeSetMenus.length})`}
                                     </button>
                                 </div>
                             </div>
@@ -10861,9 +10965,16 @@ const StoreDashboard: React.FC<{
 
                     {view === 'staff' && (
                         <div className="space-y-6">
+                            <button
+                                type="button"
+                                onClick={() => setView('setup')}
+                                className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-extrabold hover:bg-gray-50"
+                            >
+                                <ArrowLeft className="h-4 w-4" /> Back to Store Setup
+                            </button>
                             <div>
                                 <div className="text-xs font-black uppercase tracking-[0.18em] text-gray-400">People records</div>
-                                <h2 className="text-2xl font-extrabold mt-1">Staff & Labor</h2>
+                                <h2 className="text-2xl font-extrabold mt-1">Staff Records</h2>
                                 <p className="text-sm text-gray-500 mt-1">
                                     Keep the active staff list current. Monthly payroll, total labor hours, and labor-cost ratio are managed in Month Close.
                                 </p>
@@ -11942,7 +12053,7 @@ if (localOwnerPreviewMode) {
   return (
     <div className="min-h-screen bg-gray-50">
       <div className="sticky top-0 z-[80] border-b border-amber-300 bg-amber-100 px-4 py-2 text-center text-xs font-black text-amber-950">
-        DEMO PREVIEW · Sample numbers only · Never use this screen to verify operating data
+        検証画面・サンプルデータ・運用実績の確認には使用しないでください
       </div>
       <StoreDashboard
         key={previewStore.id}

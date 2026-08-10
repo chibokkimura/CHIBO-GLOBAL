@@ -228,6 +228,11 @@ const EXACT_JA: Record<string, string> = {
   'Linked Accounts: —': '連携アカウント：なし',
   'Royalty Rate (%)': 'ロイヤルティ率（%）',
   'Test workspace': 'テスト環境',
+  'Test store': 'テスト店舗',
+  'Test data is ready': 'テストデータを確認できます',
+  'Safe workspace for owner-flow testing': 'オーナー操作を安全にテストできます',
+  'Use the same sales, cost, inventory, menu, and month-close screens as an operating store.': '運営店舗と同じ売上・原価・在庫・メニュー・月次締め画面を使用できます。',
+  'Enter test data exactly as an owner would. This workspace never affects HQ operating totals.': 'オーナーと同じ手順でテストデータを入力できます。この店舗は本部の運用集計には一切影響しません。',
   'Cost-analysis sample data is ready': '原価分析のサンプルデータを確認できます',
   'Open Cost & Inventory to review actual cost, theoretical recipe cost, stock counts, and ingredient variances together.': '「原価・在庫」で実際原価、理論原価、棚卸、食材差異をまとめて確認できます。',
   'Sample month': 'サンプル対象月',
@@ -506,6 +511,9 @@ const EXACT_JA: Record<string, string> = {
 
 const DYNAMIC_JA: Array<[RegExp, (...matches: string[]) => string]> = [
   [/^Test (\d+) · Held (\d+) · Approval waiting (\d+)$/, (_all, test, held, pending) => `テスト ${test}件・保留 ${held}件・承認待ち ${pending}件`],
+  [/^(\d+) displayed · (\d+) operating$/, (_all, displayed, operating) => `表示 ${displayed}店舗・運営集計 ${operating}店舗`],
+  [/^(\d+) operating stores$/, (_all, count) => `運営集計 ${count}店舗`],
+  [/^All countries · (\d+) operating stores$/, (_all, count) => `すべての国・運営集計 ${count}店舗`],
   [/^Linked: (.+)$/, (_all, value) => `連携完了：${value}`],
   [/^Test data (\d+) · Held records (\d+)\. Open only when maintenance is required\.$/, (_all, tests, held) => `テストデータ ${tests}件・保留データ ${held}件。メンテナンス時のみ開いてください。`],
   [/^(.+) ·$/, (_all, value) => `${translateCore(value)}・`],
