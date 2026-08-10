@@ -7875,9 +7875,9 @@ const HQStoreDetail: React.FC<{
                         </div>
                     </div>
 
-                    <div className="rounded-2xl border bg-white p-4 shadow-sm sm:p-6">
-                        <h2 className="mb-3 text-lg font-bold sm:mb-4 sm:text-xl">Store Performance</h2>
-                        <div className="mb-3 grid grid-cols-3 gap-2 sm:mb-4 sm:gap-3">
+                    <div className="rounded-2xl border bg-white p-3 shadow-sm sm:p-6">
+                        <h2 className="mb-2 text-base font-bold sm:mb-4 sm:text-xl">Store Performance</h2>
+                        <div className="mb-2 grid grid-cols-3 gap-1.5 sm:mb-4 sm:gap-3">
                             <div className="min-w-0 rounded-xl border border-gray-200 bg-gray-50 p-2 sm:p-3">
                                 <div className="text-[10px] font-bold uppercase text-gray-500 sm:text-[11px]"><span className="sm:hidden">Month</span><span className="hidden sm:inline">Monthly Sales</span></div>
                                 <div className="text-[11px] text-gray-500 mt-0.5">{performanceSummary.monthly.label}</div>
@@ -7915,7 +7915,7 @@ const HQStoreDetail: React.FC<{
                                 </div>
                             </div>
                         </div>
-                        <div className="h-52 rounded-xl bg-gray-50 p-1 sm:h-64 sm:p-2">
+                        <div className="h-36 rounded-xl bg-gray-50 p-1 sm:h-64 sm:p-2">
                             {monthlyRevenueData.every(d => d.value === 0) ? (
                                 <div className="h-full flex items-center justify-center text-gray-400">
                                     <BarChart3 className="w-8 h-8 mb-2" />
@@ -7956,16 +7956,17 @@ const HQStoreDetail: React.FC<{
             )}
 
             {detailSection === 'sales' && (
-            <div className="mb-6 rounded-2xl border bg-white p-4 shadow-sm sm:mb-8 sm:p-6">
-                <div className="mb-4 flex flex-col gap-3 sm:mb-6 sm:flex-row sm:items-center sm:justify-between">
-                    <h2 className="flex items-center gap-2 text-lg font-bold sm:text-xl">
+            <div className="mb-6 rounded-2xl border bg-white p-3 shadow-sm sm:mb-8 sm:p-6">
+                <div className="mb-3 sm:mb-6 sm:flex sm:items-center sm:justify-between">
+                    <div className="flex items-center justify-between gap-2">
+                    <h2 className="flex items-center gap-2 text-base font-bold sm:text-xl">
                         <ClipboardList className="w-5 h-5"/> Sales History
                     </h2>
-                    <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 sm:flex sm:flex-wrap sm:gap-3">
+                    <div className="flex items-center gap-1.5 sm:gap-3">
                         <select
                             value={salesMonthFilter}
                             onChange={(e) => setSalesMonthFilter(e.target.value)}
-                            className="min-h-11 min-w-0 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-semibold"
+                            className="min-h-10 min-w-0 max-w-[132px] rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-xs font-semibold sm:min-h-11 sm:max-w-none sm:px-3 sm:py-2"
                         >
                             <option value="all">All Months</option>
                             {salesMonthOptions.map((monthKey) => (
@@ -7974,15 +7975,16 @@ const HQStoreDetail: React.FC<{
                                 </option>
                             ))}
                         </select>
-                        <span className="order-3 col-span-2 text-[11px] text-gray-400 sm:order-none sm:col-span-1 sm:text-xs">Showing {salesLookbackLabel} data</span>
                         <button
                             type="button"
                             onClick={onLoadMoreSales}
-                            className="min-h-11 rounded-lg border border-gray-200 px-3 py-2 text-xs font-bold transition hover:bg-gray-50"
+                            className="min-h-10 rounded-lg border border-gray-200 px-2.5 py-1.5 text-[11px] font-bold transition hover:bg-gray-50 sm:min-h-11 sm:px-3 sm:py-2 sm:text-xs"
                         >
                             Load more
                         </button>
                     </div>
+                    </div>
+                    <span className="mt-1 block text-[10px] text-gray-400 sm:mt-0 sm:text-xs">Showing {salesLookbackLabel} data</span>
                 </div>
                 <div className="md:overflow-x-auto">
                     <table className="block w-full text-left text-sm md:table">
@@ -7995,12 +7997,12 @@ const HQStoreDetail: React.FC<{
                                 <th className="p-4 text-center rounded-r-lg">Receipt</th>
                             </tr>
                         </thead>
-                        <tbody className="block space-y-3 md:table-row-group md:space-y-0 md:divide-y md:divide-gray-50">
+                        <tbody className="block space-y-2 md:table-row-group md:space-y-0 md:divide-y md:divide-gray-50">
                             {visibleStoreSales.map(sale => (
                                 <React.Fragment key={sale.id}>
-                                    <tr className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-3 rounded-xl border border-gray-200 p-4 shadow-sm transition hover:bg-gray-50 md:table-row md:rounded-none md:border-0 md:p-0 md:shadow-none">
-                                        <td className="col-start-1 row-start-1 whitespace-nowrap p-0 font-bold md:table-cell md:p-4 md:font-medium">{sale.date}</td>
-                                        <td className="col-start-2 row-start-1 p-0 text-right font-mono font-bold md:table-cell md:p-4">
+                                    <tr className="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] items-center gap-x-1.5 gap-y-1 rounded-xl border border-gray-200 p-2.5 shadow-sm transition hover:bg-gray-50 md:table-row md:rounded-none md:border-0 md:p-0 md:shadow-none">
+                                        <td className="col-start-1 row-start-1 whitespace-nowrap p-0 text-xs font-bold md:table-cell md:p-4 md:text-sm md:font-medium">{sale.date}</td>
+                                        <td className={`${editingSaleAmountId === sale.id ? 'col-span-3 col-start-2' : 'col-start-2'} row-span-2 row-start-1 p-0 text-right font-mono text-xs font-bold md:table-cell md:p-4 md:text-sm`}>
                                             {sale.isClosed ? (
                                                 '-'
                                             ) : editingSaleAmountId === sale.id ? (
@@ -8010,13 +8012,13 @@ const HQStoreDetail: React.FC<{
                                                         inputMode="decimal"
                                                         value={editingSaleAmountDraft}
                                                         onChange={(e) => setEditingSaleAmountDraft(normalizeDecimalInput(e.target.value, 2))}
-                                                        className="min-h-11 w-32 rounded-lg border border-gray-200 bg-white px-2 py-2 text-right text-sm"
+                                                        className="min-h-9 w-20 rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-right text-xs md:min-h-11 md:w-32 md:py-2 md:text-sm"
                                                     />
                                                     <button
                                                         type="button"
                                                         onClick={() => void saveSaleAmount(sale)}
                                                         disabled={saleAmountSaving}
-                                                        className="min-h-11 rounded-md bg-black px-3 py-2 text-[11px] font-bold text-white disabled:opacity-50"
+                                                        className="min-h-9 rounded-md bg-black px-2 py-1.5 text-[10px] font-bold text-white disabled:opacity-50 md:min-h-11 md:px-3 md:py-2 md:text-[11px]"
                                                     >
                                                         Save
                                                     </button>
@@ -8024,7 +8026,7 @@ const HQStoreDetail: React.FC<{
                                                         type="button"
                                                         onClick={cancelEditSaleAmount}
                                                         disabled={saleAmountSaving}
-                                                        className="min-h-11 rounded-md border border-gray-200 px-3 py-2 text-[11px] font-bold"
+                                                        className="min-h-9 rounded-md border border-gray-200 px-2 py-1.5 text-[10px] font-bold md:min-h-11 md:px-3 md:py-2 md:text-[11px]"
                                                     >
                                                         Cancel
                                                     </button>
@@ -8037,7 +8039,7 @@ const HQStoreDetail: React.FC<{
                                                         const amountJPY = convertToJPY(amount, store.currency, fxRates);
                                                         if (amountJPY === null) return null;
                                                         return (
-                                                            <div className="text-[11px] font-semibold text-gray-500">
+                                                    <div className="text-[9px] font-semibold text-gray-500 md:text-[11px]">
                                                                 {`¥ ${Math.round(amountJPY).toLocaleString()}`}
                                                             </div>
                                                         );
@@ -8047,17 +8049,17 @@ const HQStoreDetail: React.FC<{
                                         </td>
                                         <td className="col-start-1 row-start-2 p-0 text-left md:table-cell md:p-4 md:text-center">
                                             {sale.isClosed ? (
-                                                <span className="bg-gray-100 text-gray-600 px-2 py-1 rounded text-xs font-bold uppercase">Closed</span>
+                                                <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[9px] font-bold uppercase text-gray-600 md:px-2 md:py-1 md:text-xs">Closed</span>
                                             ) : (
-                                                <span className="bg-emerald-100 text-emerald-700 px-2 py-1 rounded text-xs font-bold uppercase">Open</span>
+                                                <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[9px] font-bold uppercase text-emerald-700 md:px-2 md:py-1 md:text-xs">Open</span>
                                             )}
                                         </td>
-                                        <td className="col-start-2 row-start-2 p-0 text-right md:table-cell md:p-4 md:text-center">
-                                            <div className="flex items-center justify-end gap-1.5 md:justify-center md:gap-2">
+                                        <td className={`${editingSaleAmountId === sale.id ? 'hidden' : 'col-start-3'} row-span-2 row-start-1 p-0 text-center md:table-cell md:p-4`}>
+                                            <div className="flex items-center justify-end gap-1 md:justify-center md:gap-2">
                                                 <button
                                                     type="button"
                                                     onClick={() => toggleSaleDetails(sale.id)}
-                                                    className="min-h-10 rounded-lg border border-gray-200 px-3 py-2 text-xs font-bold text-gray-700 transition hover:bg-gray-50 md:min-h-11 md:rounded-full"
+                                                    className="min-h-8 rounded-lg border border-gray-200 px-2 py-1 text-[10px] font-bold text-gray-700 transition hover:bg-gray-50 md:min-h-11 md:rounded-full md:px-3 md:py-2 md:text-xs"
                                                 >
                                                     {expandedSales.has(sale.id) ? 'Hide' : 'View'}
                                                 </button>
@@ -8065,23 +8067,25 @@ const HQStoreDetail: React.FC<{
                                                     <button
                                                         type="button"
                                                         onClick={() => startEditSaleAmount(sale)}
-                                                        className="min-h-10 rounded-lg border border-blue-200 px-3 py-2 text-xs font-bold text-blue-700 transition hover:bg-blue-50 md:min-h-11 md:rounded-full"
+                                                        className="min-h-8 rounded-lg border border-blue-200 px-2 py-1 text-[10px] font-bold text-blue-700 transition hover:bg-blue-50 md:min-h-11 md:rounded-full md:px-3 md:py-2 md:text-xs"
                                                     >
                                                         Edit
                                                     </button>
                                                 )}
                                             </div>
                                         </td>
-                                        <td className="col-span-2 row-start-3 border-t border-gray-100 p-0 pt-2 text-left md:table-cell md:border-0 md:p-4 md:text-center">
+                                        <td className={`${editingSaleAmountId === sale.id ? 'hidden' : 'col-start-4'} row-span-2 row-start-1 p-0 text-right md:table-cell md:border-0 md:p-4 md:text-center`}>
                                             {sale.isClosed || !sale.hasReceipt ? (
-                                                <span className="text-gray-300 text-xs italic">No Image</span>
+                                                <span className="text-xs italic text-gray-300"><span className="md:hidden">—</span><span className="hidden md:inline">No Image</span></span>
                                             ) : (
                                                 <button
+                                                    type="button"
+                                                    aria-label="View receipt"
                                                     onClick={() => openReceipt(sale.id)}
                                                     disabled={receiptLoadingId === sale.id}
-                                                    className="inline-flex min-h-10 items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-bold text-blue-600 transition hover:bg-blue-50 disabled:opacity-60 md:min-h-11 md:rounded-full md:px-3 md:py-2"
+                                                    className="inline-flex min-h-8 min-w-8 items-center justify-center gap-1 rounded-lg p-1 text-[10px] font-bold text-blue-600 transition hover:bg-blue-50 disabled:opacity-60 md:min-h-11 md:rounded-full md:px-3 md:py-2 md:text-xs"
                                                 >
-                                                    <ImageIcon className="w-3 h-3"/> {receiptLoadingId === sale.id ? 'Loading...' : 'View Receipt'}
+                                                    <ImageIcon className="h-4 w-4 md:h-3 md:w-3"/> {receiptLoadingId === sale.id ? <span className="hidden md:inline">Loading...</span> : <span className="hidden md:inline">View Receipt</span>}
                                                 </button>
                                             )}
                                         </td>
@@ -9931,7 +9935,7 @@ const StoreDashboard: React.FC<{
     }, [sortedStoreSales, recentReportMonth, dashboardMetricsEnabled]);
     const visibleRecentMonthlyReports = showAllRecentReports
         ? recentMonthlyReports
-        : recentMonthlyReports.slice(0, 5);
+        : recentMonthlyReports.slice(0, 7);
     useEffect(() => {
         setRecentReportMonth(dashboardMonthKey);
         setShowAllRecentReports(false);
@@ -10097,6 +10101,10 @@ const StoreDashboard: React.FC<{
             previous: prevCounts[name] || 0
         }));
     }, [canonicalStoreSales, globalConfig.categories, dashboardMetricsEnabled]);
+    const categoryComparisonMax = useMemo(
+        () => Math.max(1, ...categoryMonthlyData.flatMap((row) => [row.current, row.previous])),
+        [categoryMonthlyData],
+    );
 
     // Comparison Logic (Current Month vs Previous Month)
     const metricComparison = useMemo(() => {
@@ -10781,9 +10789,9 @@ const StoreDashboard: React.FC<{
 
                              {/* Sales Charts */}
                              <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 lg:gap-6">
-                                 <div className="h-56 rounded-2xl border bg-white p-4 shadow-sm sm:h-80 sm:p-6">
-                                     <div className="flex justify-between items-center mb-4">
-                                         <h3 className="font-bold text-lg">Weekly Revenue Trend</h3>
+                                 <div className="h-48 rounded-2xl border bg-white p-3 shadow-sm sm:h-80 sm:p-6">
+                                     <div className="mb-2 flex items-center justify-between sm:mb-4">
+                                         <h3 className="text-base font-bold sm:text-lg">Weekly Revenue Trend</h3>
                                          <span className={`text-xs font-bold px-2 py-1 rounded-full ${
                                              metricComparison.weeklyGrowth === null
                                                  ? 'bg-gray-100 text-gray-500'
@@ -10826,6 +10834,30 @@ const StoreDashboard: React.FC<{
                                          </BarChart>
                                      </ResponsiveContainer>
                                  </div>}
+                                 {!desktopChartsEnabled && (
+                                     <div className="rounded-2xl border bg-white p-3 shadow-sm">
+                                         <div className="mb-2 flex items-center justify-between gap-3">
+                                             <h3 className="text-sm font-bold">Category Sales (This Month vs Last Month)</h3>
+                                             <div className="flex shrink-0 items-center gap-2 text-[9px] font-bold text-gray-400">
+                                                 <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-sm bg-black" />This Month</span>
+                                                 <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-sm bg-gray-300" />Last Month</span>
+                                             </div>
+                                         </div>
+                                         <div className="space-y-2">
+                                             {categoryMonthlyData.slice(0, 4).map((row) => (
+                                                 <div key={row.name} className="grid grid-cols-[88px_minmax(0,1fr)_auto] items-center gap-2 text-[10px]">
+                                                     <span className="truncate font-bold text-gray-600">{row.name}</span>
+                                                     <span className="space-y-1">
+                                                         <span className="block h-1.5 rounded-full bg-gray-100"><span className="block h-full rounded-full bg-black" style={{ width: `${Math.max(row.current > 0 ? 4 : 0, (row.current / categoryComparisonMax) * 100)}%` }} /></span>
+                                                         <span className="block h-1.5 rounded-full bg-gray-100"><span className="block h-full rounded-full bg-gray-300" style={{ width: `${Math.max(row.previous > 0 ? 4 : 0, (row.previous / categoryComparisonMax) * 100)}%` }} /></span>
+                                                     </span>
+                                                     <span className="whitespace-nowrap font-mono font-bold text-gray-600">{row.current} / {row.previous}</span>
+                                                 </div>
+                                             ))}
+                                             {categoryMonthlyData.length === 0 && <div className="py-3 text-center text-xs text-gray-400">No category sales data.</div>}
+                                         </div>
+                                     </div>
+                                 )}
                              </div>
 
                              <div className="rounded-2xl border bg-white p-3 shadow-sm sm:p-6">
@@ -10860,13 +10892,13 @@ const StoreDashboard: React.FC<{
                                         </div>
                                     ))}
                                     {recentMonthlyReports.length === 0 && <div className="text-gray-400 text-sm">No reports in this month.</div>}
-                                    {recentMonthlyReports.length > 5 && (
+                                    {recentMonthlyReports.length > 7 && (
                                         <button
                                             type="button"
                                             onClick={() => setShowAllRecentReports((current) => !current)}
                                             className="min-h-11 w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-bold hover:bg-gray-50"
                                         >
-                                            {showAllRecentReports ? 'Show latest 5 reports' : `Show all ${recentMonthlyReports.length} reports`}
+                                            {showAllRecentReports ? 'Show latest 7 reports' : `Show all ${recentMonthlyReports.length} reports`}
                                         </button>
                                     )}
                                 </div>
