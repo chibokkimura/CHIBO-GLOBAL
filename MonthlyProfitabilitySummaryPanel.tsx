@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
+  ChevronDown,
   CircleGauge,
   RefreshCw,
   Scale,
@@ -401,7 +402,14 @@ const MonthlyProfitabilitySummaryPanel: React.FC<Props> = ({
             />
           </div>
 
-          <div className="mt-5 grid grid-cols-1 gap-5 xl:grid-cols-[1.4fr_1fr]">
+          <details open={mode === 'hq' ? true : undefined} className="group mt-5">
+            {mode === 'owner' ? (
+              <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm font-extrabold text-gray-900 [&::-webkit-details-marker]:hidden">
+                <span>View detailed profit and productivity</span>
+                <ChevronDown className="h-4 w-4 text-gray-500 transition group-open:rotate-180" />
+              </summary>
+            ) : null}
+          <div className={`${mode === 'owner' ? 'mt-3' : ''} grid grid-cols-1 gap-5 xl:grid-cols-[1.4fr_1fr]`}>
             <div className="overflow-hidden rounded-xl border border-gray-200">
               <div className="flex items-center justify-between bg-gray-50 px-4 py-3">
                 <div className="flex items-center gap-2 text-sm font-extrabold text-gray-900">
@@ -495,6 +503,7 @@ const MonthlyProfitabilitySummaryPanel: React.FC<Props> = ({
               </div>
             </div>
           </div>
+          </details>
 
           {AI_ADVISOR_ENABLED && mode === 'hq' && summary ? (
             <AIProfitabilityAdvisor

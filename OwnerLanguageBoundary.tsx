@@ -192,6 +192,31 @@ const OWNER_JA: Record<string, string> = {
   'Enter purchases and finish the closing stock count': '仕入を入力し、月末棚卸を完了してください',
   'Available after totals and inventory are complete': '月間合計と棚卸の完了後に確認できます',
   'Complete these items before submission': '提出前に次の項目を完成してください',
+  'What you need to do now': '今行う作業',
+  'Missing daily report': '未提出の日次報告',
+  'Missing receipt image': 'レシート画像未登録',
+  'Monthly totals not entered': '月間合計が未入力',
+  'Inventory close not complete': '棚卸締めが未完了',
+  'Waiting for HQ setup': '本部設定待ち',
+  'Calculating monthly result': '月次結果を計算中',
+  'Final confirmation required': '最終確認が必要',
+  'Ready to submit': '提出準備完了',
+  'Store action': '店舗で対応',
+  'HQ action': '本部で対応',
+  'Enter the oldest missing daily report first.': '最も古い未提出の日次報告から入力してください。',
+  'Add the missing receipt image to the daily report.': '日次報告に不足しているレシート画像を追加してください。',
+  'Enter the monthly totals shown below, then save the draft.': '下の月間合計を入力し、下書きを保存してください。',
+  'Enter monthly purchases and complete the physical closing stock count.': '月間仕入を入力し、実地棚卸の月末数量を完成してください。',
+  'HQ must finish the store profit settings. The store cannot complete this item.': '本部が店舗収益設定を完了する必要があります。この項目は店舗側では入力できません。',
+  'Check the calculated result and tick the final confirmation.': '計算結果を確認し、最終確認にチェックしてください。',
+  'All required inputs are complete. Submit the month to HQ.': '必須入力が完了しました。月次データを本部へ提出してください。',
+  'Open missing report': '未提出報告を開く',
+  'Open receipt report': 'レシート対象報告を開く',
+  'Open monthly totals': '月間合計を開く',
+  'Open inventory input': '仕入・棚卸入力を開く',
+  'Check again': '再確認',
+  'Open final confirmation': '最終確認を開く',
+  'Go to submission': '提出へ進む',
   'Complete Daily Reports': '日次報告を完成',
   Enter: '入力',
   'Add receipt': 'レシートを追加',
@@ -220,11 +245,53 @@ const OWNER_JA: Record<string, string> = {
   'Waiting for inputs': '入力待ち',
   'Final check before submission': '提出前の最終確認',
   'Confirm only after checking the monthly total against the store record.': '店舗資料と月間合計を照合してから確認してください。',
+  'I checked the monthly sales total and confirmed it is correct': '月間売上合計を確認し、正しいことを確認しました',
+  'Optional: explain any variance or correction': '任意：差異や修正内容を入力',
   'Submit the completed month to HQ': '完成した月次データを本部へ提出',
+  'Store note': '店舗メモ',
+  'Optional': '任意',
+  'HQ review note': '本部確認メモ',
+  'Save Notes': 'メモを保存',
+  'No store note': '店舗メモなし',
   'Explain corrected reports, unusual sales, or open issues.': '修正した報告、通常と異なる売上、未解決事項を入力してください。',
   'HQ only': '本部専用',
   'HQ comments appear here.': '本部のコメントがここに表示されます。',
   'Submit to HQ': '本部へ提出',
+  'Waiting for HQ store settings before final profit': '本部の店舗収益設定を待っています',
+  'Monthly labor and operating totals are incomplete': '月間人件費・運営費が未入力です',
+  'Month-end inventory close is incomplete': '月末棚卸が未完了です',
+  'HQ store profit settings are incomplete': '本部の店舗収益設定が未完了です',
+  'Monthly sales total has not been confirmed': '月間売上合計が未確認です',
+  'Monthly profitability result is not ready': '月次収益結果がまだ確定していません',
+  'Management view for improving store operations. This is not a statutory accounting statement.': '店舗運営改善のための管理資料です。法定会計書類ではありません。',
+  'Management margin': '管理利益率',
+  'Food cost': '原価率',
+  'Prime cost': '原価・人件費率',
+  'Reported sales basis': '報告売上基準',
+  'Sales tax removed': '売上税控除後',
+  'Actual inventory method': '実地棚卸方式',
+  'Monthly management profit is ready': '月間管理利益を確認できます',
+  'Sales, actual food cost, labor, operating costs, fixed costs and royalty are included.': '売上、実際原価、人件費、運営費、固定費、ロイヤルティを含みます。',
+  'Target reading': '目標との差',
+  'Labor': '人件費',
+  'Confirmed': '確認済み',
+  'Monthly amount breakdown': '月間金額内訳',
+  'Net sales': '純売上',
+  'Actual food cost': '実際原価',
+  'Labor cost': '人件費',
+  'HQ default rate': '本部初期率',
+  'Monthly entered total': '月間入力合計',
+  'Sales-linked fees': '売上連動手数料',
+  'Utilities': '水道光熱費',
+  'Other operating costs': 'その他運営費',
+  'Rent + common area fee': '賃料・共益費',
+  'Store management profit': '店舗管理利益',
+  'Store productivity': '店舗生産性',
+  'View detailed profit and productivity': '損益・生産性の詳細を見る',
+  'Sales / guest': '客単価',
+  'Sales / labor hour': '労働1時間当たり売上',
+  'Guest count not entered': '来客数未入力',
+  'Labor hours not entered': '勤務時間未入力',
   'Single Items & Recipes': '単品・レシピ',
   'Courses & Sets': 'コース・セット',
   'Menus, Courses & Recipes': 'メニュー・コース・レシピ',
@@ -699,12 +766,38 @@ const OWNER_TEXT: Record<string, Localized> = {
   'Enter purchases and finish the closing stock count': P('输入采购并完成月末盘点', '輸入採購並完成月底盤點', 'Nhập mua hàng và hoàn tất tồn cuối tháng', '매입을 입력하고 월말 재고를 완료하세요'),
   'Available after totals and inventory are complete': P('月度合计和库存完成后可用', '月度合計和庫存完成後可用', 'Có thể dùng sau khi hoàn tất tổng tháng và tồn kho', '월 합계와 재고 완료 후 사용할 수 있습니다'),
   'Complete these items before submission': P('提交前请完成以下项目', '提交前請完成以下項目', 'Hoàn tất các mục sau trước khi nộp', '제출 전 아래 항목을 완료하세요'),
+  'What you need to do now': P('现在要做的事项', '現在要做的事項', 'Việc cần làm ngay', '지금 해야 할 일'),
+  'Missing daily report': P('缺少每日报告', '缺少每日報告', 'Thiếu báo cáo ngày', '미제출 일일 보고'),
+  'Missing receipt image': P('缺少收据图片', '缺少收據圖片', 'Thiếu ảnh hóa đơn', '영수증 이미지 누락'),
+  'Monthly totals not entered': P('月度合计未输入', '月間合計未輸入', 'Chưa nhập tổng tháng', '월 합계 미입력'),
+  'Inventory close not complete': P('库存盘点未完成', '庫存盤點未完成', 'Chưa hoàn tất chốt tồn kho', '재고 마감 미완료'),
+  'Waiting for HQ setup': P('等待总部设置', '等待本部設定', 'Đang chờ thiết lập từ trụ sở', '본사 설정 대기'),
+  'Calculating monthly result': P('正在计算月度结果', '正在計算月間結果', 'Đang tính kết quả tháng', '월 결과 계산 중'),
+  'Final confirmation required': P('需要最终确认', '需要最終確認', 'Cần xác nhận cuối', '최종 확인 필요'),
+  'Ready to submit': P('可以提交', '可以提交', 'Sẵn sàng nộp', '제출 준비 완료'),
+  'Store action': P('门店处理', '門店處理', 'Cửa hàng thực hiện', '점포에서 처리'),
+  'HQ action': P('总部处理', '本部處理', 'Trụ sở thực hiện', '본사에서 처리'),
+  'Enter the oldest missing daily report first.': P('请先填写最早缺少的每日报告。', '請先填寫最早缺少的每日報告。', 'Hãy nhập báo cáo ngày còn thiếu sớm nhất trước.', '가장 오래된 미제출 일일 보고부터 입력하세요.'),
+  'Add the missing receipt image to the daily report.': P('请在每日报告中补充缺少的收据图片。', '請在每日報告中補上缺少的收據圖片。', 'Thêm ảnh hóa đơn còn thiếu vào báo cáo ngày.', '일일 보고에 빠진 영수증 이미지를 추가하세요.'),
+  'Enter the monthly totals shown below, then save the draft.': P('请填写下方月度合计，然后保存草稿。', '請填寫下方月度合計，然後儲存草稿。', 'Nhập các tổng tháng bên dưới rồi lưu nháp.', '아래 월 합계를 입력한 뒤 임시 저장하세요.'),
+  'Enter monthly purchases and complete the physical closing stock count.': P('请输入月度采购并完成月末实物盘点。', '請輸入月間採購並完成月底實物盤點。', 'Nhập mua hàng tháng và hoàn tất kiểm kê tồn cuối thực tế.', '월 매입을 입력하고 실제 월말 재고 조사를 완료하세요.'),
+  'HQ must finish the store profit settings. The store cannot complete this item.': P('总部必须完成门店收益设置，本项无法由门店填写。', '本部必須完成門店收益設定，本項無法由門店填寫。', 'Trụ sở phải hoàn tất thiết lập lợi nhuận cửa hàng; cửa hàng không thể nhập mục này.', '본사가 점포 수익 설정을 완료해야 합니다. 이 항목은 점포에서 입력할 수 없습니다.'),
+  'Check the calculated result and tick the final confirmation.': P('请确认计算结果并勾选最终确认。', '請確認計算結果並勾選最終確認。', 'Kiểm tra kết quả tính toán và đánh dấu xác nhận cuối.', '계산 결과를 확인하고 최종 확인에 체크하세요.'),
+  'All required inputs are complete. Submit the month to HQ.': P('必填项目已完成，请将本月数据提交总部。', '必填項目已完成，請將本月資料提交本部。', 'Đã hoàn tất dữ liệu bắt buộc. Hãy nộp tháng về trụ sở.', '필수 입력이 완료되었습니다. 월 데이터를 본사에 제출하세요.'),
+  'Open missing report': P('打开缺少的报告', '開啟缺少的報告', 'Mở báo cáo còn thiếu', '미제출 보고 열기'),
+  'Open receipt report': P('打开收据报告', '開啟收據報告', 'Mở báo cáo hóa đơn', '영수증 보고 열기'),
+  'Open monthly totals': P('打开月度合计', '開啟月度合計', 'Mở tổng tháng', '월 합계 열기'),
+  'Open inventory input': P('打开采购与库存输入', '開啟採購與庫存輸入', 'Mở nhập mua hàng & tồn kho', '매입·재고 입력 열기'),
+  'Check again': P('重新确认', '重新確認', 'Kiểm tra lại', '다시 확인'),
+  'Open final confirmation': P('打开最终确认', '開啟最終確認', 'Mở xác nhận cuối', '최종 확인 열기'),
+  'Go to submission': P('前往提交', '前往提交', 'Đi đến nộp', '제출로 이동'),
   'Complete Daily Reports': P('完成每日报告', '完成每日報告', 'Hoàn tất báo cáo ngày', '일일 보고 완료'),
   Enter: P('输入', '輸入', 'Nhập', '입력'),
   'Add receipt': P('添加收据', '新增收據', 'Thêm hóa đơn', '영수증 추가'),
   'Enter Monthly Totals': P('输入月度合计', '輸入月度合計', 'Nhập tổng tháng', '월 합계 입력'),
   'Manual entry': P('手动输入', '手動輸入', 'Nhập thủ công', '수동 입력'),
   'Enter one total for each item. If you do not have a file, complete the month here.': P('每个项目输入一个月度合计；没有文件时请在此输入。', '每個項目輸入一個月度合計；沒有檔案時請在此輸入。', 'Nhập một tổng tháng cho mỗi mục. Nếu không có tệp, hãy nhập tại đây.', '각 항목의 월 합계를 하나씩 입력하세요. 파일이 없으면 여기서 입력하면 됩니다.'),
+  'Optional: unusual payroll, fees, utilities, or missing source report': P('选填：异常工资、手续费、水电费或缺少的资料', '選填：異常薪資、手續費、水電費或缺少的資料', 'Không bắt buộc: lương, phí, điện nước bất thường hoặc thiếu tài liệu', '선택: 비정상 급여·수수료·수도광열비 또는 누락 자료'),
   'Save Draft': P('保存草稿', '儲存草稿', 'Lưu nháp', '임시 저장'),
   'Next: monthly purchases and inventory': P('下一步：月度采购与库存', '下一步：月間採購與庫存', 'Tiếp theo: mua hàng & tồn kho tháng', '다음: 월 매입·재고'),
   'You can save the current totals as a draft and continue with inventory at any time.': P('可以先保存当前月度合计草稿，之后随时继续库存盘点。', '可以先儲存目前月度合計草稿，之後隨時繼續盤點。', 'Có thể lưu nháp tổng tháng hiện tại và tiếp tục tồn kho bất cứ lúc nào.', '현재 월 합계를 임시 저장하고 언제든 재고 입력을 계속할 수 있습니다.'),
@@ -718,8 +811,64 @@ const OWNER_TEXT: Record<string, Localized> = {
   'Review Monthly Result': P('查看月度结果', '查看月度結果', 'Xem kết quả tháng', '월 결과 확인'),
   'Actual food cost cannot be finalized until opening stock, purchases and closing stock are complete.': P('月初库存、采购和月末库存完成前无法确定实际成本。', '月初庫存、採購和月底庫存完成前無法確定實際成本。', 'Chưa thể chốt giá vốn thực tế cho đến khi đủ tồn đầu, mua hàng và tồn cuối.', '월초 재고·매입·월말 재고가 완료되어야 실제 원가를 확정할 수 있습니다.'),
   'Final check before submission': P('提交前最终确认', '提交前最終確認', 'Kiểm tra cuối trước khi nộp', '제출 전 최종 확인'),
+  'Confirm only after checking the monthly total against the store record.': P('请与门店资料核对月度合计后再确认。', '請與門店資料核對月度合計後再確認。', 'Chỉ xác nhận sau khi đối chiếu tổng tháng với hồ sơ cửa hàng.', '점포 자료와 월 합계를 대조한 뒤 확인하세요.'),
+  'I checked the monthly sales total and confirmed it is correct': P('我已核对月度销售合计并确认无误', '我已核對月間營業額合計並確認無誤', 'Tôi đã kiểm tra tổng doanh thu tháng và xác nhận chính xác', '월 매출 합계를 확인했고 정확함을 확인했습니다'),
+  'Optional: explain any variance or correction': P('选填：说明差异或修正内容', '選填：說明差異或修正內容', 'Không bắt buộc: giải thích chênh lệch hoặc điều chỉnh', '선택: 차이 또는 수정 내용을 설명하세요'),
   'Submit the completed month to HQ': P('将完成的月度数据提交总部', '將完成的月度資料提交總部', 'Nộp tháng đã hoàn tất về trụ sở', '완료된 월 데이터를 본사에 제출'),
+  'Store note': P('门店备注', '門店備註', 'Ghi chú cửa hàng', '점포 메모'),
+  'HQ review note': P('总部审核备注', '本部確認備註', 'Ghi chú kiểm tra của trụ sở', '본사 검토 메모'),
+  'Save Notes': P('保存备注', '儲存備註', 'Lưu ghi chú', '메모 저장'),
+  'No store note': P('无门店备注', '無門店備註', 'Không có ghi chú cửa hàng', '점포 메모 없음'),
+  'Explain corrected reports, unusual sales, or open issues.': P('说明修正报告、异常销售或未解决事项。', '說明修正報告、異常營業額或未解決事項。', 'Giải thích báo cáo đã sửa, doanh thu bất thường hoặc vấn đề còn mở.', '수정한 보고, 비정상 매출 또는 미해결 사항을 적으세요.'),
+  'HQ only': P('仅总部', '僅本部', 'Chỉ trụ sở', '본사 전용'),
+  'HQ comments appear here.': P('总部意见显示在此。', '本部意見顯示於此。', 'Ý kiến của trụ sở sẽ hiện tại đây.', '본사 의견이 여기에 표시됩니다.'),
   'Submit to HQ': P('提交总部', '提交總部', 'Nộp về trụ sở', '본사 제출'),
+  'Waiting for HQ store settings before final profit': P('等待总部完成门店收益设置', '等待本部完成門店收益設定', 'Đang chờ trụ sở thiết lập lợi nhuận cửa hàng', '최종 이익 계산을 위해 본사 점포 설정을 기다리는 중입니다'),
+  'Monthly labor and operating totals are incomplete': P('月度人工费和运营费合计未完成', '月間人事費與營運費合計未完成', 'Tổng nhân công và chi phí vận hành tháng chưa hoàn tất', '월 인건비·운영비 합계가 미완료입니다'),
+  'Month-end inventory close is incomplete': P('月末库存盘点未完成', '月底庫存盤點未完成', 'Chốt tồn kho cuối tháng chưa hoàn tất', '월말 재고 마감이 미완료입니다'),
+  'HQ store profit settings are incomplete': P('总部的门店收益设置未完成', '本部的門店收益設定未完成', 'Thiết lập lợi nhuận cửa hàng của trụ sở chưa hoàn tất', '본사 점포 수익 설정이 미완료입니다'),
+  'Monthly sales total has not been confirmed': P('月度销售合计尚未确认', '月間營業額合計尚未確認', 'Tổng doanh thu tháng chưa được xác nhận', '월 매출 합계를 아직 확인하지 않았습니다'),
+  'Monthly profitability result is not ready': P('月度收益结果尚未就绪', '月間收益結果尚未就緒', 'Kết quả lợi nhuận tháng chưa sẵn sàng', '월 수익 결과가 아직 준비되지 않았습니다'),
+  'Complete the missing inputs before using the final margin': P('请完成缺少的输入后再查看最终利润率', '請完成缺少的輸入後再查看最終利益率', 'Hoàn tất dữ liệu còn thiếu trước khi xem tỷ suất cuối', '최종 이익률을 확인하려면 누락된 입력을 완료하세요'),
+  'No target': P('未设置目标', '未設定目標', 'Chưa có mục tiêu', '목표 없음'),
+  'Shown after all inputs are ready': P('全部输入完成后显示', '全部輸入完成後顯示', 'Hiển thị sau khi nhập đủ', '모든 입력 완료 후 표시'),
+  'Waiting for inputs': P('等待输入', '等待輸入', 'Đang chờ dữ liệu', '입력 대기'),
+  'Sales, labor and operating totals are ready': P('销售、人工费及运营费合计已完成', '營業額、人事費及營運費合計已完成', 'Doanh thu, nhân công và chi phí vận hành đã đủ', '매출·인건비·운영비 합계 완료'),
+  'Enter labor, fees, utilities and other monthly totals': P('请输入人工费、手续费、水电及其他月度合计', '請輸入人事費、手續費、水電及其他月間合計', 'Nhập nhân công, phí, điện nước và các tổng tháng khác', '인건비·수수료·수도광열비·기타 월 합계를 입력하세요'),
+  'Opening and closing inventory counts are complete': P('月初和月末库存盘点已完成', '月初和月底庫存盤點已完成', 'Đã hoàn tất tồn đầu và tồn cuối', '월초·월말 재고 조사 완료'),
+  'Approved by HQ': P('总部已批准', '本部已核准', 'Trụ sở đã duyệt', '본사 승인 완료'),
+  'Submitted to HQ': P('已提交总部', '已提交本部', 'Đã nộp về trụ sở', '본사 제출 완료'),
+  'All checks are ready — submit the month to HQ': P('检查已完成，请将本月数据提交总部', '確認已完成，請將本月資料提交本部', 'Đã kiểm tra xong — hãy nộp tháng về trụ sở', '확인이 완료되었습니다. 월 데이터를 본사에 제출하세요'),
+  'Check the calculated result and complete the final confirmation': P('请检查计算结果并完成最终确认', '請檢查計算結果並完成最終確認', 'Kiểm tra kết quả tính và hoàn tất xác nhận cuối', '계산 결과를 확인하고 최종 확인을 완료하세요'),
+  'Inventory close is complete': P('库存盘点已完成', '庫存盤點已完成', 'Đã hoàn tất chốt tồn kho', '재고 마감 완료'),
+  'Review Inventory': P('检查库存', '確認庫存', 'Kiểm tra tồn kho', '재고 확인'),
+  'Management view for improving store operations. This is not a statutory accounting statement.': P('用于改善门店运营的管理资料，并非法定财务报表。', '用於改善門店營運的管理資料，並非法定財務報表。', 'Đây là báo cáo quản trị để cải thiện vận hành, không phải báo cáo kế toán pháp định.', '점포 운영 개선을 위한 관리 자료이며 법정 회계보고서가 아닙니다.'),
+  'Management margin': P('管理利润率', '管理利益率', 'Tỷ suất lợi nhuận quản lý', '관리이익률'),
+  'Food cost': P('原料成本率', '食材成本率', 'Tỷ lệ giá vốn', '원가율'),
+  'Prime cost': P('原料及人工成本率', '食材及人事費率', 'Tỷ lệ giá vốn + nhân công', '원가·인건비율'),
+  'Reported sales basis': P('按已报告销售额', '依已報告營業額', 'Theo doanh thu đã báo cáo', '보고 매출 기준'),
+  'Sales tax removed': P('已扣除销售税', '已扣除營業稅', 'Đã loại thuế bán hàng', '매출세 제외'),
+  'Actual inventory method': P('实际盘点法', '實際盤點法', 'Theo kiểm kê thực tế', '실제 재고 방식'),
+  'Inventory close incomplete': P('库存盘点未完成', '庫存盤點未完成', 'Chốt tồn kho chưa hoàn tất', '재고 마감 미완료'),
+  'Monthly management profit is ready': P('可以查看月度管理利润', '可以查看月間管理利益', 'Đã có lợi nhuận quản lý tháng', '월 관리이익을 확인할 수 있습니다'),
+  'Sales, actual food cost, labor, operating costs, fixed costs and royalty are included.': P('包括销售额、实际原料成本、人工费、运营费、固定费及权利金。', '包括營業額、實際食材成本、人事費、營運費、固定費及權利金。', 'Bao gồm doanh thu, giá vốn thực tế, nhân công, chi phí vận hành, cố định và bản quyền.', '매출·실제 원가·인건비·운영비·고정비·로열티가 포함됩니다.'),
+  'Target reading': P('与目标比较', '與目標比較', 'So với mục tiêu', '목표 대비'),
+  Labor: P('人工费', '人事費', 'Nhân công', '인건비'),
+  Confirmed: P('已确认', '已確認', 'Đã xác nhận', '확인 완료'),
+  'Monthly amount breakdown': P('月度金额明细', '月間金額明細', 'Chi tiết số tiền tháng', '월 금액 내역'),
+  'Net sales': P('净销售额', '淨營業額', 'Doanh thu thuần', '순매출'),
+  'Actual food cost': P('实际原料成本', '實際食材成本', 'Giá vốn thực tế', '실제 원가'),
+  'Labor cost': P('人工成本', '人事費', 'Chi phí nhân công', '인건비'),
+  'HQ default rate': P('总部默认比例', '本部預設比例', 'Tỷ lệ mặc định của trụ sở', '본사 기본 비율'),
+  'Monthly entered total': P('月度输入合计', '月間輸入合計', 'Tổng đã nhập trong tháng', '월 입력 합계'),
+  'Rent + common area fee': P('租金及公共管理费', '租金及公共管理費', 'Tiền thuê và phí khu vực chung', '임대료·공용관리비'),
+  'Store management profit': P('门店管理利润', '門店管理利益', 'Lợi nhuận quản lý cửa hàng', '점포 관리이익'),
+  'Store productivity': P('门店生产效率', '門店生產效率', 'Năng suất cửa hàng', '점포 생산성'),
+  'View detailed profit and productivity': P('查看详细损益与生产效率', '查看詳細損益與生產效率', 'Xem chi tiết lợi nhuận và năng suất', '상세 손익·생산성 보기'),
+  'Sales / guest': P('客单价', '客單價', 'Doanh thu / khách', '객단가'),
+  'Sales / labor hour': P('每工时销售额', '每工時營業額', 'Doanh thu / giờ công', '근무 1시간당 매출'),
+  'Guest count not entered': P('未输入顾客人数', '未輸入來客數', 'Chưa nhập số khách', '고객 수 미입력'),
+  'Labor hours not entered': P('未输入工时', '未輸入工時', 'Chưa nhập giờ công', '근무시간 미입력'),
   'Monthly Operating Inputs': P('月度运营数据', '月度營運資料', 'Dữ liệu vận hành tháng', '월 운영 데이터'),
   'Manual Entry': P('手动输入', '手動輸入', 'Nhập thủ công', '수동 입력'),
   'Import File': P('导入文件', '匯入檔案', 'Nhập tệp', '파일 가져오기'),
@@ -1067,6 +1216,36 @@ function translateMonthlyDynamic(value: string, locale: Exclude<OwnerLocale, 'en
     return `일일 보고 ${count}일분이 미제출입니다`;
   }
 
+  match = value.match(/^(\d+) daily sales report\(s\) are missing$/);
+  if (match) {
+    const count = match[1];
+    if (locale === 'ja') return `日次売上報告が${count}日分未提出です`;
+    if (locale === 'zh-CN') return `缺少${count}天的每日销售报告`;
+    if (locale === 'zh-TW') return `缺少${count}天的每日營業報告`;
+    if (locale === 'vi') return `Thiếu ${count} báo cáo doanh thu ngày`;
+    return `일일 매출 보고 ${count}일분이 누락되었습니다`;
+  }
+
+  match = value.match(/^(\d+) open-day report\(s\) have no receipt image$/);
+  if (match) {
+    const count = match[1];
+    if (locale === 'ja') return `${count}件の営業日報告にレシート画像がありません`;
+    if (locale === 'zh-CN') return `${count}份营业日报告没有收据图片`;
+    if (locale === 'zh-TW') return `${count}份營業日報告沒有收據圖片`;
+    if (locale === 'vi') return `${count} báo cáo ngày mở cửa chưa có ảnh hóa đơn`;
+    return `영업일 보고 ${count}건에 영수증 이미지가 없습니다`;
+  }
+
+  match = value.match(/^(\d+) receipt image\(s\) still missing$/);
+  if (match) {
+    const count = match[1];
+    if (locale === 'ja') return `レシート画像があと${count}件未登録です`;
+    if (locale === 'zh-CN') return `还有${count}张收据图片未上传`;
+    if (locale === 'zh-TW') return `還有${count}張收據圖片未上傳`;
+    if (locale === 'vi') return `Còn thiếu ${count} ảnh hóa đơn`;
+    return `영수증 이미지 ${count}건이 누락되었습니다`;
+  }
+
   match = value.match(/^(\d+) business day\(s\) · (\d+) closed day\(s\)$/);
   if (match) {
     const [, businessDays, closedDays] = match;
@@ -1135,6 +1314,33 @@ function translateMonthlyDynamic(value: string, locale: Exclude<OwnerLocale, 'en
     if (locale === 'zh-TW') return `顯示 ${shown}/${total}`;
     if (locale === 'vi') return `Hiện ${shown}/${total}`;
     return `${shown}/${total}개 표시`;
+  }
+
+  match = value.match(/^Missing: (.+)\.$/);
+  if (match) {
+    const labels: Record<string, Record<Exclude<OwnerLocale, 'en'>, string>> = {
+      'HQ store defaults': {
+        ja: '本部の店舗初期設定', 'zh-CN': '总部门店默认设置', 'zh-TW': '本部門店預設設定', vi: 'thiết lập mặc định của trụ sở', ko: '본사 점포 기본 설정',
+      },
+      'monthly labor and operating totals': {
+        ja: '月間人件費・運営費合計', 'zh-CN': '月度人工费与运营费合计', 'zh-TW': '月間人事費與營運費合計', vi: 'tổng nhân công và chi phí vận hành tháng', ko: '월 인건비·운영비 합계',
+      },
+      'completed opening and closing inventory': {
+        ja: '月初・月末棚卸の完了', 'zh-CN': '完成月初及月末库存', 'zh-TW': '完成月初及月底庫存', vi: 'tồn đầu và tồn cuối đã hoàn tất', ko: '월초·월말 재고 완료',
+      },
+      'reported sales': {
+        ja: '報告済み売上', 'zh-CN': '已报告销售额', 'zh-TW': '已報告營業額', vi: 'doanh thu đã báo cáo', ko: '보고된 매출',
+      },
+      'reported sales or monthly operating totals': {
+        ja: '報告済み売上または月間運営合計', 'zh-CN': '已报告销售额或月度运营合计', 'zh-TW': '已報告營業額或月間營運合計', vi: 'doanh thu đã báo cáo hoặc tổng vận hành tháng', ko: '보고된 매출 또는 월 운영 합계',
+      },
+    };
+    const translated = match[1].split(', ').map((item) => labels[item]?.[locale] ?? item).join(', ');
+    if (locale === 'ja') return `未完了：${translated}。`;
+    if (locale === 'zh-CN') return `缺少：${translated}。`;
+    if (locale === 'zh-TW') return `缺少：${translated}。`;
+    if (locale === 'vi') return `Còn thiếu: ${translated}.`;
+    return `미완료: ${translated}.`;
   }
 
   return null;
