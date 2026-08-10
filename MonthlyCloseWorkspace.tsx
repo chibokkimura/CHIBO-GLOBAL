@@ -524,10 +524,101 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
   useEffect(() => {
     if (mode !== 'owner' || loading) return;
     setOwnerFocusStep((current) => {
+      if (current === 3 && (!stepOneComplete || !stepTwoComplete)) {
+        return stepOneComplete ? 2 : 1;
+      }
+      if (current === 2 && !stepOneComplete) return 1;
       if (current !== 1 || !stepOneComplete) return current;
       return stepTwoComplete ? 3 : 2;
     });
   }, [loading, mode, monthKey, stepOneComplete, stepTwoComplete]);
+
+  const focusOwnerArea = (step: 1 | 2 | 3, elementId: string) => {
+    setOwnerFocusStep(step);
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        document.getElementById(elementId)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    });
+  };
+
+  const ownerNextAction = (() => {
+    if (missingDates.length > 0) {
+      return {
+        title: 'Missing daily report',
+        detail: 'Enter the oldest missing daily report first.',
+        context: missingDates[0],
+        button: 'Open missing report',
+        ownerResponsible: true,
+        run: () => onOpenSalesReport?.(missingDates[0]),
+      };
+    }
+    if (missingReceiptSales.length > 0) {
+      return {
+        title: 'Missing receipt image',
+        detail: 'Add the missing receipt image to the daily report.',
+        context: missingReceiptSales[0].date,
+        button: 'Open receipt report',
+        ownerResponsible: true,
+        run: () => onOpenSalesReport?.(missingReceiptSales[0].date),
+      };
+    }
+    if (!profitabilityProgress.operatingInputsComplete) {
+      return {
+        title: 'Monthly totals not entered',
+        detail: 'Enter the monthly totals shown below, then save the draft.',
+        button: 'Open monthly totals',
+        ownerResponsible: true,
+        run: () => focusOwnerArea(1, 'monthly-totals'),
+      };
+    }
+    if (!profitabilityProgress.inventoryComplete) {
+      return {
+        title: 'Inventory close not complete',
+        detail: 'Enter monthly purchases and complete the physical closing stock count.',
+        button: 'Open inventory input',
+        ownerResponsible: true,
+        run: () => onOpenInventory ? onOpenInventory() : setOwnerFocusStep(2),
+      };
+    }
+    if (!profitabilityProgress.settingsComplete) {
+      return {
+        title: 'Waiting for HQ setup',
+        detail: 'HQ must finish the store profit settings. The store cannot complete this item.',
+        button: 'Check again',
+        ownerResponsible: false,
+        run: () => {
+          void loadData();
+          setProfitabilityRefreshKey((current) => current + 1);
+        },
+      };
+    }
+    if (!profitabilityProgress.profitabilityReady) {
+      return {
+        title: 'Calculating monthly result',
+        detail: 'Check the calculated result and tick the final confirmation.',
+        button: 'Check again',
+        ownerResponsible: true,
+        run: () => refreshProfitability(),
+      };
+    }
+    if (!confirmationComplete) {
+      return {
+        title: 'Final confirmation required',
+        detail: 'Check the calculated result and tick the final confirmation.',
+        button: 'Open final confirmation',
+        ownerResponsible: true,
+        run: () => focusOwnerArea(3, 'store-confirmation'),
+      };
+    }
+    return {
+      title: 'Ready to submit',
+      detail: 'All required inputs are complete. Submit the month to HQ.',
+      button: 'Go to submission',
+      ownerResponsible: true,
+      run: () => focusOwnerArea(3, 'submission-requirements'),
+    };
+  })();
 
   const refreshProfitability = useCallback((monthlyInputsComplete?: boolean) => {
     if (preview) {
@@ -658,7 +749,8 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
                 key={step.number}
                 type="button"
                 onClick={step.action}
-                disabled={step.number === 2 && !onOpenInventory}
+                disabled={(step.number === 2 && (!onOpenInventory || !stepOneComplete))
+                  || (step.number === 3 && (!stepOneComplete || !stepTwoComplete))}
                 className={`flex items-start gap-3 border-b border-slate-200 p-5 text-left transition last:border-b-0 hover:bg-slate-50 disabled:cursor-default lg:border-b-0 lg:border-r lg:last:border-r-0 ${
                   step.active ? 'bg-amber-50' : 'bg-white'
                 }`}
@@ -689,6 +781,43 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
                 </span>
               </button>
             ))}
+          </div>
+        </section>
+      ) : null}
+
+      {mode === 'owner' ? (
+        <section className={`rounded-2xl border p-4 shadow-sm sm:p-5 ${
+          ownerNextAction.ownerResponsible
+            ? 'border-blue-200 bg-blue-50'
+            : 'border-amber-300 bg-amber-50'
+        }`}>
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs font-black uppercase tracking-[0.14em] text-slate-500">What you need to do now</span>
+                <span className={`rounded-full px-2 py-1 text-[10px] font-black ${
+                  ownerNextAction.ownerResponsible
+                    ? 'bg-blue-700 text-white'
+                    : 'bg-amber-300 text-amber-950'
+                }`}>
+                  {ownerNextAction.ownerResponsible ? 'Store action' : 'HQ action'}
+                </span>
+              </div>
+              <div className="mt-2 flex flex-wrap items-baseline gap-2">
+                <h3 className="text-lg font-black text-slate-950">{ownerNextAction.title}</h3>
+                {'context' in ownerNextAction && ownerNextAction.context ? (
+                  <span className="rounded-lg bg-white px-2 py-1 text-xs font-black text-slate-700">{ownerNextAction.context}</span>
+                ) : null}
+              </div>
+              <p className="mt-1 text-sm font-medium leading-5 text-slate-600">{ownerNextAction.detail}</p>
+            </div>
+            <button
+              type="button"
+              onClick={ownerNextAction.run}
+              className="min-h-12 shrink-0 rounded-xl bg-slate-950 px-5 py-3 text-sm font-black text-white hover:bg-slate-800"
+            >
+              {ownerNextAction.button}
+            </button>
           </div>
         </section>
       ) : null}
@@ -766,6 +895,7 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
       </div>
 
       <CollapsibleDetails
+        id="daily-report-checks"
         key={`sales-checks-${store.id}-${monthKey}-${reportingComplete && receiptsComplete ? 'complete' : 'open'}`}
         initialOpen={!reportingComplete || !receiptsComplete}
         className={`group rounded-2xl border border-gray-200 bg-white ${mode === 'owner' && ownerFocusStep !== 1 ? 'hidden' : ''}`}
@@ -1017,6 +1147,7 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
       </div>
 
       <CollapsibleDetails
+        id="store-confirmation"
         key={`store-confirmation-${store.id}-${monthKey}-${confirmationComplete ? 'complete' : 'open'}`}
         initialOpen={!confirmationComplete}
         className={`group rounded-2xl border border-gray-200 bg-white ${mode === 'owner' && ownerFocusStep !== 3 ? 'hidden' : ''}`}
@@ -1078,7 +1209,7 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
         <h3 className="font-extrabold">
           {mode === 'hq' ? '7. Notes & Approval' : 'Submit the completed month to HQ'}
         </h3>
-        <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <div className={`mt-4 grid grid-cols-1 gap-4 ${mode === 'hq' ? 'lg:grid-cols-2' : ''}`}>
           <label className="text-xs font-bold text-gray-600">
             <span className="flex items-center gap-2">
               Store note
@@ -1088,27 +1219,31 @@ const MonthlyCloseWorkspace: React.FC<Props> = ({
               value={ownerNote}
               disabled={lockedForOwner || mode === 'hq'}
               onChange={(event) => setOwnerNote(event.target.value)}
-              rows={4}
+              rows={3}
               className="mt-1 w-full rounded-xl border border-gray-200 p-3 text-sm font-normal disabled:bg-gray-50"
               placeholder={mode === 'hq' ? 'No store note' : 'Explain corrected reports, unusual sales, or open issues.'}
             />
           </label>
-          <label className="text-xs font-bold text-gray-600">
-            <span className="flex items-center gap-2">
-              HQ review note
-              <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[9px] font-extrabold text-gray-500">
-                {mode === 'hq' ? 'Optional' : 'HQ only'}
+          {mode === 'hq' ? (
+            <label className="text-xs font-bold text-gray-600">
+              <span className="flex items-center gap-2">
+                HQ review note
+                <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[9px] font-extrabold text-gray-500">Optional</span>
               </span>
-            </span>
-            <textarea
-              value={reviewNote}
-              disabled={mode !== 'hq'}
-              onChange={(event) => setReviewNote(event.target.value)}
-              rows={4}
-              className="mt-1 w-full rounded-xl border border-gray-200 p-3 text-sm font-normal disabled:bg-gray-50"
-              placeholder={mode === 'hq' ? 'Record the review result or requested correction.' : 'HQ comments appear here.'}
-            />
-          </label>
+              <textarea
+                value={reviewNote}
+                onChange={(event) => setReviewNote(event.target.value)}
+                rows={3}
+                className="mt-1 w-full rounded-xl border border-gray-200 p-3 text-sm font-normal"
+                placeholder="Record the review result or requested correction."
+              />
+            </label>
+          ) : reviewNote ? (
+            <div className="rounded-xl border border-blue-200 bg-blue-50 p-3 text-xs text-blue-900">
+              <div className="font-black">HQ review note</div>
+              <div className="mt-1 whitespace-pre-wrap font-medium">{reviewNote}</div>
+            </div>
+          ) : null}
         </div>
 
         <div className="mt-4 flex flex-wrap items-center justify-between gap-3">

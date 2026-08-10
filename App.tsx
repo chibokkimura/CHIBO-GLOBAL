@@ -9927,7 +9927,7 @@ const StoreDashboard: React.FC<{
     const storeEmployees = employees.filter(e => e.storeId === store.id);
     const storeSales = sales.filter(s => s.storeId === store.id);
     useEffect(() => {
-        if (!isSupabaseConfigured || (view !== 'dashboard' && view !== 'setup')) return;
+        if (!isSupabaseConfigured || isLocalOwnerPreviewMode() || (view !== 'dashboard' && view !== 'setup')) return;
         let active = true;
         void supabase
             .from('store_ingredient_profiles')
