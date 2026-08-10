@@ -8,6 +8,7 @@ import {
   Plus,
   RefreshCw,
   Save,
+  Search,
   Target,
   Trash2,
 } from 'lucide-react';
@@ -267,6 +268,8 @@ const CostInventoryWorkspace: React.FC<Props> = ({
   const [newIngredient, setNewIngredient] = useState({ name: '', unit: 'g' });
   const [showPurchaseForm, setShowPurchaseForm] = useState(false);
   const [activeSection, setActiveSection] = useState<WorkspaceSection>(initialSection);
+  const [inventorySearch, setInventorySearch] = useState('');
+  const [showIncompleteInventoryOnly, setShowIncompleteInventoryOnly] = useState(false);
   const [showMonthlySettings, setShowMonthlySettings] = useState(false);
   const [expandedProfileId, setExpandedProfileId] = useState<string | null>(null);
   const [expandedInventoryId, setExpandedInventoryId] = useState<string | null>(null);
@@ -509,6 +512,18 @@ const CostInventoryWorkspace: React.FC<Props> = ({
     [purchases],
   );
   const completedCounts = activeProfiles.filter((profile) => inventoryRows[profile.ingredientId]?.countComplete).length;
+  const filteredInventoryProfiles = useMemo(() => {
+    const query = inventorySearch.trim().toLocaleLowerCase();
+    return activeProfiles.filter((profile) => {
+      const ingredient = ingredientById.get(profile.ingredientId);
+      const matchesSearch = query === ''
+        || (ingredient?.name ?? profile.ingredientId).toLocaleLowerCase().includes(query)
+        || (ingredient?.unit ?? '').toLocaleLowerCase().includes(query);
+      const matchesCompletion = !showIncompleteInventoryOnly
+        || !inventoryRows[profile.ingredientId]?.countComplete;
+      return matchesSearch && matchesCompletion;
+    });
+  }, [activeProfiles, ingredientById, inventoryRows, inventorySearch, showIncompleteInventoryOnly]);
   const reportedSales = useMemo(
     () => analysisSales
       .filter((sale) => sale.storeId === store.id && sale.date.startsWith(`${monthKey}-`))
@@ -2763,8 +2778,38 @@ const CostInventoryWorkspace: React.FC<Props> = ({
             <strong className="ml-1">Optional:</strong> waste, adjustment, and notes may remain 0 or blank.
           </div>
 
+          {activeProfiles.length > 0 ? (
+            <div className="mt-4 flex flex-col gap-3 rounded-xl border border-gray-200 bg-white p-3 sm:flex-row sm:items-center sm:justify-between">
+              <label className="relative block min-w-0 flex-1">
+                <span className="sr-only">Search ingredients</span>
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+                <input
+                  type="search"
+                  value={inventorySearch}
+                  onChange={(event) => setInventorySearch(event.target.value)}
+                  placeholder="Search ingredients"
+                  className="min-h-11 w-full rounded-xl border border-gray-200 bg-gray-50 pl-10 pr-3 text-sm font-bold outline-none focus:border-gray-400 focus:bg-white"
+                />
+              </label>
+              <div className="flex items-center justify-between gap-3 sm:justify-end">
+                <label className="inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-xl border border-gray-200 px-3 text-xs font-extrabold text-gray-700">
+                  <input
+                    type="checkbox"
+                    checked={showIncompleteInventoryOnly}
+                    onChange={(event) => setShowIncompleteInventoryOnly(event.target.checked)}
+                    className="h-4 w-4 rounded border-gray-300"
+                  />
+                  Show incomplete only
+                </label>
+                <span className="shrink-0 text-xs font-bold text-gray-500">
+                  {`Showing ${filteredInventoryProfiles.length} of ${activeProfiles.length}`}
+                </span>
+              </div>
+            </div>
+          ) : null}
+
           <div className="mt-4 space-y-3 md:hidden">
-            {activeProfiles.map((profile) => {
+            {filteredInventoryProfiles.map((profile) => {
               const ingredient = ingredientById.get(profile.ingredientId);
               const row = inventoryRows[profile.ingredientId] ?? emptyInventoryRow(store.id, profile.ingredientId, monthStart);
               const purchasedQuantity = purchasedQuantityByIngredient.get(profile.ingredientId) ?? 0;
@@ -2944,6 +2989,10 @@ const CostInventoryWorkspace: React.FC<Props> = ({
               <div className="rounded-xl bg-gray-50 px-4 py-8 text-center text-sm text-gray-400">
                 Register ingredient purchase setup first.
               </div>
+            ) : filteredInventoryProfiles.length === 0 ? (
+              <div className="rounded-xl bg-gray-50 px-4 py-8 text-center text-sm text-gray-500">
+                No ingredients match this filter.
+              </div>
             ) : null}
           </div>
 
@@ -2962,7 +3011,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                 </tr>
               </thead>
               <tbody>
-                {activeProfiles.map((profile) => {
+                {filteredInventoryProfiles.map((profile) => {
                   const ingredient = ingredientById.get(profile.ingredientId);
                   const row = inventoryRows[profile.ingredientId] ?? emptyInventoryRow(store.id, profile.ingredientId, monthStart);
                   const purchasedQuantity = purchasedQuantityByIngredient.get(profile.ingredientId) ?? 0;
@@ -3130,6 +3179,13 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                     </React.Fragment>
                   );
                 })}
+                {activeProfiles.length > 0 && filteredInventoryProfiles.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className="px-3 py-8 text-center text-sm text-gray-500">
+                      No ingredients match this filter.
+                    </td>
+                  </tr>
+                ) : null}
                 {activeProfiles.length === 0 && (
                   <tr><td colSpan={8} className="px-3 py-8 text-center text-sm text-gray-400">Register ingredient purchase setup first.</td></tr>
                 )}
