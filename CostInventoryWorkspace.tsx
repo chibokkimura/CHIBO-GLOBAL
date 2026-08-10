@@ -104,6 +104,7 @@ type Props = {
   initialMonthKey: string;
   mode: 'owner' | 'hq';
   onAddIngredient?: (ingredient: Ingredient) => Promise<void> | void;
+  initialSection?: WorkspaceSection;
 };
 
 const CATEGORY_LABELS: Record<IngredientCategory, string> = {
@@ -229,6 +230,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
   initialMonthKey,
   mode,
   onAddIngredient,
+  initialSection = 'summary',
 }) => {
   const preview = isLocalPreview();
   const [monthKey, setMonthKey] = useState(initialMonthKey);
@@ -264,7 +266,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
   const [showNewIngredient, setShowNewIngredient] = useState(false);
   const [newIngredient, setNewIngredient] = useState({ name: '', unit: 'g' });
   const [showPurchaseForm, setShowPurchaseForm] = useState(false);
-  const [activeSection, setActiveSection] = useState<WorkspaceSection>('summary');
+  const [activeSection, setActiveSection] = useState<WorkspaceSection>(initialSection);
   const [showMonthlySettings, setShowMonthlySettings] = useState(false);
   const [expandedProfileId, setExpandedProfileId] = useState<string | null>(null);
   const [expandedInventoryId, setExpandedInventoryId] = useState<string | null>(null);
@@ -276,6 +278,10 @@ const CostInventoryWorkspace: React.FC<Props> = ({
     supplier: '',
     notes: '',
   });
+
+  useEffect(() => {
+    setActiveSection(initialSection);
+  }, [initialSection, store.id]);
   const monthLocked = closeStatus === 'submitted' || closeStatus === 'approved';
   const editable = mode === 'owner' && !monthLocked;
 
@@ -1582,7 +1588,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                 <div className={`mt-1 text-xs leading-5 ${monthlyProductSalesDraft.sourceMode === 'daily_reports' ? 'text-gray-300' : 'text-gray-500'}`}>
                   For stores that enter menu and course quantities with each daily report.
                 </div>
-                <div className="mt-3 text-lg font-black">{formatAmount(dailyReportedProductUnits, 0)} recorded units</div>
+                <div className="mt-3 text-lg font-black">{`${formatAmount(dailyReportedProductUnits, 0)} recorded units`}</div>
               </button>
               <button
                 type="button"
@@ -1598,7 +1604,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                 <div className={`mt-1 text-xs leading-5 ${monthlyProductSalesDraft.sourceMode === 'monthly_pos' ? 'text-gray-300' : 'text-gray-500'}`}>
                   For stores that have one month-end POS product report instead of daily item quantities.
                 </div>
-                <div className="mt-3 text-lg font-black">{formatAmount(monthlyPosProductUnits, 0)} entered units</div>
+                <div className="mt-3 text-lg font-black">{`${formatAmount(monthlyPosProductUnits, 0)} entered units`}</div>
               </button>
             </div>
 
@@ -1722,7 +1728,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
 
             <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end">
               <label className="flex-1 text-xs font-bold text-gray-600">
-                Source note {monthlyProductSalesDraft.sourceMode === 'monthly_pos' ? '(required)' : '(optional)'}
+                {`Source note ${monthlyProductSalesDraft.sourceMode === 'monthly_pos' ? '(required)' : '(optional)'}`}
                 <input
                   value={monthlyProductSalesDraft.notes}
                   disabled={!editable}
@@ -2048,13 +2054,13 @@ const CostInventoryWorkspace: React.FC<Props> = ({
                   {!inventoryComplete && (
                     <div className="rounded-xl border-l-4 border-amber-500 bg-amber-50 p-4">
                       <div className="text-sm font-extrabold">Complete inventory close</div>
-                      <div className="mt-1 text-xs text-amber-800">{completedCounts}/{activeProfiles.length} ingredient counts complete</div>
+                      <div className="mt-1 text-xs text-amber-800">{`${completedCounts}/${activeProfiles.length} ingredient counts complete`}</div>
                     </div>
                   )}
                   {recipeBlockerCount > 0 && (
                     <div className="rounded-xl border-l-4 border-amber-500 bg-amber-50 p-4">
                       <div className="text-sm font-extrabold">Complete recipes and ingredient costs</div>
-                      <div className="mt-1 text-xs text-amber-800">{recipeBlockerCount} item(s) still block the variance analysis</div>
+                      <div className="mt-1 text-xs text-amber-800">{`${recipeBlockerCount} item(s) still block the variance analysis`}</div>
                     </div>
                   )}
                 </div>
@@ -2294,7 +2300,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
           <section className="order-2 rounded-2xl border border-gray-200 bg-white p-5">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div>
-                <h3 className="text-lg font-extrabold">2. Ingredient Purchase Setup</h3>
+                <h3 className="text-lg font-extrabold">Ingredient Purchase Setup</h3>
                 <p className="mt-1 text-sm text-gray-500">
                   Review each ingredient in one row and open the form only when changes are needed.
                 </p>
@@ -2542,7 +2548,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
           <section className="order-1 rounded-2xl border border-gray-200 bg-white p-5">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div>
-                <h3 className="text-lg font-extrabold">1. Monthly Purchases</h3>
+                <h3 className="text-lg font-extrabold">Monthly Purchases</h3>
                 <p className="mt-1 text-sm text-gray-500">Enter package count and invoice total; base-unit quantity is calculated automatically.</p>
               </div>
               {editable && (
@@ -2747,7 +2753,7 @@ const CostInventoryWorkspace: React.FC<Props> = ({
             <div className={`rounded-xl px-4 py-2 text-sm font-extrabold ${
               inventoryComplete ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-800'
             }`}>
-              {completedCounts}/{activeProfiles.length} counts complete
+              {`${completedCounts}/${activeProfiles.length} counts complete`}
             </div>
           </div>
 
