@@ -512,6 +512,8 @@ const EXACT_JA: Record<string, string> = {
 const DYNAMIC_JA: Array<[RegExp, (...matches: string[]) => string]> = [
   [/^Test (\d+) · Held (\d+) · Approval waiting (\d+)$/, (_all, test, held, pending) => `テスト ${test}件・保留 ${held}件・承認待ち ${pending}件`],
   [/^(\d+) displayed · (\d+) operating$/, (_all, displayed, operating) => `表示 ${displayed}店舗・運営集計 ${operating}店舗`],
+  [/^(\d+)\/(\d+) analysis ready$/, (_all, ready, total) => `分析可能 ${ready}/${total}`],
+  [/^(\d+) target breaches$/, (_all, count) => `目標未達 ${count}件`],
   [/^(\d+) operating stores$/, (_all, count) => `運営集計 ${count}店舗`],
   [/^All countries · (\d+) operating stores$/, (_all, count) => `すべての国・運営集計 ${count}店舗`],
   [/^Linked: (.+)$/, (_all, value) => `連携完了：${value}`],

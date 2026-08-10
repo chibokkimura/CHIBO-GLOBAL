@@ -4118,7 +4118,7 @@ const SalesReporter: React.FC<{
   onSave: (sale: Sale) => Promise<void> | void;
   onCancel: () => void;
 }> = ({ store, sales, menus, setMenus, categories, initialDate, onSave, onCancel }) => {
-  type SalesReportField = 'date' | 'revenue' | 'items' | 'receipt' | 'closedReason';
+  type SalesReportField = 'date' | 'revenue' | 'zeroRevenue' | 'items' | 'receipt' | 'closedReason';
   type SalesReportFieldErrors = Partial<Record<SalesReportField, string>>;
 
   const [date, setDate] = useState(initialDate || formatDate(new Date()));
@@ -4129,6 +4129,7 @@ const SalesReporter: React.FC<{
   const [isClosed, setIsClosed] = useState(false);
   const [receiptImage, setReceiptImage] = useState<string | null>(null);
   const [manualRevenue, setManualRevenue] = useState<string>('');
+  const [zeroRevenueConfirmed, setZeroRevenueConfirmed] = useState(false);
   const [comment, setComment] = useState<string>('');
   const [closedReason, setClosedReason] = useState<string>('');
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -4227,6 +4228,7 @@ const SalesReporter: React.FC<{
       setIsClosed(Boolean(existingSaleForDate.isClosed));
       setReceiptImage(null);
       setManualRevenue(existingSaleForDate.isClosed ? '' : formatDecimalForInput(existingSaleForDate.totalAmount || 0));
+      setZeroRevenueConfirmed(false);
       setItems(Array.from(directCategoryTotals.entries())
         .filter(([, quantity]) => quantity > 0)
         .map(([menuId, quantity]) => ({ menuId, quantity })));
@@ -4239,6 +4241,7 @@ const SalesReporter: React.FC<{
     setIsClosed(false);
     setReceiptImage(null);
     setManualRevenue('');
+    setZeroRevenueConfirmed(false);
     setItems([]);
     setDirectMenuItems([]);
     setSetMenuItems([]);
@@ -4250,6 +4253,7 @@ const SalesReporter: React.FC<{
     if (isClosed) {
       setReceiptImage(null);
       setManualRevenue('');
+      setZeroRevenueConfirmed(false);
       setItems([]);
       setDirectMenuItems([]);
       setSetMenuItems([]);
@@ -4399,6 +4403,9 @@ const SalesReporter: React.FC<{
       if (manualRevenue.trim() === '' || !Number.isFinite(totalAmount) || totalAmount < 0) {
         nextFieldErrors.revenue = 'Enter the confirmed daily revenue. Enter 0 only when sales were actually zero.';
       }
+      if (totalAmount === 0 && !zeroRevenueConfirmed) {
+        nextFieldErrors.zeroRevenue = 'Confirm that the store was open and the actual sales amount was zero.';
+      }
       if (totalAmount > 0 && hasConfiguredSalesItems && soldItemQuantity <= 0) {
         nextFieldErrors.items = 'Enter at least one single item or course/set quantity.';
       }
@@ -4410,7 +4417,7 @@ const SalesReporter: React.FC<{
     if (Object.keys(nextFieldErrors).length > 0) {
       setFieldErrors(nextFieldErrors);
       setSubmitError('The report was not submitted. Complete the required fields marked below.');
-      const firstField = (['date', 'closedReason', 'revenue', 'items', 'receipt'] as SalesReportField[])
+      const firstField = (['date', 'closedReason', 'revenue', 'zeroRevenue', 'items', 'receipt'] as SalesReportField[])
         .find((field) => nextFieldErrors[field]);
       if (firstField) {
         document.getElementById(`sales-report-${firstField}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -4624,8 +4631,10 @@ const SalesReporter: React.FC<{
                   pattern="[0-9]*[.]?[0-9]*"
                   value={manualRevenue}
                   onChange={(event) => {
-                    setManualRevenue(normalizeDecimalInput(event.target.value, 2));
-                    setFieldErrors((current) => ({ ...current, revenue: undefined }));
+                    const nextValue = normalizeDecimalInput(event.target.value, 2);
+                    setManualRevenue(nextValue);
+                    if (Number(nextValue) !== 0) setZeroRevenueConfirmed(false);
+                    setFieldErrors((current) => ({ ...current, revenue: undefined, zeroRevenue: undefined }));
                     setSubmitError(null);
                   }}
                   placeholder="Enter total sales amount"
@@ -4635,6 +4644,30 @@ const SalesReporter: React.FC<{
                   }`}
                 />
                 {fieldErrors.revenue && <div className="mt-2 text-xs font-bold text-red-600">{fieldErrors.revenue}</div>}
+                {manualRevenue.trim() !== '' && Number(manualRevenue) === 0 && (
+                  <div
+                    id="sales-report-zeroRevenue"
+                    className={`mt-3 rounded-xl border p-3 ${
+                      fieldErrors.zeroRevenue ? 'border-red-400 bg-red-50' : 'border-amber-200 bg-amber-50'
+                    }`}
+                  >
+                    <label className="flex min-h-11 cursor-pointer items-center gap-3 text-sm font-bold text-amber-950">
+                      <input
+                        type="checkbox"
+                        checked={zeroRevenueConfirmed}
+                        onChange={(event) => {
+                          setZeroRevenueConfirmed(event.target.checked);
+                          setFieldErrors((current) => ({ ...current, zeroRevenue: undefined }));
+                          setSubmitError(null);
+                        }}
+                        className="h-5 w-5 rounded border-amber-400 text-black focus:ring-black"
+                      />
+                      <span>I confirm the store was open and actual sales were zero.</span>
+                    </label>
+                    <div className="mt-1 pl-8 text-xs text-amber-800">Use this only when the POS total is really 0.</div>
+                    {fieldErrors.zeroRevenue && <div className="mt-2 pl-8 text-xs font-bold text-red-600">{fieldErrors.zeroRevenue}</div>}
+                  </div>
+                )}
                 {!receiptImage && existingSaleForDate?.hasReceipt && (
                   <div className="mt-2 text-xs text-gray-500">Current receipt image will be kept.</div>
                 )}
@@ -6511,10 +6544,34 @@ const HQStoreDetail: React.FC<{
 
     const handleGenerateInvoicePdf = async () => {
         setInvoiceError(null);
-        setInvoiceGenerating(true);
         if (!invoiceMonthKey) {
             setInvoiceError('Select invoice month.');
+            return;
+        }
+
+        // Reserve the window during the actual click event. Opening it after the
+        // asynchronous FX refresh makes browsers treat it as an unsolicited popup.
+        const popup = window.open('about:blank', '_blank');
+        if (!popup) {
+            setInvoiceError('The invoice window could not be opened. Allow popups for this site and retry.');
+            return;
+        }
+        setInvoiceGenerating(true);
+        const failInvoice = (message: string) => {
+            try {
+                popup.close();
+            } catch {
+                // The user may have already closed the temporary window.
+            }
+            setInvoiceError(message);
             setInvoiceGenerating(false);
+        };
+        try {
+            popup.document.open();
+            popup.document.write('<!doctype html><html><head><title>Preparing invoice…</title></head><body style="font-family:Arial,sans-serif;padding:32px;color:#111"><strong>Preparing invoice…</strong><p style="color:#666">Refreshing exchange rates and creating the document.</p></body></html>');
+            popup.document.close();
+        } catch {
+            failInvoice('Failed to prepare the invoice window. Please retry.');
             return;
         }
 
@@ -6526,8 +6583,7 @@ const HQStoreDetail: React.FC<{
             sourceForInvoice = refreshed.sourceText;
         } catch (e) {
             if (!ratesForInvoice) {
-                setInvoiceError('Failed to refresh FX rates and no cached FX rates are available.');
-                setInvoiceGenerating(false);
+                failInvoice('Failed to refresh FX rates and no cached FX rates are available.');
                 return;
             }
             sourceForInvoice = `Cached ${sourceForInvoice}`;
@@ -6541,8 +6597,7 @@ const HQStoreDetail: React.FC<{
             : formatFxSourceLabel('ok', sourceForInvoice);
 
         if (summaryForInvoice.convertedSales === null || summaryForInvoice.salesRoyalty === null) {
-            setInvoiceError(`FX rate not available for ${store.currency} -> ${invoiceCurrency}.`);
-            setInvoiceGenerating(false);
+            failInvoice(`FX rate not available for ${store.currency} -> ${invoiceCurrency}.`);
             return;
         }
 
@@ -6612,12 +6667,6 @@ const HQStoreDetail: React.FC<{
             compactSummary: useChinaCompactLayout,
         });
 
-        const popup = window.open('', '_blank');
-        if (!popup) {
-            setInvoiceError('Popup blocked. Allow popups and retry.');
-            setInvoiceGenerating(false);
-            return;
-        }
         try {
             popup.document.open();
             popup.document.write(invoiceHtml);
@@ -6625,7 +6674,8 @@ const HQStoreDetail: React.FC<{
             popup.focus();
         } catch (e) {
             console.error('Failed to render invoice window', e);
-            setInvoiceError('Failed to render invoice page. Please retry.');
+            failInvoice('Failed to render invoice page. Please retry.');
+            return;
         } finally {
             setInvoiceGenerating(false);
         }
@@ -9034,12 +9084,12 @@ const HQDashboard: React.FC<{
     <HQLanguageBoundary locale={hqLocale}>
     <div className="min-h-screen bg-gray-50 flex flex-col">
        {/* Header */}
-       <div className="sticky top-0 z-40 flex items-center justify-between border-b bg-white px-4 py-3 sm:px-8 sm:py-4">
-          <div className="flex items-center gap-4">
-             <div className="w-10 h-10 bg-black text-white rounded-full flex items-center justify-center text-lg font-bold">HQ</div>
+       <div className="sticky top-0 z-40 flex items-center justify-between border-b bg-white px-3 py-2.5 sm:px-8 sm:py-4">
+          <div className="flex min-w-0 items-center gap-2.5 sm:gap-4">
+             <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-black text-sm font-bold text-white sm:h-10 sm:w-10 sm:text-lg">HQ</div>
              <div>
-                <h1 className="text-xl font-extrabold tracking-tight">CHIBO HEADQUARTERS</h1>
-                <div className="text-xs text-gray-500 font-medium">Global Admin Console</div>
+                <h1 className="truncate text-base font-extrabold tracking-tight sm:text-xl">CHIBO HEADQUARTERS</h1>
+                <div className="hidden text-xs font-medium text-gray-500 sm:block">Global Admin Console</div>
              </div>
           </div>
           <div className="flex items-center gap-4">
@@ -9055,7 +9105,7 @@ const HQDashboard: React.FC<{
           </div>
        </div>
 
-       <div className="flex justify-end border-b bg-white px-4 py-2 sm:px-8">
+       <div className="flex justify-end border-b bg-white px-3 py-1.5 sm:px-8 sm:py-2">
          <HQLanguageSwitch locale={hqLocale} onChange={updateHqLocale} />
        </div>
 
@@ -9172,7 +9222,7 @@ const HQDashboard: React.FC<{
             fxSourceText={fxSourceText}
        />
 
-       <div className="mx-auto w-full max-w-7xl flex-1 space-y-4 overflow-y-auto p-3 sm:space-y-6 sm:p-6 lg:space-y-8 lg:p-8">
+       <div className="mx-auto w-full max-w-7xl flex-1 space-y-3 overflow-y-auto p-2.5 sm:space-y-6 sm:p-6 lg:space-y-8 lg:p-8">
            <section className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
               <div className="p-3 sm:hidden">
                   <div className="mb-2 flex items-center justify-between gap-3">
@@ -9341,13 +9391,13 @@ const HQDashboard: React.FC<{
                      type="button"
                      key={store.id}
                      onClick={() => openHqStore(store)}
-                     className={`grid min-h-[82px] w-full grid-cols-[36px_minmax(0,1fr)_auto] items-center gap-2.5 border-b px-3 py-2.5 text-left last:border-b-0 active:bg-gray-50 md:rounded-xl md:border md:shadow-sm md:last:border ${
+                     className={`grid min-h-[72px] w-full grid-cols-[32px_minmax(0,1fr)_auto] items-center gap-2 border-b px-2.5 py-2 text-left last:border-b-0 active:bg-gray-50 sm:min-h-[82px] sm:grid-cols-[36px_minmax(0,1fr)_auto] sm:gap-2.5 sm:px-3 sm:py-2.5 md:rounded-xl md:border md:shadow-sm md:last:border ${
                        isTestWorkspace
                          ? 'border-amber-200 bg-amber-50/60 md:border-amber-300'
                          : 'border-gray-100 bg-white md:border-gray-200'
                      }`}
                    >
-                     <span className={`flex h-9 w-9 items-center justify-center rounded-full text-xs font-black ${
+                     <span className={`flex h-8 w-8 items-center justify-center rounded-full text-[10px] font-black sm:h-9 sm:w-9 sm:text-xs ${
                        isTestWorkspace ? 'bg-amber-200 text-amber-900' : 'bg-gray-100 text-gray-600'
                      }`}>
                        {store.country.substring(0, 2).toUpperCase()}
@@ -9359,8 +9409,8 @@ const HQDashboard: React.FC<{
                            <span className="shrink-0 rounded-full bg-amber-200 px-2 py-0.5 text-[9px] font-black text-amber-900">TEST</span>
                          )}
                        </span>
-                       <span className="mt-0.5 block truncate text-[11px] text-gray-500">{store.city}, {store.country}</span>
-                       <span className="mt-1 block text-xs font-bold text-gray-900">
+                       <span className="mt-0.5 hidden truncate text-[11px] text-gray-500 sm:block">{store.city}, {store.country}</span>
+                       <span className="mt-0.5 block text-[11px] font-bold text-gray-900 sm:mt-1 sm:text-xs">
                          {store.currency} {Math.round(localSales).toLocaleString()}
                          {store.currency !== 'JPY' && salesJPY !== null && (
                            <span className="ml-1.5 font-medium text-gray-400">· JPY {Math.round(salesJPY).toLocaleString()}</span>
@@ -9827,6 +9877,10 @@ const StoreDashboard: React.FC<{
     const [ownerCostWorkspaceSection, setOwnerCostWorkspaceSection] = useState<OwnerCostWorkspaceSection>('summary');
     const [reportReturnView, setReportReturnView] = useState<'dashboard' | 'month'>('dashboard');
     const [ownerMonthStartStep, setOwnerMonthStartStep] = useState<1 | 2 | 3>(1);
+    const [showAllRecentReports, setShowAllRecentReports] = useState(false);
+    const [desktopChartsEnabled, setDesktopChartsEnabled] = useState(() => (
+        typeof window !== 'undefined' && window.matchMedia('(min-width: 1024px)').matches
+    ));
     const [reportDate, setReportDate] = useState<string | null>(null);
     const [editingMenu, setEditingMenu] = useState<Menu | null>(null);
     const [editingSetMenu, setEditingSetMenu] = useState<SetMenu | null>(null);
@@ -9875,13 +9929,43 @@ const StoreDashboard: React.FC<{
         if (!dashboardMetricsEnabled) return [];
         return sortedStoreSales.filter((sale) => extractMonthKey(sale.date) === recentReportMonth);
     }, [sortedStoreSales, recentReportMonth, dashboardMetricsEnabled]);
+    const visibleRecentMonthlyReports = showAllRecentReports
+        ? recentMonthlyReports
+        : recentMonthlyReports.slice(0, 5);
     useEffect(() => {
         setRecentReportMonth(dashboardMonthKey);
+        setShowAllRecentReports(false);
     }, [store.id, dashboardMonthKey]);
+
+    useEffect(() => {
+        const media = window.matchMedia('(min-width: 1024px)');
+        const update = () => setDesktopChartsEnabled(media.matches);
+        update();
+        media.addEventListener('change', update);
+        return () => media.removeEventListener('change', update);
+    }, []);
 
     useEffect(() => {
         setMenuSection('items');
     }, [store.id]);
+
+    const openIngredientSetup = (returnView: OwnerDetailReturnView = 'setup') => {
+        setOwnerDetailReturnView(returnView);
+        setOwnerCostSection('cost');
+        setOwnerCostWorkspaceSection('purchases');
+        setView('menu');
+    };
+
+    const openRecipeSetup = (returnView: OwnerDetailReturnView = 'setup') => {
+        setOwnerDetailReturnView(returnView);
+        setOwnerCostSection('recipes');
+        setView('menu');
+    };
+
+    const openStaffSetup = () => {
+        setOwnerDetailReturnView('setup');
+        setView('staff');
+    };
 
     useEffect(() => {
         if (typeof window === 'undefined') return;
@@ -10398,14 +10482,14 @@ const StoreDashboard: React.FC<{
                 </div>
             )}
 
-            <div className="bg-white border-b px-6 py-4 flex justify-between items-center sticky top-0 z-40">
+            <div className="sticky top-0 z-40 flex items-center justify-between border-b bg-white px-3 py-2.5 sm:px-6 sm:py-4">
                 <div className="flex min-w-0 items-center gap-3 sm:gap-4" data-owner-i18n-skip="true">
-                    <div className="w-10 h-10 bg-indigo-600 text-white rounded-xl flex items-center justify-center font-bold text-lg shadow-lg shadow-indigo-200">
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-indigo-600 text-sm font-bold text-white shadow-lg shadow-indigo-200 sm:h-10 sm:w-10 sm:text-lg">
                         {store.name.substring(0, 2).toUpperCase()}
                     </div>
                     <div>
-                        <h1 className="text-xl font-extrabold tracking-tight text-gray-900">{store.name}</h1>
-                        <div className="text-xs text-gray-500 font-medium">{store.city}, {store.country}</div>
+                        <h1 className="max-w-[150px] truncate text-base font-extrabold tracking-tight text-gray-900 sm:max-w-none sm:text-xl">{store.name}</h1>
+                        <div className="max-w-[150px] truncate text-[10px] font-medium text-gray-500 sm:max-w-none sm:text-xs">{store.city}, {store.country}</div>
                     </div>
                 </div>
                 <div className="flex items-center gap-2 sm:gap-4">
@@ -10441,10 +10525,28 @@ const StoreDashboard: React.FC<{
                     <div className="mb-2 mt-6 px-4 text-[10px] font-black uppercase tracking-[0.18em] text-gray-400">Store setup</div>
                     <div className="space-y-1">
                         <NavButton
-                            active={view === 'setup' || view === 'menu' || view === 'staff'}
+                            active={view === 'setup'}
                             onClick={() => setView('setup')}
                             icon={Settings}
                             label="Store Setup"
+                        />
+                        <NavButton
+                            active={view === 'menu' && ownerCostSection === 'cost'}
+                            onClick={() => openIngredientSetup()}
+                            icon={Package}
+                            label="Ingredients & Purchase Units"
+                        />
+                        <NavButton
+                            active={view === 'menu' && ownerCostSection === 'recipes'}
+                            onClick={() => openRecipeSetup()}
+                            icon={UtensilsCrossed}
+                            label="Menus & recipes"
+                        />
+                        <NavButton
+                            active={view === 'staff'}
+                            onClick={openStaffSetup}
+                            icon={Users}
+                            label="Staff Records"
                         />
                     </div>
                     <div className="mt-auto p-4 bg-gray-50 rounded-xl">
@@ -10491,39 +10593,39 @@ const StoreDashboard: React.FC<{
                 </div>
 
                 {/* Main Content */}
-                <div ref={mainContentRef} className="min-w-0 flex-1 overflow-y-auto p-4 pb-24 sm:p-6 sm:pb-24 xl:p-8 xl:pb-8">
+                <div ref={mainContentRef} className="min-w-0 flex-1 overflow-y-auto p-3 pb-24 sm:p-6 sm:pb-24 xl:p-8 xl:pb-8">
                     {view === 'dashboard' && (
-                        <div className="space-y-6">
+                        <div className="space-y-3 sm:space-y-6">
                             <div>
-                                <div className="text-xs font-black uppercase tracking-[0.18em] text-gray-400">What to do next</div>
-                                <h2 className="text-2xl font-extrabold mt-1">Store Overview</h2>
-                                <p className="text-sm text-gray-500 mt-1">Daily work and month-end work are separated below.</p>
+                                <div className="text-[10px] font-black uppercase tracking-[0.18em] text-gray-400 sm:text-xs">What to do next</div>
+                                <h2 className="mt-0.5 text-xl font-extrabold sm:mt-1 sm:text-2xl">Store Overview</h2>
+                                <p className="mt-1 hidden text-sm text-gray-500 sm:block">Daily work and month-end work are separated below.</p>
                             </div>
 
-                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                            <div className="grid grid-cols-2 gap-2 sm:gap-4">
                                 <button
                                     type="button"
                                     onClick={() => { setReportReturnView('dashboard'); setReportDate(todayDate); setView('report'); }}
-                                    className={`rounded-2xl border p-6 text-left transition hover:-translate-y-0.5 hover:shadow-md ${
+                                    className={`min-w-0 rounded-2xl border p-3 text-left transition hover:-translate-y-0.5 hover:shadow-md sm:p-6 ${
                                         todayReport ? 'bg-white border-emerald-200' : 'bg-red-50 border-red-200'
                                     }`}
                                 >
                                     <div className="flex items-start justify-between gap-3">
                                         <div>
-                                            <div className="text-[10px] font-black uppercase tracking-[0.18em] text-gray-400">Daily task</div>
-                                            <div className={`mt-3 inline-flex p-2 rounded-xl ${todayReport ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
-                                                <FileText className="w-5 h-5" />
+                                            <div className="text-[9px] font-black uppercase tracking-[0.1em] text-gray-400 sm:text-[10px] sm:tracking-[0.18em]">Daily task</div>
+                                            <div className={`mt-2 inline-flex rounded-lg p-1.5 sm:mt-3 sm:rounded-xl sm:p-2 ${todayReport ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
+                                                <FileText className="h-4 w-4 sm:h-5 sm:w-5" />
                                             </div>
                                         </div>
-                                        <span className={`text-[10px] font-black uppercase px-2 py-1 rounded-full ${
+                                        <span className={`max-w-[70px] rounded-full px-1.5 py-1 text-right text-[8px] font-black uppercase leading-tight sm:max-w-none sm:px-2 sm:text-[10px] ${
                                             todayReport ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'
                                         }`}>
                                             {todayReport ? 'Submitted' : 'Do today'}
                                         </span>
                                     </div>
-                                    <div className="font-extrabold mt-4">Today's Sales Report</div>
-                                    <div className="text-xs text-gray-500 mt-1">{todayDate}</div>
-                                    <div className="text-xs font-bold mt-4 flex items-center gap-1">
+                                    <div className="mt-2 text-sm font-extrabold leading-tight sm:mt-4 sm:text-base">Today's Sales Report</div>
+                                    <div className="mt-1 text-[10px] text-gray-500 sm:text-xs">{todayDate}</div>
+                                    <div className="mt-4 hidden items-center gap-1 text-xs font-bold sm:flex">
                                         {todayReport ? 'Review or edit report' : 'Enter sales and upload receipt'}
                                         <ChevronRight className="w-3 h-3" />
                                     </div>
@@ -10532,16 +10634,16 @@ const StoreDashboard: React.FC<{
                                 <button
                                     type="button"
                                     onClick={() => { setOwnerMonthStartStep(1); setView('month'); }}
-                                    className={`rounded-2xl border p-6 text-left transition hover:-translate-y-0.5 hover:shadow-md ${
+                                    className={`min-w-0 rounded-2xl border p-3 text-left transition hover:-translate-y-0.5 hover:shadow-md sm:p-6 ${
                                         currentMonthReportStatus.missingDates.length > 0 ? 'bg-amber-50 border-amber-200' : 'bg-white border-emerald-200'
                                     }`}
                                 >
                                     <div className="flex items-start justify-between gap-3">
                                         <div>
-                                            <div className="text-[10px] font-black uppercase tracking-[0.18em] text-gray-400">Month-end task</div>
-                                            <div className="mt-3 inline-flex p-2 rounded-xl bg-amber-100 text-amber-700"><ClipboardList className="w-5 h-5" /></div>
+                                            <div className="text-[9px] font-black uppercase tracking-[0.1em] text-gray-400 sm:text-[10px] sm:tracking-[0.18em]">Month-end task</div>
+                                            <div className="mt-2 inline-flex rounded-lg bg-amber-100 p-1.5 text-amber-700 sm:mt-3 sm:rounded-xl sm:p-2"><ClipboardList className="h-4 w-4 sm:h-5 sm:w-5" /></div>
                                         </div>
-                                        <span className={`text-[10px] font-black uppercase px-2 py-1 rounded-full ${
+                                        <span className={`max-w-[70px] rounded-full px-1.5 py-1 text-right text-[8px] font-black uppercase leading-tight sm:max-w-none sm:px-2 sm:text-[10px] ${
                                             currentMonthReportStatus.missingDates.length > 0
                                                 ? 'bg-amber-100 text-amber-700'
                                                 : 'bg-emerald-100 text-emerald-700'
@@ -10551,50 +10653,78 @@ const StoreDashboard: React.FC<{
                                                 : 'On track'}
                                         </span>
                                     </div>
-                                    <div className="font-extrabold mt-4">Month Close</div>
-                                    <div className="text-xs text-gray-500 mt-1">
+                                    <div className="mt-2 text-sm font-extrabold leading-tight sm:mt-4 sm:text-base">Month Close</div>
+                                    <div className="mt-1 text-[10px] text-gray-500 sm:text-xs">
                                         {currentMonthReportStatus.submitted}/{currentMonthReportStatus.expected} due reports complete
                                     </div>
-                                    <div className="text-xs font-bold mt-4 flex items-center gap-1">Check monthly readiness <ChevronRight className="w-3 h-3" /></div>
+                                    <div className="mt-4 hidden items-center gap-1 text-xs font-bold sm:flex">Check monthly readiness <ChevronRight className="w-3 h-3" /></div>
                                 </button>
                             </div>
 
-                            <button
-                                type="button"
-                                onClick={() => setView('setup')}
-                                className={`flex w-full items-center justify-between gap-4 rounded-2xl border p-5 text-left transition hover:-translate-y-0.5 hover:shadow-md ${
+                            <div
+                                className={`rounded-2xl border p-3 sm:p-4 ${
                                     menusMissingRecipes.length > 0 || setsNeedingAttention.length > 0 || storeEmployees.length === 0
                                         ? 'border-amber-200 bg-amber-50'
                                         : 'border-gray-200 bg-white'
                                 }`}
                             >
-                                <span className="flex min-w-0 items-center gap-3">
-                                    <span className="rounded-xl bg-gray-100 p-2 text-gray-800"><Settings className="h-5 w-5" /></span>
-                                    <span className="min-w-0">
-                                        <span className="block text-xs font-black uppercase tracking-[0.16em] text-gray-400">Only when something changes</span>
-                                        <span className="mt-1 block font-extrabold">Store Setup</span>
-                                        <span className="mt-1 block text-xs text-gray-500">Ingredients and purchase units · menus and recipes · staff records</span>
-                                    </span>
-                                </span>
-                                <ChevronRight className="h-5 w-5 shrink-0 text-gray-400" />
-                            </button>
+                                <div className="mb-2 flex items-center justify-between gap-3 sm:mb-3">
+                                    <div>
+                                        <div className="text-sm font-extrabold sm:text-base">Store Setup</div>
+                                        <div className="mt-0.5 text-[10px] text-gray-500 sm:text-xs">Ingredients · menus & recipes · staff</div>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={() => setView('setup')}
+                                        className="min-h-9 shrink-0 rounded-lg px-2.5 text-[10px] font-bold text-gray-600 hover:bg-white sm:text-xs"
+                                    >
+                                        First-time setup order <ChevronRight className="ml-0.5 inline h-3 w-3" />
+                                    </button>
+                                </div>
+                                <div className="grid grid-cols-3 gap-2">
+                                    <button
+                                        type="button"
+                                        onClick={() => openIngredientSetup()}
+                                        className="flex min-h-[72px] flex-col justify-between rounded-xl border border-amber-200 bg-white p-2.5 text-left transition hover:border-amber-400 sm:min-h-[88px] sm:p-3"
+                                    >
+                                        <Package className="h-5 w-5 text-amber-700" />
+                                        <span className="mt-2 text-[11px] font-extrabold leading-tight sm:text-sm">Ingredients &amp; Purchase Units</span>
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => openRecipeSetup()}
+                                        className="flex min-h-[72px] flex-col justify-between rounded-xl border border-indigo-200 bg-white p-2.5 text-left transition hover:border-indigo-400 sm:min-h-[88px] sm:p-3"
+                                    >
+                                        <UtensilsCrossed className="h-5 w-5 text-indigo-700" />
+                                        <span className="mt-2 text-[11px] font-extrabold leading-tight sm:text-sm">Menus &amp; recipes</span>
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={openStaffSetup}
+                                        className="flex min-h-[72px] flex-col justify-between rounded-xl border border-sky-200 bg-white p-2.5 text-left transition hover:border-sky-400 sm:min-h-[88px] sm:p-3"
+                                    >
+                                        <Users className="h-5 w-5 text-sky-700" />
+                                        <span className="mt-2 text-[11px] font-extrabold leading-tight sm:text-sm">Staff Records</span>
+                                    </button>
+                                </div>
+                            </div>
 
                             {/* Missing Report Alert */}
                             {missingDates.length > 0 && (
-                                <div className="bg-red-50 border-l-4 border-red-500 p-4 rounded-r-xl flex items-start gap-3 shadow-sm">
-                                    <div className="p-2 bg-white rounded-full text-red-500 shadow-sm">
-                                        <CalendarX className="w-6 h-6"/>
+                                <div className="flex items-start gap-2 rounded-r-xl border-l-4 border-red-500 bg-red-50 p-3 shadow-sm sm:gap-3 sm:p-4">
+                                    <div className="rounded-full bg-white p-1.5 text-red-500 shadow-sm sm:p-2">
+                                        <CalendarX className="h-4 w-4 sm:h-6 sm:w-6"/>
                                     </div>
-                                    <div>
-                                        <h3 className="font-bold text-red-800 text-lg">Missing Daily Sales Reports</h3>
-                                        <p className="text-sm text-red-600 mb-2">Enter these dates to complete this month’s sales record.</p>
-                                        <div className="flex flex-wrap gap-2">
-                                          {missingDates.map(d => (
+                                    <div className="min-w-0 flex-1">
+                                        <h3 className="text-sm font-bold text-red-800 sm:text-lg">Missing Daily Sales Reports</h3>
+                                        <p className="mb-2 hidden text-sm text-red-600 sm:block">Enter these dates to complete this month’s sales record.</p>
+                                        <div className="mt-1 flex flex-wrap gap-1.5 sm:gap-2">
+                                          {missingDates.slice(0, 3).map(d => (
   <button
     key={d}
     type="button"
     onClick={() => { setReportReturnView('dashboard'); setReportDate(d); setView('report'); }}
-    className="min-h-10 rounded-lg bg-red-200 px-3 py-2 text-xs font-bold text-red-800 transition hover:bg-red-300"
+    className="min-h-9 rounded-lg bg-red-200 px-2.5 py-1.5 text-[10px] font-bold text-red-800 transition hover:bg-red-300 sm:min-h-10 sm:px-3 sm:py-2 sm:text-xs"
   >
     {d}
   </button>
@@ -10603,21 +10733,21 @@ const StoreDashboard: React.FC<{
                                           <button
                                             type="button"
                                             onClick={openOwnerMissingCalendar}
-                                            className="min-h-10 rounded-lg border border-red-200 bg-white px-3 py-2 text-xs font-bold text-red-700 transition hover:bg-red-50"
+                                            className="min-h-9 rounded-lg border border-red-200 bg-white px-2.5 py-1.5 text-[10px] font-bold text-red-700 transition hover:bg-red-50 sm:min-h-10 sm:px-3 sm:py-2 sm:text-xs"
                                           >
-                                            View Older Dates
+                                            {missingDates.length > 3 ? `+${missingDates.length - 3} more` : 'View calendar'}
                                           </button>
                                         </div>
                                     </div>
                                 </div>
                             )}
-                             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                                <div className="bg-white p-6 rounded-2xl shadow-sm border relative overflow-hidden group">
-                                    <div className="text-sm font-bold text-gray-500 mb-1">Total Sales (Month)</div>
-                                    <div className="text-3xl font-extrabold flex items-baseline gap-2">
+                             <div className="grid grid-cols-3 gap-2 sm:gap-6">
+                                <div className="group relative overflow-hidden rounded-2xl border bg-white p-3 shadow-sm sm:p-6">
+                                    <div className="mb-1 text-[10px] font-bold leading-tight text-gray-500 sm:text-sm">Total Sales (Month)</div>
+                                    <div className="flex items-baseline gap-1 text-base font-extrabold leading-tight sm:gap-2 sm:text-3xl">
                                         {store.currency} {metricComparison.currentMonthSales.toLocaleString()}
                                     </div>
-                                    <div className={`flex items-center gap-1 text-xs font-bold mt-2 ${
+                                    <div className={`mt-1 flex items-center gap-1 text-[9px] font-bold sm:mt-2 sm:text-xs ${
                                         metricComparison.growth === null
                                             ? 'text-gray-400'
                                             : metricComparison.growth >= 0
@@ -10633,25 +10763,25 @@ const StoreDashboard: React.FC<{
                                             ? 'No prior-month baseline'
                                             : `${Math.abs(metricComparison.growth).toFixed(1)}% vs Last Month`}
                                     </div>
-                                    <div className="absolute right-0 top-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
+                                    <div className="absolute right-0 top-0 hidden p-4 opacity-10 transition-opacity group-hover:opacity-20 sm:block">
                                         <TrendingUp className="w-24 h-24 text-black"/>
                                     </div>
                                 </div>
-                                <div className="bg-white p-6 rounded-2xl shadow-sm border">
-                                    <div className="text-sm font-bold text-gray-500 mb-1">Active Menu Items</div>
-                                    <div className="text-3xl font-extrabold">{storeMenus.length}</div>
-                                    <div className="text-xs text-gray-400 font-medium mt-2">Ready to serve</div>
+                                <div className="rounded-2xl border bg-white p-3 shadow-sm sm:p-6">
+                                    <div className="mb-1 text-[10px] font-bold leading-tight text-gray-500 sm:text-sm">Active Menu Items</div>
+                                    <div className="text-lg font-extrabold sm:text-3xl">{storeMenus.length}</div>
+                                    <div className="mt-1 hidden text-xs font-medium text-gray-400 sm:block">Ready to serve</div>
                                 </div>
-                                <div className="bg-white p-6 rounded-2xl shadow-sm border">
-                                    <div className="text-sm font-bold text-gray-500 mb-1">Staff Count</div>
-                                    <div className="text-3xl font-extrabold">{storeEmployees.length}</div>
-                                    <div className="text-xs text-gray-400 font-medium mt-2">Active employees</div>
+                                <div className="rounded-2xl border bg-white p-3 shadow-sm sm:p-6">
+                                    <div className="mb-1 text-[10px] font-bold leading-tight text-gray-500 sm:text-sm">Staff Count</div>
+                                    <div className="text-lg font-extrabold sm:text-3xl">{storeEmployees.length}</div>
+                                    <div className="mt-1 hidden text-xs font-medium text-gray-400 sm:block">Active employees</div>
                                 </div>
                              </div>
 
                              {/* Sales Charts */}
-                             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                                 <div className="bg-white p-6 rounded-2xl shadow-sm border h-80">
+                             <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 lg:gap-6">
+                                 <div className="h-56 rounded-2xl border bg-white p-4 shadow-sm sm:h-80 sm:p-6">
                                      <div className="flex justify-between items-center mb-4">
                                          <h3 className="font-bold text-lg">Weekly Revenue Trend</h3>
                                          <span className={`text-xs font-bold px-2 py-1 rounded-full ${
@@ -10679,7 +10809,7 @@ const StoreDashboard: React.FC<{
                                          </BarChart>
                                      </ResponsiveContainer>
                                  </div>
-                                 <div className="bg-white p-6 rounded-2xl shadow-sm border h-80">
+                                 {desktopChartsEnabled && <div className="h-80 rounded-2xl border bg-white p-6 shadow-sm">
                                      <h3 className="font-bold text-lg mb-4">Category Sales (This Month vs Last Month)</h3>
                                      <ResponsiveContainer width="100%" height="100%">
                                          <BarChart data={categoryMonthlyData} margin={{ top: 0, right: 10, left: 0, bottom: 30 }}>
@@ -10695,10 +10825,10 @@ const StoreDashboard: React.FC<{
                                              <Bar dataKey="previous" name="Last Month" fill="#999999" radius={[4, 4, 0, 0]} />
                                          </BarChart>
                                      </ResponsiveContainer>
-                                 </div>
+                                 </div>}
                              </div>
 
-                             <div className="bg-white p-6 rounded-2xl shadow-sm border">
+                             <div className="rounded-2xl border bg-white p-3 shadow-sm sm:p-6">
                                 <div className="mb-4 flex items-center justify-between gap-3">
                                     <h3 className="font-bold text-lg">Recent Daily Reports</h3>
                                     <select
@@ -10714,11 +10844,11 @@ const StoreDashboard: React.FC<{
                                     </select>
                                 </div>
                                 <div className="space-y-2">
-                                    {recentMonthlyReports.map(sale => (
-                                        <div key={sale.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
-                                            <div className="font-medium">{sale.date}</div>
-                                            <div className="flex items-center gap-3">
-                                                <div className="font-bold">{sale.isClosed ? 'Closed' : `${store.currency} ${formatMoneyDisplay(sale.totalAmount)}`}</div>
+                                    {visibleRecentMonthlyReports.map(sale => (
+                                        <div key={sale.id} className="flex items-center justify-between rounded-xl bg-gray-50 p-2.5 sm:p-3">
+                                            <div className="text-sm font-medium sm:text-base">{sale.date}</div>
+                                            <div className="flex items-center gap-2 sm:gap-3">
+                                                <div className="text-sm font-bold sm:text-base">{sale.isClosed ? 'Closed' : `${store.currency} ${formatMoneyDisplay(sale.totalAmount)}`}</div>
                                                 <button
                                                     type="button"
                                                     onClick={() => { setReportReturnView('dashboard'); setReportDate(sale.date); setView('report'); }}
@@ -10730,6 +10860,15 @@ const StoreDashboard: React.FC<{
                                         </div>
                                     ))}
                                     {recentMonthlyReports.length === 0 && <div className="text-gray-400 text-sm">No reports in this month.</div>}
+                                    {recentMonthlyReports.length > 5 && (
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowAllRecentReports((current) => !current)}
+                                            className="min-h-11 w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-bold hover:bg-gray-50"
+                                        >
+                                            {showAllRecentReports ? 'Show latest 5 reports' : `Show all ${recentMonthlyReports.length} reports`}
+                                        </button>
+                                    )}
                                 </div>
                              </div>
                         </div>
@@ -10801,12 +10940,7 @@ const StoreDashboard: React.FC<{
                             <div className="grid gap-4 md:grid-cols-3">
                                 <button
                                     type="button"
-                                    onClick={() => {
-                                        setOwnerDetailReturnView('setup');
-                                        setOwnerCostSection('cost');
-                                        setOwnerCostWorkspaceSection('purchases');
-                                        setView('menu');
-                                    }}
+                                    onClick={() => openIngredientSetup()}
                                     className="rounded-2xl border border-gray-200 bg-white p-5 text-left transition hover:-translate-y-0.5 hover:shadow-md"
                                 >
                                     <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-100 text-amber-800"><Package className="h-5 w-5" /></span>
@@ -10817,11 +10951,7 @@ const StoreDashboard: React.FC<{
 
                                 <button
                                     type="button"
-                                    onClick={() => {
-                                        setOwnerDetailReturnView('setup');
-                                        setOwnerCostSection('recipes');
-                                        setView('menu');
-                                    }}
+                                    onClick={() => openRecipeSetup()}
                                     className={`rounded-2xl border p-5 text-left transition hover:-translate-y-0.5 hover:shadow-md ${
                                         menusMissingRecipes.length > 0 || setsNeedingAttention.length > 0
                                             ? 'border-amber-200 bg-amber-50'
@@ -10836,10 +10966,7 @@ const StoreDashboard: React.FC<{
 
                                 <button
                                     type="button"
-                                    onClick={() => {
-                                        setOwnerDetailReturnView('setup');
-                                        setView('staff');
-                                    }}
+                                    onClick={openStaffSetup}
                                     className={`rounded-2xl border p-5 text-left transition hover:-translate-y-0.5 hover:shadow-md ${
                                         storeEmployees.length > 0 ? 'border-gray-200 bg-white' : 'border-amber-200 bg-amber-50'
                                     }`}

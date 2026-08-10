@@ -361,6 +361,18 @@ const HQProfitabilityAnalysis: React.FC<Props> = ({
   const [foodTargets, setFoodTargets] = useState<Map<string, number | null>>(new Map());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [mobileExpanded, setMobileExpanded] = useState(false);
+  const [desktopViewport, setDesktopViewport] = useState(() => (
+    typeof window !== 'undefined' && window.matchMedia('(min-width: 640px)').matches
+  ));
+
+  useEffect(() => {
+    const media = window.matchMedia('(min-width: 640px)');
+    const update = () => setDesktopViewport(media.matches);
+    update();
+    media.addEventListener('change', update);
+    return () => media.removeEventListener('change', update);
+  }, []);
 
   const loadAnalysis = useCallback(async () => {
     setLoading(true);
@@ -530,6 +542,24 @@ const HQProfitabilityAnalysis: React.FC<Props> = ({
 
   return (
     <section className="overflow-hidden rounded-2xl border border-slate-300 bg-white shadow-sm">
+      <button
+        type="button"
+        onClick={() => setMobileExpanded((current) => !current)}
+        className="flex min-h-[72px] w-full items-center justify-between gap-3 p-3 text-left sm:hidden"
+        aria-expanded={mobileExpanded}
+      >
+        <span className="min-w-0">
+          <span className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.14em] text-slate-500">
+            <CircleGauge className="h-4 w-4" /> HQ profitability review
+          </span>
+          <span className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-slate-600">
+            <strong className="text-slate-950">{`${metrics.ready}/${rows.length} analysis ready`}</strong>
+            <span>{`${metrics.actionNeeded} target breaches`}</span>
+          </span>
+        </span>
+        <ArrowRight className={`h-5 w-5 shrink-0 text-slate-400 transition ${mobileExpanded ? 'rotate-90' : ''}`} />
+      </button>
+      {(desktopViewport || mobileExpanded) ? <div>
       <div className="border-b border-slate-200 bg-slate-950 p-4 text-white sm:p-6">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
@@ -810,6 +840,7 @@ const HQProfitabilityAnalysis: React.FC<Props> = ({
           <span>Management view only · incomplete months are never treated as zero profit</span>
         </div>
       </div>
+      </div> : null}
     </section>
   );
 };
