@@ -7567,8 +7567,29 @@ const HQStoreDetail: React.FC<{
                 </section>
             )}
 
-            <div className="sticky top-0 z-20 -mx-3 mb-4 border-y border-gray-200 bg-white/95 px-3 py-1.5 backdrop-blur supports-[backdrop-filter]:bg-white/90 sm:mx-0 sm:mb-6 sm:rounded-2xl sm:border sm:bg-gray-50/95 sm:p-1">
-                <div className="no-scrollbar flex w-full gap-1 overflow-x-auto sm:flex-wrap sm:items-center">
+            <div className="sticky top-0 z-20 -mx-3 mb-4 border-y border-gray-200 bg-white/95 px-3 py-2 backdrop-blur supports-[backdrop-filter]:bg-white/90 sm:mx-0 sm:mb-6 sm:rounded-2xl sm:border sm:bg-gray-50/95 sm:p-1">
+                <label className="block sm:hidden">
+                    <span className="sr-only">Choose section</span>
+                    <select
+                        aria-label="Choose section"
+                        value={detailSection}
+                        onChange={(event) => setDetailSection(event.target.value as 'sales' | 'close' | 'inventory' | 'invoice' | 'menu' | 'staff' | 'accounts')}
+                        className="min-h-11 w-full rounded-xl border border-gray-200 bg-white px-3 text-sm font-extrabold text-gray-900 outline-none"
+                    >
+                        {[
+                            { key: 'sales', label: 'Sales' },
+                            { key: 'close', label: 'Month Close' },
+                            { key: 'inventory', label: 'Cost & Inventory' },
+                            { key: 'invoice', label: 'Invoice' },
+                            { key: 'menu', label: 'Menu' },
+                            { key: 'staff', label: 'Staff' },
+                            { key: 'accounts', label: 'Accounts' },
+                        ].map((tab) => (
+                            <option key={tab.key} value={tab.key}>{tab.label}</option>
+                        ))}
+                    </select>
+                </label>
+                <div className="hidden w-full flex-wrap items-center gap-1 sm:flex">
                     {[
                         { key: 'sales', label: 'Sales', shortLabel: 'Sales' },
                         { key: 'close', label: 'Month Close', shortLabel: 'Month Close' },
@@ -7582,14 +7603,13 @@ const HQStoreDetail: React.FC<{
                             key={tab.key}
                             type="button"
                             onClick={() => setDetailSection(tab.key as 'sales' | 'close' | 'inventory' | 'invoice' | 'menu' | 'staff' | 'accounts')}
-                            className={`min-h-10 shrink-0 rounded-lg px-4 py-2 text-xs font-bold transition sm:min-h-11 sm:rounded-xl sm:text-sm ${
+                            className={`min-h-11 shrink-0 rounded-xl px-4 py-2 text-sm font-bold transition ${
                                 detailSection === tab.key
                                     ? 'bg-black text-white'
                                     : 'text-gray-600 hover:bg-gray-100'
                             }`}
                         >
-                            <span className="sm:hidden">{tab.shortLabel}</span>
-                            <span className="hidden sm:inline">{tab.label}</span>
+                            {tab.label}
                         </button>
                     ))}
                 </div>
@@ -9888,6 +9908,7 @@ const StoreDashboard: React.FC<{
     const [reportDate, setReportDate] = useState<string | null>(null);
     const [editingMenu, setEditingMenu] = useState<Menu | null>(null);
     const [editingSetMenu, setEditingSetMenu] = useState<SetMenu | null>(null);
+    const [ingredientPurchaseUnitCount, setIngredientPurchaseUnitCount] = useState<number | null>(null);
     const navReadyRef = useRef(false);
     const navRestoreRef = useRef(false);
     const popLockRef = useRef(false);
@@ -9905,6 +9926,24 @@ const StoreDashboard: React.FC<{
     const storeSetMenus = setMenus.filter(sm => sm.storeId === store.id);
     const storeEmployees = employees.filter(e => e.storeId === store.id);
     const storeSales = sales.filter(s => s.storeId === store.id);
+    useEffect(() => {
+        if (!isSupabaseConfigured || (view !== 'dashboard' && view !== 'setup')) return;
+        let active = true;
+        void supabase
+            .from('store_ingredient_profiles')
+            .select('ingredient_id', { count: 'exact', head: true })
+            .eq('store_id', store.id)
+            .eq('active', true)
+            .then(({ count, error }) => {
+                if (!active) return;
+                if (error) {
+                    setIngredientPurchaseUnitCount(null);
+                    return;
+                }
+                setIngredientPurchaseUnitCount(count ?? 0);
+            });
+        return () => { active = false; };
+    }, [store.id, view]);
     const canonicalStoreSales = useMemo(
         () => dedupeSalesByStoreDate(storeSales),
         [storeSales]
@@ -10697,6 +10736,9 @@ const StoreDashboard: React.FC<{
                                     >
                                         <Package className="h-5 w-5 text-amber-700" />
                                         <span className="mt-2 text-[11px] font-extrabold leading-tight sm:text-sm">Ingredients &amp; Purchase Units</span>
+                                        <span className="mt-1 text-[9px] font-bold text-gray-500 sm:text-[10px]">
+                                            {ingredientPurchaseUnitCount === null ? 'Check setup' : `${ingredientPurchaseUnitCount} purchase units`}
+                                        </span>
                                     </button>
                                     <button
                                         type="button"
@@ -10705,6 +10747,7 @@ const StoreDashboard: React.FC<{
                                     >
                                         <UtensilsCrossed className="h-5 w-5 text-indigo-700" />
                                         <span className="mt-2 text-[11px] font-extrabold leading-tight sm:text-sm">Menus &amp; recipes</span>
+                                        <span className="mt-1 text-[9px] font-bold text-gray-500 sm:text-[10px]">{recipeReadyCount}/{storeMenus.length} recipes</span>
                                     </button>
                                     <button
                                         type="button"
@@ -10713,6 +10756,7 @@ const StoreDashboard: React.FC<{
                                     >
                                         <Users className="h-5 w-5 text-sky-700" />
                                         <span className="mt-2 text-[11px] font-extrabold leading-tight sm:text-sm">Staff Records</span>
+                                        <span className="mt-1 text-[9px] font-bold text-gray-500 sm:text-[10px]">{storeEmployees.length} staff</span>
                                     </button>
                                 </div>
                             </div>
@@ -10978,7 +11022,9 @@ const StoreDashboard: React.FC<{
                                     <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-100 text-amber-800"><Package className="h-5 w-5" /></span>
                                     <span className="mt-4 block font-extrabold">Ingredients &amp; Purchase Units</span>
                                     <span className="mt-1 block text-xs leading-5 text-gray-500">Register pack, case or bottle size, price and supplier. Monthly purchases and inventory are available on the same screen.</span>
-                                    <span className="mt-4 flex items-center gap-1 text-xs font-bold">Open ingredient setup <ChevronRight className="h-3 w-3" /></span>
+                                    <span className="mt-4 flex items-center gap-1 text-xs font-bold">
+                                        {ingredientPurchaseUnitCount === null ? 'Check setup' : `${ingredientPurchaseUnitCount} purchase units`} <ChevronRight className="h-3 w-3" />
+                                    </span>
                                 </button>
 
                                 <button

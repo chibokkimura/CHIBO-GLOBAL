@@ -147,7 +147,7 @@ create or replace function public.current_auth_email()
 returns text
 language sql
 stable
-security definer
+security invoker
 set search_path = public
 as $$
   select lower(coalesce(auth.jwt() ->> 'email', ''));
@@ -157,7 +157,7 @@ create or replace function public.current_auth_uid_text()
 returns text
 language sql
 stable
-security definer
+security invoker
 set search_path = public
 as $$
   select coalesce(auth.uid()::text, '');
@@ -167,7 +167,7 @@ create or replace function public.hq_admin_email()
 returns text
 language sql
 stable
-security definer
+security invoker
 set search_path = public
 as $$
   select 'chibo.global.mgsystem@gmail.com'::text;
@@ -177,7 +177,7 @@ create or replace function public.is_authorized_hq_email(p_email text)
 returns boolean
 language sql
 stable
-security definer
+security invoker
 set search_path = public
 as $$
   select lower(trim(coalesce(p_email, ''))) = public.hq_admin_email();
@@ -219,6 +219,28 @@ as $$
     lower(coalesce(u.email, '')),
     u.store_id
   limit 1;
+$$;
+
+create or replace function public.is_store_member(p_store_id text)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select
+    public.is_hq()
+    or exists (
+      select 1
+      from public.app_users u
+      join public.stores s on s.id = u.store_id
+      where (
+          u.user_id = (select auth.uid())
+          or lower(trim(coalesce(u.email, ''))) = public.current_auth_email()
+        )
+        and u.store_id = p_store_id
+        and s.reporting_status in ('active', 'test')
+    );
 $$;
 
 create or replace function public.find_store_for_onboarding(

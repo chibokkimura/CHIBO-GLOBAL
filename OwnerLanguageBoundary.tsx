@@ -76,6 +76,7 @@ const OWNER_JA: Record<string, string> = {
   'Ingredients & Purchase Units': '食材・購入単位',
   'Register pack, case or bottle size, price and supplier. Monthly purchases and inventory are available on the same screen.': 'パック・ケース・ボトルの内容量、価格、仕入先を登録します。同じ画面で月間仕入と棚卸も入力できます。',
   'Open ingredient setup': '食材設定を開く',
+  'Check setup': '設定を確認',
   'Register selling prices and the ingredient quantity used in one serving.': '販売価格と1食分に使用する食材量を登録します。',
   'Maintain the active staff list. Monthly payroll and labor hours are entered in Month Close.': '在籍スタッフを管理します。月間給与と総労働時間は月次締めで入力します。',
   'Back to Month Close': '月次締めに戻る',
@@ -149,6 +150,38 @@ const OWNER_JA: Record<string, string> = {
   'Reload monthly operations': '月次業務を再読込',
   'Reload monthly profit inputs': '月次収益入力を再読込',
   'Reload monthly profitability': '月次収益性を再読込',
+  'REPORTED SALES': '報告済み売上',
+  'Reported sales': '報告済み売上',
+  'DAILY REPORTS': '日次報告',
+  'Daily reports': '日次報告',
+  'REVIEW STATUS': '確認状況',
+  'Review status': '確認状況',
+  'Through the latest completed day': '入力済みの最新日まで',
+  'Attached to open-day reports': '営業日の報告に添付済み',
+  Draft: '下書き',
+  'Waiting for completion': '入力完了待ち',
+  'These checks come directly from the daily reports already stored in the system.': '保存済みの日次報告をもとに自動確認しています。',
+  'Action needed': '対応が必要',
+  'Daily sales reports': '日次売上報告',
+  'Labor, hours, fees, utilities and other operating totals': '人件費・勤務時間・手数料・水道光熱費・その他運営費の月間合計',
+  'Input needed': '入力が必要',
+  'Use the POS guest total when available.': 'POSの客数合計を取得できる場合に入力します。',
+  'POS monthly total': 'POSの月間合計',
+  'One total from the attendance system.': '勤怠システムの月間合計を入力します。',
+  'Attendance monthly total': '勤怠の月間合計',
+  'Entry rule': '入力ルール',
+  'Blank means not entered': '空欄は未入力として扱います',
+  'Enter 0 only when the confirmed monthly amount is actually zero. This keeps missing data separate from zero cost.': '確認した月間金額が実際に0の場合のみ0を入力してください。未入力と0円を区別して管理します。',
+  'One monthly total from payroll': '給与データの月間合計',
+  'Optional · HQ default': '任意・本部初期値',
+  'Electricity, gas and water total': '電気・ガス・水道の合計',
+  'Supplies, cleaning, repairs and marketing': '消耗品・清掃・修繕・販促費の合計',
+  'Monthly note': '月次メモ',
+  'Not entered': '未入力',
+  'Open only when a CSV/XLS/XLSX file is available': 'CSV・XLS・XLSXファイルがある場合のみ開いてください',
+  'Search ingredients': '食材を検索',
+  'Show incomplete only': '未完了のみ表示',
+  'No ingredients match this filter.': '条件に一致する食材がありません。',
   'Finish missing sales reports and receipts, confirm the total, then submit to HQ.': '未提出の売上報告とレシートを完成し、合計を確認してから本部へ提出します。',
   'Finish the month in 3 steps': '3ステップで月次締めを完了',
   'Complete reports and totals, close inventory, then review the result and submit.': '日次報告と月間合計を完成し、棚卸を締め、結果を確認して提出します。',
@@ -367,6 +400,7 @@ const OWNER_TEXT: Record<string, Localized> = {
   'Ingredients & Purchase Units': P('食材与采购单位', '食材與採購單位', 'Nguyên liệu & đơn vị mua', '재료·구매단위'),
   'Register pack, case or bottle size, price and supplier. Monthly purchases and inventory are available on the same screen.': P('登记包装、箱或瓶的容量、价格和供应商。同一画面也可输入月度采购和库存。', '登記包裝、箱或瓶的容量、價格和供應商。同一畫面也可輸入月間採購和庫存。', 'Khai báo quy cách gói/thùng/chai, giá và nhà cung cấp. Mua hàng tháng và tồn kho ở cùng màn hình.', '팩·박스·병의 용량, 가격, 공급처를 등록합니다. 같은 화면에서 월 매입과 재고도 입력합니다.'),
   'Open ingredient setup': P('打开食材设置', '開啟食材設定', 'Mở thiết lập nguyên liệu', '재료 설정 열기'),
+  'Check setup': P('检查设置', '確認設定', 'Kiểm tra thiết lập', '설정 확인'),
   'Register selling prices and the ingredient quantity used in one serving.': P('登记售价和每份所用食材量。', '登記售價和每份所用食材量。', 'Khai báo giá bán và lượng nguyên liệu cho một phần.', '판매가와 1인분에 사용되는 재료량을 등록합니다.'),
   'Maintain the active staff list. Monthly payroll and labor hours are entered in Month Close.': P('维护在职员工名单。月度工资和工时在月结中输入。', '維護在職員工名單。月度薪資和工時在月結中輸入。', 'Cập nhật nhân viên đang làm việc. Lương và giờ công tháng được nhập trong Chốt tháng.', '재직 직원 목록을 관리합니다. 월 급여와 근무시간은 월 마감에서 입력합니다.'),
   'Back to Month Close': P('返回月结', '返回月結', 'Quay lại chốt tháng', '월 마감으로 돌아가기'),
@@ -623,6 +657,39 @@ const OWNER_TEXT: Record<string, Localized> = {
   'Reload monthly operations': P('重新加载月度运营', '重新載入月度營運', 'Tải lại vận hành tháng', '월 운영 새로고침'),
   'Reload monthly profit inputs': P('重新加载月度收益输入', '重新載入月度收益輸入', 'Tải lại dữ liệu lợi nhuận tháng', '월 수익 입력 새로고침'),
   'Reload monthly profitability': P('重新加载月度收益分析', '重新載入月度收益分析', 'Tải lại phân tích lợi nhuận tháng', '월 수익성 새로고침'),
+  'REPORTED SALES': P('已报告销售额', '已報告營業額', 'DOANH THU ĐÃ BÁO CÁO', '보고된 매출'),
+  'Reported sales': P('已报告销售额', '已報告營業額', 'Doanh thu đã báo cáo', '보고된 매출'),
+  'DAILY REPORTS': P('每日报告', '每日報告', 'BÁO CÁO NGÀY', '일일 보고'),
+  'Daily reports': P('每日报告', '每日報告', 'Báo cáo ngày', '일일 보고'),
+  'REVIEW STATUS': P('确认状态', '確認狀態', 'TRẠNG THÁI KIỂM TRA', '검토 상태'),
+  'Review status': P('确认状态', '確認狀態', 'Trạng thái kiểm tra', '검토 상태'),
+  'Through the latest completed day': P('截至最近完成日期', '截至最近完成日期', 'Đến ngày đã hoàn tất gần nhất', '최근 입력 완료일까지'),
+  'Attached to open-day reports': P('已附在营业日报中', '已附於營業日報告', 'Đã đính kèm vào báo cáo ngày mở cửa', '영업일 보고에 첨부됨'),
+  Draft: P('草稿', '草稿', 'Bản nháp', '임시 저장'),
+  'Waiting for completion': P('等待完成', '等待完成', 'Đang chờ hoàn tất', '입력 완료 대기'),
+  'These checks come directly from the daily reports already stored in the system.': P('以下检查直接基于系统中已保存的每日报告。', '以下檢查直接依據系統中已儲存的每日報告。', 'Các mục này được kiểm tra trực tiếp từ báo cáo ngày đã lưu.', '저장된 일일 보고를 기준으로 자동 확인합니다.'),
+  'Action needed': P('需要处理', '需要處理', 'Cần xử lý', '조치 필요'),
+  'Daily sales reports': P('每日销售报告', '每日營業報告', 'Báo cáo doanh thu ngày', '일일 매출 보고'),
+  'Labor, hours, fees, utilities and other operating totals': P('人工费、工时、手续费、水电及其他运营费合计', '人事費、工時、手續費、水電及其他營運費合計', 'Tổng nhân công, giờ làm, phí, điện nước và chi phí khác', '인건비·근무시간·수수료·수도광열비·기타 운영비 합계'),
+  'Input needed': P('需要输入', '需要輸入', 'Cần nhập', '입력 필요'),
+  'Use the POS guest total when available.': P('如POS可提供客数合计，请输入该数字。', '如POS可提供來客數合計，請輸入該數字。', 'Nhập tổng số khách từ POS nếu có.', 'POS 고객 수 합계를 확인할 수 있으면 입력하세요.'),
+  'POS monthly total': P('POS月度合计', 'POS月間合計', 'Tổng tháng từ POS', 'POS 월 합계'),
+  'One total from the attendance system.': P('请输入考勤系统的月度合计。', '請輸入考勤系統的月間合計。', 'Nhập một tổng tháng từ hệ thống chấm công.', '근태 시스템의 월 합계를 입력하세요.'),
+  'Attendance monthly total': P('考勤月度合计', '考勤月間合計', 'Tổng giờ công tháng', '근태 월 합계'),
+  'Entry rule': P('输入规则', '輸入規則', 'Quy tắc nhập', '입력 규칙'),
+  'Blank means not entered': P('空白表示尚未输入', '空白表示尚未輸入', 'Để trống nghĩa là chưa nhập', '빈칸은 미입력으로 처리됩니다'),
+  'Enter 0 only when the confirmed monthly amount is actually zero. This keeps missing data separate from zero cost.': P('仅在确认月度金额确实为0时输入0，以区分未输入和0成本。', '僅在確認月間金額確實為0時輸入0，以區分未輸入和0成本。', 'Chỉ nhập 0 khi số tiền tháng thực sự bằng 0 để phân biệt với chưa nhập.', '확인한 월 금액이 실제 0일 때만 0을 입력하세요. 미입력과 0원을 구분합니다.'),
+  'One monthly total from payroll': P('工资资料的月度合计', '薪資資料的月間合計', 'Một tổng tháng từ bảng lương', '급여 자료의 월 합계'),
+  'Optional · HQ default': P('选填 · 总部默认值', '選填 · 本部預設值', 'Không bắt buộc · mặc định trụ sở', '선택 · 본사 기본값'),
+  'Electricity, gas and water total': P('电费、燃气费和水费合计', '電費、瓦斯費和水費合計', 'Tổng điện, gas và nước', '전기·가스·수도 합계'),
+  'Supplies, cleaning, repairs and marketing': P('耗材、清洁、维修和营销费合计', '耗材、清潔、維修和行銷費合計', 'Tổng vật tư, vệ sinh, sửa chữa và tiếp thị', '소모품·청소·수선·마케팅 합계'),
+  'Monthly note': P('月度备注', '月度備註', 'Ghi chú tháng', '월 메모'),
+  'Not entered': P('未输入', '未輸入', 'Chưa nhập', '미입력'),
+  'Optional: import a POS, attendance or cost file': P('选填：导入POS、考勤或成本文件', '選填：匯入POS、考勤或成本檔案', 'Không bắt buộc: nhập tệp POS, chấm công hoặc chi phí', '선택: POS·근태·원가 파일 가져오기'),
+  'Open only when a CSV/XLS/XLSX file is available': P('仅在有CSV/XLS/XLSX文件时打开', '僅在有CSV/XLS/XLSX檔案時開啟', 'Chỉ mở khi có tệp CSV/XLS/XLSX', 'CSV/XLS/XLSX 파일이 있을 때만 여세요'),
+  'Search ingredients': P('搜索食材', '搜尋食材', 'Tìm nguyên liệu', '재료 검색'),
+  'Show incomplete only': P('仅显示未完成', '僅顯示未完成', 'Chỉ hiện mục chưa hoàn tất', '미완료만 보기'),
+  'No ingredients match this filter.': P('没有符合条件的食材。', '沒有符合條件的食材。', 'Không có nguyên liệu phù hợp bộ lọc.', '필터 조건에 맞는 재료가 없습니다.'),
   'Finish missing sales reports and receipts, confirm the total, then submit to HQ.': P('补齐营业报告和收据，确认合计后提交总部。', '補齊營業報告和收據，確認合計後提交總部。', 'Hoàn tất báo cáo, hóa đơn, xác nhận tổng rồi nộp về trụ sở.', '누락된 매출보고와 영수증을 완료하고 합계를 확인한 뒤 본사에 제출하세요.'),
   'Complete reports and totals, close inventory, then review the result and submit.': P('完成报告和月度合计、结算库存后，确认结果并提交。', '完成報告和月度合計、結算庫存後，確認結果並提交。', 'Hoàn tất báo cáo, tổng tháng, chốt tồn kho rồi xem kết quả và nộp.', '보고·월 합계·재고 마감을 완료한 뒤 결과를 확인하고 제출하세요.'),
   'Complete reports & totals': P('完成报告与月度合计', '完成報告與月度合計', 'Hoàn tất báo cáo & tổng tháng', '보고·월 합계 완료'),
@@ -778,6 +845,7 @@ const DYNAMIC: Record<Exclude<OwnerLocale, 'en' | 'ja'>, Array<[RegExp, (...m: s
     [/^(\d+)\/(\d+) recipes$/, (_a, a, b) => `配方 ${a}/${b}`],
     [/^(\d+) single items · (\d+) courses\/sets$/, (_a, a, b) => `单品 ${a} · 套餐 ${b}`],
     [/^(\d+) staff$/, (_a, n) => `${n} 名员工`],
+    [/^(\d+) purchase units$/, (_a, n) => `采购单位 ${n} 项`],
     [/^Show all (\d+) reports$/, (_a, n) => `显示全部 ${n} 条报告`],
     [/^\+(\d+) more$/, (_a, n) => `另有 ${n} 天`],
     [/^(\d+) recipes ready$/, (_a, n) => `已完成 ${n} 个配方`],
@@ -826,6 +894,7 @@ const DYNAMIC: Record<Exclude<OwnerLocale, 'en' | 'ja'>, Array<[RegExp, (...m: s
     [/^(\d+)\/(\d+) recipes$/, (_a, a, b) => `配方 ${a}/${b}`],
     [/^(\d+) single items · (\d+) courses\/sets$/, (_a, a, b) => `單品 ${a} · 套餐 ${b}`],
     [/^(\d+) staff$/, (_a, n) => `${n} 名員工`],
+    [/^(\d+) purchase units$/, (_a, n) => `採購單位 ${n} 項`],
     [/^Show all (\d+) reports$/, (_a, n) => `顯示全部 ${n} 筆報告`],
     [/^\+(\d+) more$/, (_a, n) => `另有 ${n} 天`],
     [/^(\d+) recipes ready$/, (_a, n) => `已完成 ${n} 個配方`],
@@ -874,6 +943,7 @@ const DYNAMIC: Record<Exclude<OwnerLocale, 'en' | 'ja'>, Array<[RegExp, (...m: s
     [/^(\d+)\/(\d+) recipes$/, (_a, a, b) => `Công thức ${a}/${b}`],
     [/^(\d+) single items · (\d+) courses\/sets$/, (_a, a, b) => `${a} món lẻ · ${b} set`],
     [/^(\d+) staff$/, (_a, n) => `${n} nhân viên`],
+    [/^(\d+) purchase units$/, (_a, n) => `${n} đơn vị mua`],
     [/^Show all (\d+) reports$/, (_a, n) => `Hiện tất cả ${n} báo cáo`],
     [/^\+(\d+) more$/, (_a, n) => `Thêm ${n} ngày`],
     [/^(\d+) recipes ready$/, (_a, n) => `${n} công thức đã hoàn tất`],
@@ -922,6 +992,7 @@ const DYNAMIC: Record<Exclude<OwnerLocale, 'en' | 'ja'>, Array<[RegExp, (...m: s
     [/^(\d+)\/(\d+) recipes$/, (_a, a, b) => `레시피 ${a}/${b}`],
     [/^(\d+) single items · (\d+) courses\/sets$/, (_a, a, b) => `단품 ${a} · 코스/세트 ${b}`],
     [/^(\d+) staff$/, (_a, n) => `직원 ${n}명`],
+    [/^(\d+) purchase units$/, (_a, n) => `구매단위 ${n}개`],
     [/^Show all (\d+) reports$/, (_a, n) => `보고 ${n}건 모두 보기`],
     [/^\+(\d+) more$/, (_a, n) => `${n}일 더 보기`],
     [/^(\d+) recipes ready$/, (_a, n) => `레시피 ${n}개 완료`],
@@ -960,6 +1031,7 @@ const DYNAMIC_JA: Array<[RegExp, (...m: string[]) => string]> = [
   [/^(\d+)\/(\d+) recipes$/, (_a, a, b) => `レシピ ${a}/${b}`],
   [/^(\d+) single items · (\d+) courses\/sets$/, (_a, a, b) => `単品 ${a}件・コース／セット ${b}件`],
   [/^(\d+) staff$/, (_a, n) => `スタッフ ${n}名`],
+  [/^(\d+) purchase units$/, (_a, n) => `購入単位 ${n}件`],
   [/^Show all (\d+) reports$/, (_a, n) => `全${n}件を表示`],
   [/^\+(\d+) more$/, (_a, n) => `ほか${n}日`],
   [/^(\d+) recipes ready$/, (_a, n) => `レシピ ${n}件完了`],
@@ -984,10 +1056,96 @@ const DYNAMIC_JA: Array<[RegExp, (...m: string[]) => string]> = [
   [/^(\d+)\/(\d+) counts complete$/, (_a, a, b) => `棚卸 ${a}/${b}完了`],
 ];
 
+function translateMonthlyDynamic(value: string, locale: Exclude<OwnerLocale, 'en'>): string | null {
+  let match = value.match(/^(\d+) daily report\(s\) still missing$/);
+  if (match) {
+    const count = match[1];
+    if (locale === 'ja') return `日次報告があと${count}日分未提出です`;
+    if (locale === 'zh-CN') return `还有${count}天的每日报告未提交`;
+    if (locale === 'zh-TW') return `還有${count}天的每日報告未提交`;
+    if (locale === 'vi') return `Còn thiếu báo cáo của ${count} ngày`;
+    return `일일 보고 ${count}일분이 미제출입니다`;
+  }
+
+  match = value.match(/^(\d+) business day\(s\) · (\d+) closed day\(s\)$/);
+  if (match) {
+    const [, businessDays, closedDays] = match;
+    if (locale === 'ja') return `営業日 ${businessDays}日・休業日 ${closedDays}日`;
+    if (locale === 'zh-CN') return `营业日 ${businessDays}天 · 休业日 ${closedDays}天`;
+    if (locale === 'zh-TW') return `營業日 ${businessDays}天 · 休業日 ${closedDays}天`;
+    if (locale === 'vi') return `${businessDays} ngày mở cửa · ${closedDays} ngày nghỉ`;
+    return `영업일 ${businessDays}일 · 휴점일 ${closedDays}일`;
+  }
+
+  match = value.match(/^(\d+) date\(s\) still need a sales or closed-day report\.$/);
+  if (match) {
+    const count = match[1];
+    if (locale === 'ja') return `${count}日分の売上または休業報告が必要です。`;
+    if (locale === 'zh-CN') return `还有${count}天需要填写销售或休业报告。`;
+    if (locale === 'zh-TW') return `還有${count}天需要填寫營業或休業報告。`;
+    if (locale === 'vi') return `Còn ${count} ngày cần báo cáo doanh thu hoặc ngày nghỉ.`;
+    return `${count}일분의 매출 또는 휴점 보고가 필요합니다.`;
+  }
+
+  match = value.match(/^(\d+) open-day report\(s\) need a receipt image\.$/);
+  if (match) {
+    const count = match[1];
+    if (locale === 'ja') return `${count}件の営業日報告にレシート画像が必要です。`;
+    if (locale === 'zh-CN') return `${count}份营业日报告需要上传收据图片。`;
+    if (locale === 'zh-TW') return `${count}份營業日報告需要上傳收據圖片。`;
+    if (locale === 'vi') return `${count} báo cáo ngày mở cửa cần ảnh hóa đơn.`;
+    return `영업일 보고 ${count}건에 영수증 이미지가 필요합니다.`;
+  }
+
+  match = value.match(/^(\d+)\/(\d+) required$/);
+  if (match) {
+    const [, completed, total] = match;
+    if (locale === 'ja') return `必須 ${completed}/${total}`;
+    if (locale === 'zh-CN') return `必填 ${completed}/${total}`;
+    if (locale === 'zh-TW') return `必填 ${completed}/${total}`;
+    if (locale === 'vi') return `Bắt buộc ${completed}/${total}`;
+    return `필수 ${completed}/${total}`;
+  }
+
+  match = value.match(/^(\d+) required total\(s\) still blank\. A partial draft can still be saved\.$/);
+  if (match) {
+    const count = match[1];
+    if (locale === 'ja') return `必須の月間合計があと${count}項目未入力です。途中の下書きは保存できます。`;
+    if (locale === 'zh-CN') return `还有${count}个必填月度合计未输入，可先保存草稿。`;
+    if (locale === 'zh-TW') return `還有${count}個必填月度合計未輸入，可先儲存草稿。`;
+    if (locale === 'vi') return `Còn ${count} tổng tháng bắt buộc chưa nhập. Vẫn có thể lưu nháp.`;
+    return `필수 월 합계 ${count}개가 미입력입니다. 임시 저장은 가능합니다.`;
+  }
+
+  match = value.match(/^Optional: blank uses the HQ default rate \(([\d.]+)%\)$/);
+  if (match) {
+    const rate = match[1];
+    if (locale === 'ja') return `任意：空欄の場合は本部初期値（${rate}%）を使用`;
+    if (locale === 'zh-CN') return `选填：空白时使用总部默认值（${rate}%）`;
+    if (locale === 'zh-TW') return `選填：空白時使用本部預設值（${rate}%）`;
+    if (locale === 'vi') return `Không bắt buộc: để trống sẽ dùng mức mặc định của trụ sở (${rate}%)`;
+    return `선택: 빈칸이면 본사 기본값(${rate}%)을 사용합니다`;
+  }
+
+  match = value.match(/^Showing (\d+) of (\d+)$/);
+  if (match) {
+    const [, shown, total] = match;
+    if (locale === 'ja') return `${shown}/${total}件を表示`;
+    if (locale === 'zh-CN') return `显示 ${shown}/${total}`;
+    if (locale === 'zh-TW') return `顯示 ${shown}/${total}`;
+    if (locale === 'vi') return `Hiện ${shown}/${total}`;
+    return `${shown}/${total}개 표시`;
+  }
+
+  return null;
+}
+
 function translateCore(value: string, locale: OwnerLocale): string {
   if (locale === 'en') return value;
   if (locale === 'ja') {
     if (OWNER_JA[value]) return OWNER_JA[value];
+    const monthlyDynamic = translateMonthlyDynamic(value, locale);
+    if (monthlyDynamic) return monthlyDynamic;
     for (const [pattern, replacer] of DYNAMIC_JA) {
       const match = value.match(pattern);
       if (match) return replacer(...match);
@@ -996,6 +1154,8 @@ function translateCore(value: string, locale: OwnerLocale): string {
   }
   const exact = OWNER_TEXT[value]?.[locale];
   if (exact) return exact;
+  const monthlyDynamic = translateMonthlyDynamic(value, locale);
+  if (monthlyDynamic) return monthlyDynamic;
   for (const [pattern, replacer] of DYNAMIC[locale]) {
     const match = value.match(pattern);
     if (match) return replacer(...match);
