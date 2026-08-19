@@ -2011,7 +2011,7 @@ function buildInvoiceHtml(params: InvoiceHtmlParams): string {
 <body>
   <div class="toolbar">
     <button class="primary" onclick="window.print()">Save as PDF</button>
-    <button onclick="window.close()">Close</button>
+    <button onclick="if(window.parent!==window){window.parent.postMessage('chibo-close-invoice-preview','*')}else{window.close()}">Close</button>
   </div>
   <div class="sheet-wrap">
     <div class="sheet">
@@ -6021,6 +6021,8 @@ const HQStoreDetail: React.FC<{
     const [invoiceSpecialNote, setInvoiceSpecialNote] = useState<string>(invoicePrintProfile.specialNote);
     const [invoiceError, setInvoiceError] = useState<string | null>(null);
     const [invoiceGenerating, setInvoiceGenerating] = useState(false);
+    const [invoicePreviewHtml, setInvoicePreviewHtml] = useState<string | null>(null);
+    const invoicePreviewFrameRef = useRef<HTMLIFrameElement | null>(null);
     const [invoiceManualFxDraft, setInvoiceManualFxDraft] = useState<string>('');
     const [detailSection, setDetailSection] = useState<'sales' | 'close' | 'inventory' | 'invoice' | 'menu' | 'staff' | 'accounts'>('sales');
     const [menuSection, setMenuSection] = useState<'items' | 'sets'>('items');
@@ -6049,6 +6051,31 @@ const HQStoreDetail: React.FC<{
         setInvoiceChinaVatRateDraft('6');
         setInvoiceChinaIncomeTaxRateDraft('10');
     }, [store.id, invoicePrintProfile]);
+
+    useEffect(() => {
+        if (!invoicePreviewHtml) return;
+        const previousOverflow = document.body.style.overflow;
+        const closePreview = () => setInvoicePreviewHtml(null);
+        const onKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') closePreview();
+        };
+        const onMessage = (event: MessageEvent) => {
+            if (
+                event.data === 'chibo-close-invoice-preview'
+                && event.source === invoicePreviewFrameRef.current?.contentWindow
+            ) {
+                closePreview();
+            }
+        };
+        document.body.style.overflow = 'hidden';
+        window.addEventListener('keydown', onKeyDown);
+        window.addEventListener('message', onMessage);
+        return () => {
+            document.body.style.overflow = previousOverflow;
+            window.removeEventListener('keydown', onKeyDown);
+            window.removeEventListener('message', onMessage);
+        };
+    }, [invoicePreviewHtml]);
 
     useEffect(() => {
         if (typeof window === 'undefined') return;
@@ -6548,32 +6575,11 @@ const HQStoreDetail: React.FC<{
             setInvoiceError('Select invoice month.');
             return;
         }
-
-        // Reserve the window during the actual click event. Opening it after the
-        // asynchronous FX refresh makes browsers treat it as an unsolicited popup.
-        const popup = window.open('about:blank', '_blank');
-        if (!popup) {
-            setInvoiceError('The invoice window could not be opened. Allow popups for this site and retry.');
-            return;
-        }
         setInvoiceGenerating(true);
         const failInvoice = (message: string) => {
-            try {
-                popup.close();
-            } catch {
-                // The user may have already closed the temporary window.
-            }
             setInvoiceError(message);
             setInvoiceGenerating(false);
         };
-        try {
-            popup.document.open();
-            popup.document.write('<!doctype html><html><head><title>Preparing invoice…</title></head><body style="font-family:Arial,sans-serif;padding:32px;color:#111"><strong>Preparing invoice…</strong><p style="color:#666">Refreshing exchange rates and creating the document.</p></body></html>');
-            popup.document.close();
-        } catch {
-            failInvoice('Failed to prepare the invoice window. Please retry.');
-            return;
-        }
 
         let ratesForInvoice = fxRates;
         let sourceForInvoice = fxSourceText;
@@ -6667,18 +6673,8 @@ const HQStoreDetail: React.FC<{
             compactSummary: useChinaCompactLayout,
         });
 
-        try {
-            popup.document.open();
-            popup.document.write(invoiceHtml);
-            popup.document.close();
-            popup.focus();
-        } catch (e) {
-            console.error('Failed to render invoice window', e);
-            failInvoice('Failed to render invoice page. Please retry.');
-            return;
-        } finally {
-            setInvoiceGenerating(false);
-        }
+        setInvoicePreviewHtml(invoiceHtml);
+        setInvoiceGenerating(false);
     };
 
     const salesMetricsEnabled = detailSection === 'sales';
@@ -8397,6 +8393,27 @@ const HQStoreDetail: React.FC<{
                         <button onClick={() => setViewingReceipt(null)} className="absolute -top-4 -right-4 bg-white text-black rounded-full p-2 hover:bg-gray-200 transition shadow-lg">
                             <X className="w-6 h-6"/>
                         </button>
+                    </div>
+                </div>
+            )}
+
+            {invoicePreviewHtml && (
+                <div className="fixed inset-0 z-[120] bg-black/85 p-2 backdrop-blur-sm sm:p-4">
+                    <div className="relative mx-auto h-full max-w-6xl overflow-hidden rounded-2xl bg-white shadow-2xl">
+                        <button
+                            type="button"
+                            aria-label="Close invoice preview"
+                            onClick={() => setInvoicePreviewHtml(null)}
+                            className="absolute right-3 top-3 z-10 flex h-11 w-11 items-center justify-center rounded-full border border-gray-200 bg-white text-black shadow-lg hover:bg-gray-100"
+                        >
+                            <X className="h-5 w-5" />
+                        </button>
+                        <iframe
+                            ref={invoicePreviewFrameRef}
+                            title="Invoice PDF preview"
+                            srcDoc={invoicePreviewHtml}
+                            className="h-full w-full border-0 bg-gray-200"
+                        />
                     </div>
                 </div>
             )}
